@@ -1,0 +1,76 @@
+name: "01 - Deploy Infrastructure (EKS + ECR)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action to perform"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - plan
+          - apply
+
+env:
+  AWS_REGION: eu-west-3
+  TF_WORKING_DIR: terraform
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: "Terraform ${{ github.event.inputs.action }}"
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        run: terraform apply -auto-approve tfplan
+
+      - name: Export outputs
+        if: github.event.inputs.action == 'apply'
+        id: tf-outputs
+        run: |
+          echo "ecr_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
+          echo "cluster_name=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
+          echo "region=$(terraform output -raw region)" >> $GITHUB_OUTPUT
+
+      - name: Summary
+        if: github.event.inputs.action == 'apply'
+        run: |
+          echo "## Infrastructure Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- **EKS Cluster:** $(terraform output -raw cluster_name)" >> $GITHUB_STEP_SUMMARY
+          echo "- **ECR Repository:** $(terraform output -raw ecr_repository_url)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region:** $(terraform output -raw region)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kubeconfig:** \`$(terraform output -raw kubeconfig_command)\`" >> $GITHUB_STEP_SUMMARY

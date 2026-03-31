@@ -1,0 +1,67 @@
+name: "03 - Deploy Vulnerable App to EKS"
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-3
+  EKS_CLUSTER_NAME: eks-escape-demo
+  ECR_REPOSITORY: k8s-escape-demo/vuln-app
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+
+      - name: Replace image placeholder in manifests
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          sed -i "s|ECR_IMAGE_PLACEHOLDER|${ECR_REGISTRY}/${ECR_REPOSITORY}:latest|g" k8s/deployment.yaml
+
+      - name: Deploy Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/service-account.yaml
+          kubectl apply -f k8s/deployment.yaml
+
+      - name: Wait for deployment to be ready
+        run: |
+          kubectl rollout status deployment/vuln-app -n vuln-app --timeout=300s
+
+      - name: Get service endpoint
+        run: |
+          echo "Waiting for LoadBalancer external IP..."
+          sleep 30
+          EXTERNAL_IP=$(kubectl get svc vuln-app-service -n vuln-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "## Application Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL:** http://${EXTERNAL_IP}/app" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace:** vuln-app" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next steps" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "export HOST=${EXTERNAL_IP}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

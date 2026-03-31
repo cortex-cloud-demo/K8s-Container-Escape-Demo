@@ -1,0 +1,60 @@
+##############################################
+# INTENTIONALLY VULNERABLE DEPLOYMENT
+# Misconfigurations:
+#   - privileged: true
+#   - hostPID: true
+#   - hostNetwork: true
+#   - hostPath mount of /
+#   - Overprivileged ServiceAccount (cluster-admin)
+#   - No resource limits
+#   - No readOnlyRootFilesystem
+##############################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vuln-app
+  namespace: vuln-app
+  labels:
+    app: vuln-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vuln-app
+  template:
+    metadata:
+      labels:
+        app: vuln-app
+    spec:
+      serviceAccountName: vuln-app-sa
+      hostPID: true
+      hostNetwork: true
+      containers:
+        - name: vuln-app
+          image: ECR_IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 8080
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vuln-app-service
+  namespace: vuln-app
+spec:
+  selector:
+    app: vuln-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: LoadBalancer

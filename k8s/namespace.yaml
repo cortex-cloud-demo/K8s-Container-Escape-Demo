@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vuln-app
+  labels:
+    app: vuln-app
+    purpose: security-demo
