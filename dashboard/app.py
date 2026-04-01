@@ -1141,7 +1141,8 @@ def cortex_upload_file(api_path, file_path, file_field="file"):
 
 
 def cortex_upload_playbook_zip(api_path, yaml_path):
-    """Upload a playbook YAML as a ZIP file to Cortex API (required format)."""
+    """Upload a playbook YAML as a ZIP file to Cortex API (required format).
+    Dynamically injects current AWS credentials into playbook inputs."""
     base_url = cortex_settings["base_url"]
     api_key = cortex_settings["api_key"]
     api_key_id = cortex_settings["api_key_id"]
@@ -1152,9 +1153,25 @@ def cortex_upload_playbook_zip(api_path, yaml_path):
     if not os.path.exists(yaml_path):
         return {"status": "error", "message": f"File not found: {yaml_path}"}, 400
 
-    # Read YAML and package into ZIP in memory
-    with open(yaml_path, "rb") as f:
-        yaml_content = f.read()
+    # Read and parse YAML to inject AWS credentials dynamically
+    with open(yaml_path, "r") as f:
+        playbook_data = yaml.safe_load(f)
+
+    # Map AWS settings to playbook input keys
+    aws_input_map = {
+        "AWSAccessKeyID": aws_credentials.get("aws_access_key_id", ""),
+        "AWSSecretAccessKey": aws_credentials.get("aws_secret_access_key", ""),
+        "AWSSessionToken": aws_credentials.get("aws_session_token", ""),
+        "Region": aws_credentials.get("aws_region", "eu-west-3"),
+    }
+
+    # Update playbook inputs with current AWS credentials
+    if "inputs" in playbook_data:
+        for inp in playbook_data["inputs"]:
+            if inp.get("key") in aws_input_map and aws_input_map[inp["key"]]:
+                inp["value"] = {"simple": aws_input_map[inp["key"]]}
+
+    yaml_content = yaml.dump(playbook_data, default_flow_style=False, allow_unicode=True, sort_keys=False).encode("utf-8")
 
     zip_buffer = io.BytesIO()
     yaml_filename = os.path.basename(yaml_path)

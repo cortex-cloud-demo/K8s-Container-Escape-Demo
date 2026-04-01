@@ -10,7 +10,6 @@ description: |-
 
   ## Playbook Flow
   1. Triage - ExtractK8sContainerEscapeIOCs analyzes XDR issue fields
-  11. AWS Credentials - Operator enters AWS credentials for Lambda access
   2. Enrichment - InvokeK8sContainmentLambda collects forensic evidence via Lambda
   3. Severity Check - Auto-contain if critical, or request operator approval
   31. Operator Approval - Operator validates before containment
@@ -19,7 +18,7 @@ description: |-
   10. Complete
 
   ## Authentication
-  - AWS credentials collected from operator via manual input task
+  - AWS credentials passed as playbook inputs (auto-populated from dashboard settings)
   - Lambda function invoked via SigV4-signed HTTP requests (no AWS integration required)
   - Cluster info extracted from K8sEscape context (task #1 output)
 contentitemexportablefields:
@@ -92,7 +91,7 @@ tasks:
       istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
-        - "11"
+        - "2"
     scriptarguments:
       details:
         simple: ${incident.details}
@@ -138,146 +137,6 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
-  "11":
-    id: "11"
-    taskid: a1b2c3d4-1a1a-4b5c-9d8e-f0a1b2c3d4e5
-    type: collection
-    task:
-      id: a1b2c3d4-1a1a-4b5c-9d8e-f0a1b2c3d4e5
-      version: -1
-      name: "Enter AWS Credentials"
-      description: |-
-        Provide AWS credentials to invoke the containment Lambda function.
-        These credentials must have permission to invoke the Lambda function
-        (lambda:InvokeFunction) in the target region.
-
-        Use temporary STS credentials (with session token) when possible.
-
-        Triage results from task #1:
-        - Cluster: ${K8sEscape.ClusterName}
-        - Namespace: ${K8sEscape.Namespace}
-        - Severity: ${K8sEscape.Severity}
-        - Node: ${K8sEscape.NodeFQDN}
-      type: collection
-      iscommand: false
-      brand: ""
-      script: ""
-      playbooktaskmissingcomponent: null
-      istaskmissingcomponenterrordismissed: false
-    nexttasks:
-      '#none#':
-        - "2"
-    message:
-      to:
-      subject: "AWS Credentials Required - K8s Container Escape Response"
-      body: |-
-        The K8s Container Escape playbook requires AWS credentials to invoke the containment Lambda function.
-
-        **Triage Summary:**
-        - Severity: ${K8sEscape.Severity}
-        - Cluster: ${K8sEscape.ClusterName}
-        - Namespace: ${K8sEscape.Namespace}
-        - Node FQDN: ${K8sEscape.NodeFQDN}
-        - SpringShell: ${K8sEscape.IsSpringShell}
-        - Webshell: ${K8sEscape.IsWebshell}
-
-        Please provide AWS credentials with Lambda invoke permissions.
-      methods: []
-      format: ""
-      bcc:
-      cc:
-      timings:
-        retriescount: 2
-        retriesinterval: 360
-        completeithaction: stop
-    form:
-      questions:
-        - id: "aws_access_key_id"
-          label: "AWS Access Key ID"
-          labelarg:
-            simple: "AWS Access Key ID"
-          required: true
-          gridcolumns: []
-          defaultrows: []
-          type: shortText
-          options: []
-          fieldassociated: ""
-          placeholder: "AKIA..."
-          tooltip: "AWS Access Key ID for Lambda invocation"
-          readonly: false
-        - id: "aws_secret_access_key"
-          label: "AWS Secret Access Key"
-          labelarg:
-            simple: "AWS Secret Access Key"
-          required: true
-          gridcolumns: []
-          defaultrows: []
-          type: shortText
-          options: []
-          fieldassociated: ""
-          placeholder: ""
-          tooltip: "AWS Secret Access Key (will be used for this execution only)"
-          readonly: false
-        - id: "aws_session_token"
-          label: "AWS Session Token"
-          labelarg:
-            simple: "AWS Session Token (optional, for STS temporary credentials)"
-          required: false
-          gridcolumns: []
-          defaultrows: []
-          type: longText
-          options: []
-          fieldassociated: ""
-          placeholder: ""
-          tooltip: "Required if using temporary STS credentials"
-          readonly: false
-        - id: "aws_region"
-          label: "AWS Region"
-          labelarg:
-            simple: "AWS Region"
-          required: true
-          gridcolumns: []
-          defaultrows: []
-          type: shortText
-          options: []
-          fieldassociated: ""
-          placeholder: "eu-west-3"
-          tooltip: "AWS region where the Lambda function is deployed"
-          readonly: false
-        - id: "lambda_function_name"
-          label: "Lambda Function Name"
-          labelarg:
-            simple: "Lambda Function Name"
-          required: true
-          gridcolumns: []
-          defaultrows: []
-          type: shortText
-          options: []
-          fieldassociated: ""
-          placeholder: "k8s-escape-demo-containment"
-          tooltip: "Name of the AWS Lambda containment function"
-          readonly: false
-      title: "AWS Credentials for K8s Containment"
-      description: "Enter AWS credentials to invoke the containment Lambda function."
-      sender: ""
-      expired: false
-      totalanswers: 0
-    separatecontext: false
-    continueonerrortype: ""
-    view: |-
-      {
-        "position": {
-          "x": 450,
-          "y": 370
-        }
-      }
-    note: false
-    timertriggers: []
-    ignoreworker: false
-    skipunavailable: false
-    quietmode: 0
-    isoversize: false
-    isautoswitchedtoquietmode: false
   "2":
     id: "2"
     taskid: c5d9e3b2-8f7a-4c6d-9b0e-2a1f3e4d5c6b
@@ -288,8 +147,8 @@ tasks:
       name: "Enrichment - Collect Evidence via Lambda"
       description: |-
         Invoke the K8s Containment Lambda to collect forensic evidence.
-        Uses AWS credentials from operator input (task #11) and cluster info
-        from K8sEscape context (task #1 output).
+        Uses AWS credentials from playbook inputs (auto-populated from dashboard)
+        and cluster info from K8sEscape context (task #1 output).
 
         Evidence collected:
         - Pod configuration (privileged, hostPID, hostNetwork, hostPath mounts)
@@ -307,15 +166,15 @@ tasks:
         - "3"
     scriptarguments:
       aws_access_key_id:
-        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+        simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
-        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+        simple: ${inputs.AWSSecretAccessKey}
       aws_session_token:
-        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+        simple: ${inputs.AWSSessionToken}
       aws_region:
-        simple: ${Enter AWS Credentials.Answers.aws_region}
+        simple: ${inputs.Region}
       lambda_function_name:
-        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+        simple: ${inputs.LambdaFunction}
       action:
         simple: collect_evidence
       cluster_name:
@@ -462,15 +321,15 @@ tasks:
         - "5"
     scriptarguments:
       aws_access_key_id:
-        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+        simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
-        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+        simple: ${inputs.AWSSecretAccessKey}
       aws_session_token:
-        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+        simple: ${inputs.AWSSessionToken}
       aws_region:
-        simple: ${Enter AWS Credentials.Answers.aws_region}
+        simple: ${inputs.Region}
       lambda_function_name:
-        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+        simple: ${inputs.LambdaFunction}
       action:
         simple: network_isolate
       cluster_name:
@@ -517,15 +376,15 @@ tasks:
         - "6"
     scriptarguments:
       aws_access_key_id:
-        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+        simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
-        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+        simple: ${inputs.AWSSecretAccessKey}
       aws_session_token:
-        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+        simple: ${inputs.AWSSessionToken}
       aws_region:
-        simple: ${Enter AWS Credentials.Answers.aws_region}
+        simple: ${inputs.Region}
       lambda_function_name:
-        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+        simple: ${inputs.LambdaFunction}
       action:
         simple: revoke_rbac
       cluster_name:
@@ -570,15 +429,15 @@ tasks:
         - "7"
     scriptarguments:
       aws_access_key_id:
-        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+        simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
-        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+        simple: ${inputs.AWSSecretAccessKey}
       aws_session_token:
-        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+        simple: ${inputs.AWSSessionToken}
       aws_region:
-        simple: ${Enter AWS Credentials.Answers.aws_region}
+        simple: ${inputs.Region}
       lambda_function_name:
-        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+        simple: ${inputs.LambdaFunction}
       action:
         simple: scale_down
       cluster_name:
@@ -623,15 +482,15 @@ tasks:
         - "8"
     scriptarguments:
       aws_access_key_id:
-        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+        simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
-        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+        simple: ${inputs.AWSSecretAccessKey}
       aws_session_token:
-        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+        simple: ${inputs.AWSSessionToken}
       aws_region:
-        simple: ${Enter AWS Credentials.Answers.aws_region}
+        simple: ${inputs.Region}
       lambda_function_name:
-        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+        simple: ${inputs.LambdaFunction}
       action:
         simple: cordon_node
       cluster_name:
@@ -678,15 +537,15 @@ tasks:
         - "9"
     scriptarguments:
       aws_access_key_id:
-        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+        simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
-        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+        simple: ${inputs.AWSSecretAccessKey}
       aws_session_token:
-        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+        simple: ${inputs.AWSSessionToken}
       aws_region:
-        simple: ${Enter AWS Credentials.Answers.aws_region}
+        simple: ${inputs.Region}
       lambda_function_name:
-        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+        simple: ${inputs.LambdaFunction}
       action:
         simple: delete_pod
       cluster_name:
@@ -733,15 +592,15 @@ tasks:
         - "10"
     scriptarguments:
       aws_access_key_id:
-        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+        simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
-        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+        simple: ${inputs.AWSSecretAccessKey}
       aws_session_token:
-        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+        simple: ${inputs.AWSSessionToken}
       aws_region:
-        simple: ${Enter AWS Credentials.Answers.aws_region}
+        simple: ${inputs.Region}
       lambda_function_name:
-        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+        simple: ${inputs.LambdaFunction}
       action:
         simple: collect_evidence
       cluster_name:
@@ -806,8 +665,46 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
-inputs: []
-inputSections: []
+inputs:
+  - key: AWSAccessKeyID
+    value:
+      simple: ""
+    required: true
+    description: AWS Access Key ID for Lambda invocation (auto-populated from dashboard settings)
+    playbookInputQuery: null
+  - key: AWSSecretAccessKey
+    value:
+      simple: ""
+    required: true
+    description: AWS Secret Access Key for Lambda invocation (auto-populated from dashboard settings)
+    playbookInputQuery: null
+  - key: AWSSessionToken
+    value:
+      simple: ""
+    required: false
+    description: AWS Session Token for temporary/STS credentials (auto-populated from dashboard settings)
+    playbookInputQuery: null
+  - key: Region
+    value:
+      simple: eu-west-3
+    required: true
+    description: AWS region (auto-populated from dashboard settings)
+    playbookInputQuery: null
+  - key: LambdaFunction
+    value:
+      simple: k8s-escape-demo-containment
+    required: true
+    description: Name of the AWS Lambda containment function
+    playbookInputQuery: null
+inputSections:
+  - inputs:
+      - AWSAccessKeyID
+      - AWSSecretAccessKey
+      - AWSSessionToken
+      - Region
+      - LambdaFunction
+    name: AWS Configuration
+    description: AWS credentials and Lambda function configuration for containment actions.
 outputSections:
   - outputs:
       - K8sContainment.Results
