@@ -1,0 +1,279 @@
+commonfields:
+  id: InvokeK8sContainmentLambda
+  version: -1
+name: InvokeK8sContainmentLambda
+comment: |-
+  Invokes the K8s Containment AWS Lambda function using provided AWS credentials.
+  Takes cluster information from K8sEscape context and AWS credentials as inputs.
+  Returns Lambda results and writes enrichment to the issue field.
+  Supports all containment actions: collect_evidence, network_isolate, revoke_rbac,
+  scale_down, cordon_node, delete_pod, full_containment.
+enabled: true
+tags:
+  - Kubernetes
+  - Container Security
+  - AWS Lambda
+  - EKS
+  - Containment
+  - Enrichment
+type: python
+subtype: python3
+dockerimage: demisto/python3:3.10.14.100715
+runas: DBotWeakRole
+runonce: false
+script: |-
+  import json
+  import hashlib
+  import hmac
+  import datetime
+  import ssl
+
+      try:
+          demisto.info("Writing to issue field '" + ISSUE_FIELD_NAME + "' (" + str(len(markdown_content)) + " chars)")
+          result = demisto.executeCommand("setIncident", {
+              "customFields": {ISSUE_FIELD_NAME: markdown_content}
+          })
+          if is_error(result):
+              error_msg = get_error(result)
+              demisto.error("setIncident failed: " + str(error_msg))
+              return False, str(error_msg)
+          demisto.info("setIncident success")
+          return True, ""
+      except Exception as e:
+          demisto.error("setIncident exception: " + str(e))
+          return False, str(e)
+
+
+  # ==============================================================================
+  # MAIN FUNCTION
+  # ==============================================================================
+
+  def main():
+      try:
+          args = demisto.args()
+
+          demisto.info("=== InvokeK8sContainmentLambda v1.0.0 START ===")
+
+          # ==================================================================
+          # RETRIEVE ARGUMENTS
+          # ==================================================================
+
+          aws_access_key_id = args.get('aws_access_key_id', '')
+          aws_secret_access_key = args.get('aws_secret_access_key', '')
+          aws_session_token = args.get('aws_session_token', '')
+          aws_region = args.get('aws_region', 'eu-west-3')
+          lambda_function_name = args.get('lambda_function_name', 'k8s-escape-demo-containment')
+          action = args.get('action', 'collect_evidence')
+          cluster_name = args.get('cluster_name', '')
+          namespace = args.get('namespace', 'vuln-app')
+          node_hostname = args.get('node_hostname', '')
+
+          if not aws_access_key_id or not aws_secret_access_key:
+              return_error("AWS credentials are required (aws_access_key_id, aws_secret_access_key)")
+              return
+
+          if not cluster_name:
+              return_error("cluster_name is required")
+              return
+
+          demisto.info("Action: " + action)
+          demisto.info("Cluster: " + cluster_name)
+          demisto.info("Namespace: " + namespace)
+          demisto.info("Lambda: " + lambda_function_name)
+          demisto.info("Region: " + aws_region)
+          demisto.info("Node hostname: " + (node_hostname or "N/A"))
+
+          # ==================================================================
+          # BUILD LAMBDA PAYLOAD
+          # ==================================================================
+
+          lambda_payload = {
+              "action": action,
+              "cluster_name": cluster_name,
+              "namespace": namespace,
+              "region": aws_region,
+          }
+          if node_hostname:
+              lambda_payload["node_hostname"] = node_hostname
+
+          demisto.info("Lambda payload: " + json.dumps(lambda_payload))
+
+          # ==================================================================
+          # INVOKE LAMBDA
+          # ==================================================================
+
+          demisto.info("Invoking Lambda function: " + lambda_function_name)
+
+          lambda_response = aws_lambda_invoke(
+              access_key=aws_access_key_id,
+              secret_key=aws_secret_access_key,
+              session_token=aws_session_token,
+              region=aws_region,
+              function_name=lambda_function_name,
+              payload_dict=lambda_payload,
+          )
+
+          demisto.info("Lambda response status: " + str(lambda_response.get("status_code")))
+          if lambda_response.get("error"):
+              demisto.error("Lambda error: " + str(lambda_response["error"]))
+
+          # ==================================================================
+          # PARSE RESPONSE
+          # ==================================================================
+
+          parsed_body = {}
+          evidence = {}
+          results_list = []
+
+          try:
+              parsed_body = json.loads(lambda_response.get("body", "{}"))
+              # Lambda may wrap response
+              if "body" in parsed_body and isinstance(parsed_body["body"], str):
+                  inner = json.loads(parsed_body["body"])
+                  results_list = inner.get("results", [inner])
+                  # Extract evidence from collect_evidence results
+                  for r in results_list:
+                      if r.get("evidence"):
+                          evidence = r["evidence"]
+              else:
+                  results_list = parsed_body.get("results", [parsed_body])
+                  for r in results_list:
+                      if r.get("evidence"):
+                          evidence = r["evidence"]
+          except (json.JSONDecodeError, TypeError) as e:
+              demisto.error("Failed to parse Lambda response: " + str(e))
+
+          overall_status = "success" if lambda_response.get("status_code") == 200 else "error"
+
+          # ==================================================================
+          # MARKDOWN REPORT
+          # ==================================================================
+
+          human_readable = build_evidence_report(
+              action, cluster_name, namespace, lambda_response
+          )
+
+          # ==================================================================
+          # WRITE TO ISSUE
+          # ==================================================================
+
+          write_success, write_error = write_results_to_issue(human_readable)
+          if not write_success:
+              demisto.error("Write to issue failed: " + write_error)
+              human_readable += "\n> **WARNING**: Failed to write to '" + ISSUE_FIELD_NAME + "': " + write_error + "\n"
+
+          # ==================================================================
+          # ENTRY CONTEXT
+          # ==================================================================
+
+          entry_context = {
+              'K8sContainment.Action': action,
+              'K8sContainment.Status': overall_status,
+              'K8sContainment.ClusterName': cluster_name,
+              'K8sContainment.Namespace': namespace,
+              'K8sContainment.Evidence': evidence,
+              'K8sContainment.Results': results_list,
+              'K8sContainment.LambdaStatusCode': lambda_response.get("status_code"),
+              'K8sContainment.RawResponse': parsed_body,
+          }
+
+          # ==================================================================
+          # RETURN
+          # ==================================================================
+
+          return_results({
+              'Type': entryTypes['note'],
+              'ContentsFormat': formats['json'],
+              'Contents': {
+                  "Action": action,
+                  "Status": overall_status,
+                  "ClusterName": cluster_name,
+                  "Namespace": namespace,
+                  "LambdaStatusCode": lambda_response.get("status_code"),
+                  "Evidence": evidence,
+                  "Results": results_list,
+              },
+              'HumanReadable': human_readable,
+              'EntryContext': entry_context,
+          })
+
+          demisto.info("=== InvokeK8sContainmentLambda v1.0.0 END ===")
+
+      except Exception as e:
+          error_msg = "Error in InvokeK8sContainmentLambda: " + str(e)
+          demisto.error(error_msg)
+          return_error(error_msg)
+
+
+  if __name__ in ('__main__', '__builtin__', 'builtins'):
+      main()
+
+args:
+  - name: aws_access_key_id
+    description: "AWS Access Key ID for Lambda invocation"
+    required: true
+  - name: aws_secret_access_key
+    description: "AWS Secret Access Key for Lambda invocation"
+    required: true
+    secret: true
+  - name: aws_session_token
+    description: "AWS Session Token (for temporary/STS credentials)"
+    required: false
+    secret: true
+  - name: aws_region
+    description: "AWS Region where Lambda is deployed (default: eu-west-3)"
+    required: false
+    defaultValue: "eu-west-3"
+  - name: lambda_function_name
+    description: "Name of the AWS Lambda containment function"
+    required: false
+    defaultValue: "k8s-escape-demo-containment"
+  - name: action
+    description: "Lambda action to execute: collect_evidence, network_isolate, revoke_rbac, scale_down, cordon_node, delete_pod, full_containment"
+    required: true
+    predefined:
+      - collect_evidence
+      - network_isolate
+      - revoke_rbac
+      - scale_down
+      - cordon_node
+      - delete_pod
+      - full_containment
+  - name: cluster_name
+    description: "EKS cluster name (from K8sEscape.ClusterName)"
+    required: true
+  - name: namespace
+    description: "Kubernetes namespace (from K8sEscape.Namespace)"
+    required: false
+    defaultValue: "vuln-app"
+  - name: node_hostname
+    description: "Node FQDN for targeted actions (from K8sEscape.NodeFQDN)"
+    required: false
+outputs:
+  - contextPath: K8sContainment.Action
+    description: The containment action that was executed
+    type: String
+  - contextPath: K8sContainment.Status
+    description: Overall status of the Lambda invocation (success/error)
+    type: String
+  - contextPath: K8sContainment.ClusterName
+    description: EKS cluster name
+    type: String
+  - contextPath: K8sContainment.Namespace
+    description: Kubernetes namespace
+    type: String
+  - contextPath: K8sContainment.Evidence
+    description: Forensic evidence collected (for collect_evidence action)
+    type: Unknown
+  - contextPath: K8sContainment.Results
+    description: List of action results from Lambda
+    type: Unknown
+  - contextPath: K8sContainment.LambdaStatusCode
+    description: HTTP status code from Lambda invocation
+    type: Number
+  - contextPath: K8sContainment.RawResponse
+    description: Raw parsed Lambda response
+    type: Unknown
+fromversion: 6.10.0
+tests:
+  - No tests

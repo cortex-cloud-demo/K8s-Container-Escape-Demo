@@ -1,351 +1,776 @@
-id: K8s Container Escape - Spring4Shell Containment
+id: a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d
 version: -1
 name: K8s Container Escape - Spring4Shell Containment
 description: |-
   Automated incident response playbook for Spring4Shell (CVE-2022-22965) container escape on AWS EKS.
-  Orchestrates containment via AWS Lambda to isolate compromised pods, revoke RBAC privileges,
-  apply NetworkPolicies, and collect forensic evidence.
+  Triggered by Cortex XDR issues, uses XDR issue fields (details, container_id,
+  namespace, xdm.source.host.fqdn, xdm.source.host.ipv4_addresses, image_id)
+  for detection and triage. Orchestrates containment via AWS Lambda to isolate
+  compromised pods, revoke RBAC privileges, apply NetworkPolicies, and collect forensic evidence.
 
   ## Playbook Flow
-  1. Triage - Detect Spring4Shell indicators (webshell, class loader manipulation)
-  2. Collect Evidence - Pod forensics via Lambda (config, logs, events, RBAC)
-  3. Severity Check - Auto-contain if critical, or request analyst approval
-  4. Network Isolation - Deny-all NetworkPolicy on compromised namespace
-  5. Revoke RBAC - Delete cluster-admin ClusterRoleBinding
-  6. Scale Down - Scale deployment to 0 replicas
-  7. Cordon Node - Mark compromised node as unschedulable
-  8. Kill Pods - Force delete all compromised pods
+  1. Triage - ExtractK8sContainerEscapeIOCs analyzes XDR issue fields
+  11. AWS Credentials - Operator enters AWS credentials for Lambda access
+  2. Enrichment - InvokeK8sContainmentLambda collects forensic evidence via Lambda
+  3. Severity Check - Auto-contain if critical, or request operator approval
+  31. Operator Approval - Operator validates before containment
+  4-8. Containment Actions (Network Isolation, Revoke RBAC, Scale Down, Cordon, Kill Pods)
   9. Verify - Re-collect evidence to confirm containment
+  10. Complete
 
+  ## Authentication
+  - AWS credentials collected from operator via manual input task
+  - Lambda function invoked via SigV4-signed HTTP requests (no AWS integration required)
+  - Cluster info extracted from K8sEscape context (task #1 output)
+contentitemexportablefields:
+  contentitemfields:
+    packID: K8sContainerEscape
+    packName: K8s Container Escape Response
+    itemVersion: 1.0.0
+    fromServerVersion: 6.10.0
+    toServerVersion: ""
+    definitionid: ""
+    prevname: ""
+    isoverridable: false
+    supportedModules: []
+vcShouldKeepItemLegacyProdMachine: false
 starttaskid: "0"
 tasks:
   "0":
     id: "0"
-    taskid: start
+    taskid: d4f7a1b2-3c8e-4d5f-9a6b-7e8f0c1d2e3a
     type: start
     task:
-      id: start
+      id: d4f7a1b2-3c8e-4d5f-9a6b-7e8f0c1d2e3a
+      version: -1
       name: ""
+      description: ""
       iscommand: false
       brand: ""
-      description: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "1"
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 50
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 50
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "1":
     id: "1"
-    taskid: triage
+    taskid: b3e8f2a1-7d6c-4e5b-8a9f-1c0d2e3f4a5b
     type: regular
     task:
-      id: triage
-      name: Triage - Detect Spring4Shell Indicators
+      id: b3e8f2a1-7d6c-4e5b-8a9f-1c0d2e3f4a5b
+      version: -1
+      name: "Triage - Extract IOCs"
       description: |-
-        Check for Spring4Shell RCE indicators:
-        - Webshell creation (shell.jsp) in Tomcat webapps
-        - Suspicious class.module.classLoader manipulation in HTTP parameters
-        - CVE-2022-22965 signatures in WAF/IDS logs
-        - Unusual outbound connections from Java application pods
+        Execute ExtractK8sContainerEscapeIOCs to analyze XDR issue fields
+        and extract IOCs for Spring4Shell container escape.
+
+        Outputs:
+        - K8sEscape.Severity, K8sEscape.IsSpringShell, K8sEscape.IsWebshell
+        - K8sEscape.ClusterName, K8sEscape.Namespace, K8sEscape.NodeFQDN
+        - K8sEscape.ContainerID, K8sEscape.IOCs, K8sEscape.ContainmentTarget
+      iscommand: true
+      brand: ""
+      script: ExtractK8sContainerEscapeIOCs
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "11"
+    scriptarguments:
+      details:
+        simple: ${incident.details}
+      container_id:
+        simple: ${incident.container_id}
+      namespace:
+        simple: ${incident.namespace}
+      xdmsourcehostfqdn:
+        simple: ${incident.xdmsourcehostfqdn}
+      xdmsourcehostipv4addresses:
+        simple: ${incident.xdmsourcehostipv4addresses}
+      xdmsourceusername:
+        simple: ${incident.xdmsourceusername}
+      xdmsourceprocessname:
+        simple: ${incident.xdmsourceprocessname}
+      causality_actor_process_command_line:
+        simple: ${incident.causality_actor_process_command_line}
+      causality_actor_process_image_path:
+        simple: ${incident.causality_actor_process_image_path}
+      causality_actor_process_image_sha256:
+        simple: ${incident.causality_actor_process_image_sha256}
+      image_id:
+        simple: ${incident.image_id}
+      agent_os_type:
+        simple: ${incident.agent_os_type}
+      agent_os_sub_type:
+        simple: ${incident.agent_os_sub_type}
+      cluster_name:
+        simple: ${incident.cluster_name}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 200
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "11":
+    id: "11"
+    taskid: a1b2c3d4-1a1a-4b5c-9d8e-f0a1b2c3d4e5
+    type: collection
+    task:
+      id: a1b2c3d4-1a1a-4b5c-9d8e-f0a1b2c3d4e5
+      version: -1
+      name: "Enter AWS Credentials"
+      description: |-
+        Provide AWS credentials to invoke the containment Lambda function.
+        These credentials must have permission to invoke the Lambda function
+        (lambda:InvokeFunction) in the target region.
+
+        Use temporary STS credentials (with session token) when possible.
+
+        Triage results from task #1:
+        - Cluster: ${K8sEscape.ClusterName}
+        - Namespace: ${K8sEscape.Namespace}
+        - Severity: ${K8sEscape.Severity}
+        - Node: ${K8sEscape.NodeFQDN}
+      type: collection
       iscommand: false
       brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "2"
-    scriptarguments: {}
-    separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 200
+    message:
+      to:
+      subject: "AWS Credentials Required - K8s Container Escape Response"
+      body: |-
+        The K8s Container Escape playbook requires AWS credentials to invoke the containment Lambda function.
 
+        **Triage Summary:**
+        - Severity: ${K8sEscape.Severity}
+        - Cluster: ${K8sEscape.ClusterName}
+        - Namespace: ${K8sEscape.Namespace}
+        - Node FQDN: ${K8sEscape.NodeFQDN}
+        - SpringShell: ${K8sEscape.IsSpringShell}
+        - Webshell: ${K8sEscape.IsWebshell}
+
+        Please provide AWS credentials with Lambda invoke permissions.
+      methods: []
+      format: ""
+      bcc:
+      cc:
+      timings:
+        retriescount: 2
+        retriesinterval: 360
+        completeithaction: stop
+    form:
+      questions:
+        - id: "aws_access_key_id"
+          label: "AWS Access Key ID"
+          labelarg:
+            simple: "AWS Access Key ID"
+          required: true
+          gridcolumns: []
+          defaultrows: []
+          type: shortText
+          options: []
+          fieldassociated: ""
+          placeholder: "AKIA..."
+          tooltip: "AWS Access Key ID for Lambda invocation"
+          readonly: false
+        - id: "aws_secret_access_key"
+          label: "AWS Secret Access Key"
+          labelarg:
+            simple: "AWS Secret Access Key"
+          required: true
+          gridcolumns: []
+          defaultrows: []
+          type: shortText
+          options: []
+          fieldassociated: ""
+          placeholder: ""
+          tooltip: "AWS Secret Access Key (will be used for this execution only)"
+          readonly: false
+        - id: "aws_session_token"
+          label: "AWS Session Token"
+          labelarg:
+            simple: "AWS Session Token (optional, for STS temporary credentials)"
+          required: false
+          gridcolumns: []
+          defaultrows: []
+          type: longText
+          options: []
+          fieldassociated: ""
+          placeholder: ""
+          tooltip: "Required if using temporary STS credentials"
+          readonly: false
+        - id: "aws_region"
+          label: "AWS Region"
+          labelarg:
+            simple: "AWS Region"
+          required: true
+          gridcolumns: []
+          defaultrows: []
+          type: shortText
+          options: []
+          fieldassociated: ""
+          placeholder: "eu-west-3"
+          tooltip: "AWS region where the Lambda function is deployed"
+          readonly: false
+        - id: "lambda_function_name"
+          label: "Lambda Function Name"
+          labelarg:
+            simple: "Lambda Function Name"
+          required: true
+          gridcolumns: []
+          defaultrows: []
+          type: shortText
+          options: []
+          fieldassociated: ""
+          placeholder: "k8s-escape-demo-containment"
+          tooltip: "Name of the AWS Lambda containment function"
+          readonly: false
+      title: "AWS Credentials for K8s Containment"
+      description: "Enter AWS credentials to invoke the containment Lambda function."
+      sender: ""
+      expired: false
+      totalanswers: 0
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 370
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "2":
     id: "2"
-    taskid: collect_evidence
+    taskid: c5d9e3b2-8f7a-4c6d-9b0e-2a1f3e4d5c6b
     type: regular
     task:
-      id: collect_evidence
-      name: Collect Evidence - Pod Forensics
+      id: c5d9e3b2-8f7a-4c6d-9b0e-2a1f3e4d5c6b
+      version: -1
+      name: "Enrichment - Collect Evidence via Lambda"
       description: |-
-        Invoke AWS Lambda to collect forensic evidence from the EKS cluster:
+        Invoke the K8s Containment Lambda to collect forensic evidence.
+        Uses AWS credentials from operator input (task #11) and cluster info
+        from K8sEscape context (task #1 output).
+
+        Evidence collected:
         - Pod configuration (privileged, hostPID, hostNetwork, hostPath mounts)
         - Pod logs (last 50 lines)
         - Kubernetes events in the namespace
         - RBAC bindings (cluster-admin associations)
-        - Service account token details
+        - Node status for the compromised host (from K8sEscape.NodeFQDN)
       iscommand: true
-      brand: AWS - Lambda
-      script: aws-lambda-invoke
-    scriptarguments:
-      functionName:
-        simple: ${inputs.LambdaFunction}
-      payload:
-        simple: '{"action": "collect_evidence", "cluster_name": "${inputs.ClusterName}", "namespace": "${inputs.Namespace}", "region": "${inputs.Region}"}'
-      region:
-        simple: ${inputs.Region}
+      brand: ""
+      script: InvokeK8sContainmentLambda
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "3"
+    scriptarguments:
+      aws_access_key_id:
+        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+      aws_secret_access_key:
+        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+      aws_session_token:
+        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+      aws_region:
+        simple: ${Enter AWS Credentials.Answers.aws_region}
+      lambda_function_name:
+        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+      action:
+        simple: collect_evidence
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      namespace:
+        simple: ${K8sEscape.Namespace}
+      node_hostname:
+        simple: ${K8sEscape.NodeFQDN}
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 370
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 540
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "3":
     id: "3"
-    taskid: severity_check
+    taskid: a7b6c5d4-e3f2-4a1b-8c9d-0e1f2a3b4c5d
     type: condition
     task:
-      id: severity_check
+      id: a7b6c5d4-e3f2-4a1b-8c9d-0e1f2a3b4c5d
+      version: -1
       name: Auto-Contain?
       description: |-
-        Evaluate severity based on collected evidence.
-        If privileged pod with cluster-admin SA is detected (Critical severity),
-        proceed with automatic containment.
-        Otherwise, request analyst approval before taking action.
+        Evaluate severity from ExtractK8sContainerEscapeIOCs output.
+        - Critical + SpringShell -> Auto-contain (proceed to operator approval)
+        - Other -> Request analyst approval
+
+        In both cases, operator validation is required before containment.
       iscommand: false
       brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      "Critical - Auto-Contain":
+        - "31"
+      '#default#':
+        - "31"
     conditions:
-      - label: Critical - Auto-Contain
+      - label: "Critical - Auto-Contain"
         condition:
-          - - left:
+          - - operator: isEqualString
+              left:
                 value:
-                  simple: ${incident.severity}
-              operator: isEqualNumber
+                  simple: ${K8sEscape.Severity}
+                iscontext: true
               right:
                 value:
-                  simple: "4"
-    nexttasks:
-      Critical - Auto-Contain:
-        - "4"
-      '#default#':
-        - "3a"
+                  simple: "Critical"
+          - - operator: isTrue
+              left:
+                value:
+                  simple: ${K8sEscape.IsSpringShell}
+                iscontext: true
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 540
-
-  "3a":
-    id: "3a"
-    taskid: manual_approval
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 710
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "31":
+    id: "31"
+    taskid: f8e7d6c5-b4a3-4291-8f0e-1d2c3b4a5968
     type: condition
     task:
-      id: manual_approval
-      name: Analyst Approval Required
+      id: f8e7d6c5-b4a3-4291-8f0e-1d2c3b4a5968
+      version: -1
+      name: Operator Approval Required
       description: |-
-        Analyst must review the collected evidence and approve containment actions.
-        Review pod configuration, RBAC bindings, and forensic evidence before proceeding.
+        Operator must review the enrichment results and approve containment actions.
+        Review:
+        - IOC extraction report (K8sEscape context)
+        - Forensic evidence from Lambda (K8sContainment.Evidence)
+        - Pod configuration, RBAC bindings, node status
+        Before approving containment (network isolation, RBAC revocation, scale down, etc.)
       iscommand: false
       brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
-      Approve:
+      "Approve":
         - "4"
-      Reject:
-        - "9"
+      "Reject":
+        - "10"
+    conditions: []
     separatecontext: false
-    view:
-      position:
-        x: 700
-        y: 700
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 880
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "4":
     id: "4"
-    taskid: network_isolate
+    taskid: e1d2c3b4-a5f6-4e7d-8c9b-0a1f2e3d4c5b
     type: regular
     task:
-      id: network_isolate
+      id: e1d2c3b4-a5f6-4e7d-8c9b-0a1f2e3d4c5b
+      version: -1
       name: "Contain: Network Isolation"
       description: |-
-        Apply deny-all NetworkPolicy on the target namespace.
-        This blocks ALL ingress and egress traffic, immediately cutting off:
+        Apply deny-all NetworkPolicy on the target namespace via Lambda.
+        Blocks ALL ingress and egress traffic, cutting off:
         - Attacker C2 communication via the webshell
         - Lateral movement to other pods/services
         - Data exfiltration via the compromised pod
       iscommand: true
-      brand: AWS - Lambda
-      script: aws-lambda-invoke
-    scriptarguments:
-      functionName:
-        simple: ${inputs.LambdaFunction}
-      payload:
-        simple: '{"action": "network_isolate", "cluster_name": "${inputs.ClusterName}", "namespace": "${inputs.Namespace}", "region": "${inputs.Region}"}'
-      region:
-        simple: ${inputs.Region}
+      brand: ""
+      script: InvokeK8sContainmentLambda
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "5"
+    scriptarguments:
+      aws_access_key_id:
+        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+      aws_secret_access_key:
+        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+      aws_session_token:
+        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+      aws_region:
+        simple: ${Enter AWS Credentials.Answers.aws_region}
+      lambda_function_name:
+        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+      action:
+        simple: network_isolate
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      namespace:
+        simple: ${K8sEscape.Namespace}
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 870
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1050
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "5":
     id: "5"
-    taskid: revoke_rbac
+    taskid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
     type: regular
     task:
-      id: revoke_rbac
+      id: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
+      version: -1
       name: "Contain: Revoke RBAC Privileges"
       description: |-
-        Delete the cluster-admin ClusterRoleBinding for the compromised ServiceAccount.
-        This revokes full cluster API access and prevents:
+        Delete the cluster-admin ClusterRoleBinding via Lambda.
+        Revokes full cluster API access and prevents:
         - Secret exfiltration across namespaces
         - Deployment of additional malicious workloads
         - Kubernetes API abuse for lateral movement
       iscommand: true
-      brand: AWS - Lambda
-      script: aws-lambda-invoke
-    scriptarguments:
-      functionName:
-        simple: ${inputs.LambdaFunction}
-      payload:
-        simple: '{"action": "revoke_rbac", "cluster_name": "${inputs.ClusterName}", "namespace": "${inputs.Namespace}", "region": "${inputs.Region}"}'
-      region:
-        simple: ${inputs.Region}
+      brand: ""
+      script: InvokeK8sContainmentLambda
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "6"
+    scriptarguments:
+      aws_access_key_id:
+        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+      aws_secret_access_key:
+        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+      aws_session_token:
+        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+      aws_region:
+        simple: ${Enter AWS Credentials.Answers.aws_region}
+      lambda_function_name:
+        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+      action:
+        simple: revoke_rbac
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      namespace:
+        simple: ${K8sEscape.Namespace}
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 1040
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1220
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "6":
     id: "6"
-    taskid: scale_down
+    taskid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
     type: regular
     task:
-      id: scale_down
+      id: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
+      version: -1
       name: "Contain: Scale Down Deployment"
       description: |-
-        Scale the compromised deployment to 0 replicas.
-        This terminates all running pods while preserving the Deployment
+        Scale the compromised deployment to 0 replicas via Lambda.
+        Terminates all running pods while preserving the Deployment
         resource for post-incident forensic analysis.
       iscommand: true
-      brand: AWS - Lambda
-      script: aws-lambda-invoke
-    scriptarguments:
-      functionName:
-        simple: ${inputs.LambdaFunction}
-      payload:
-        simple: '{"action": "scale_down", "cluster_name": "${inputs.ClusterName}", "namespace": "${inputs.Namespace}", "region": "${inputs.Region}"}'
-      region:
-        simple: ${inputs.Region}
+      brand: ""
+      script: InvokeK8sContainmentLambda
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "7"
+    scriptarguments:
+      aws_access_key_id:
+        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+      aws_secret_access_key:
+        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+      aws_session_token:
+        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+      aws_region:
+        simple: ${Enter AWS Credentials.Answers.aws_region}
+      lambda_function_name:
+        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+      action:
+        simple: scale_down
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      namespace:
+        simple: ${K8sEscape.Namespace}
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 1210
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1390
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "7":
     id: "7"
-    taskid: cordon_node
+    taskid: b4c5d6e7-f8a9-4b0c-1d2e-3f4a5b6c7d8e
     type: regular
     task:
-      id: cordon_node
+      id: b4c5d6e7-f8a9-4b0c-1d2e-3f4a5b6c7d8e
+      version: -1
       name: "Contain: Cordon Compromised Node"
       description: |-
-        Mark the node that hosted the compromised pod as unschedulable (cordon).
-        This prevents new workloads from being placed on a potentially
-        compromised host where the attacker had root access via container escape.
+        Mark the compromised node as unschedulable (cordon) via Lambda.
+        Uses K8sEscape.NodeFQDN for targeted cordoning.
+        Prevents new workloads on a potentially compromised host.
       iscommand: true
-      brand: AWS - Lambda
-      script: aws-lambda-invoke
-    scriptarguments:
-      functionName:
-        simple: ${inputs.LambdaFunction}
-      payload:
-        simple: '{"action": "cordon_node", "cluster_name": "${inputs.ClusterName}", "namespace": "${inputs.Namespace}", "region": "${inputs.Region}"}'
-      region:
-        simple: ${inputs.Region}
+      brand: ""
+      script: InvokeK8sContainmentLambda
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "8"
+    scriptarguments:
+      aws_access_key_id:
+        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+      aws_secret_access_key:
+        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+      aws_session_token:
+        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+      aws_region:
+        simple: ${Enter AWS Credentials.Answers.aws_region}
+      lambda_function_name:
+        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+      action:
+        simple: cordon_node
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      namespace:
+        simple: ${K8sEscape.Namespace}
+      node_hostname:
+        simple: ${K8sEscape.NodeFQDN}
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 1380
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1560
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "8":
     id: "8"
-    taskid: delete_pod
+    taskid: c5d6e7f8-a9b0-4c1d-2e3f-4a5b6c7d8e9f
     type: regular
     task:
-      id: delete_pod
+      id: c5d6e7f8-a9b0-4c1d-2e3f-4a5b6c7d8e9f
+      version: -1
       name: "Eradicate: Kill Compromised Pods"
       description: |-
-        Force delete all pods in the compromised namespace.
-        Combined with the scale-down, this ensures no compromised
-        containers remain running with the webshell or stolen credentials.
+        Force delete all pods in the compromised namespace via Lambda.
+        Combined with scale-down, ensures no compromised containers
+        remain running with the webshell or stolen credentials.
       iscommand: true
-      brand: AWS - Lambda
-      script: aws-lambda-invoke
-    scriptarguments:
-      functionName:
-        simple: ${inputs.LambdaFunction}
-      payload:
-        simple: '{"action": "delete_pod", "cluster_name": "${inputs.ClusterName}", "namespace": "${inputs.Namespace}", "region": "${inputs.Region}"}'
-      region:
-        simple: ${inputs.Region}
+      brand: ""
+      script: InvokeK8sContainmentLambda
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "9"
+    scriptarguments:
+      aws_access_key_id:
+        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+      aws_secret_access_key:
+        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+      aws_session_token:
+        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+      aws_region:
+        simple: ${Enter AWS Credentials.Answers.aws_region}
+      lambda_function_name:
+        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+      action:
+        simple: delete_pod
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      namespace:
+        simple: ${K8sEscape.Namespace}
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 1550
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1730
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "9":
     id: "9"
-    taskid: verification
+    taskid: d6e7f8a9-b0c1-4d2e-3f4a-5b6c7d8e9f0a
     type: regular
     task:
-      id: verification
+      id: d6e7f8a9-b0c1-4d2e-3f4a-5b6c7d8e9f0a
+      version: -1
       name: Verify Containment
       description: |-
-        Re-collect evidence to verify containment is effective:
+        Re-collect evidence via Lambda to verify containment is effective:
         - No running pods in the namespace
         - NetworkPolicy deny-all is applied
         - ClusterRoleBinding is deleted
         - Compromised node is cordoned
       iscommand: true
-      brand: AWS - Lambda
-      script: aws-lambda-invoke
-    scriptarguments:
-      functionName:
-        simple: ${inputs.LambdaFunction}
-      payload:
-        simple: '{"action": "collect_evidence", "cluster_name": "${inputs.ClusterName}", "namespace": "${inputs.Namespace}", "region": "${inputs.Region}"}'
-      region:
-        simple: ${inputs.Region}
+      brand: ""
+      script: InvokeK8sContainmentLambda
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks:
       '#none#':
         - "10"
+    scriptarguments:
+      aws_access_key_id:
+        simple: ${Enter AWS Credentials.Answers.aws_access_key_id}
+      aws_secret_access_key:
+        simple: ${Enter AWS Credentials.Answers.aws_secret_access_key}
+      aws_session_token:
+        simple: ${Enter AWS Credentials.Answers.aws_session_token}
+      aws_region:
+        simple: ${Enter AWS Credentials.Answers.aws_region}
+      lambda_function_name:
+        simple: ${Enter AWS Credentials.Answers.lambda_function_name}
+      action:
+        simple: collect_evidence
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      namespace:
+        simple: ${K8sEscape.Namespace}
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 1720
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1900
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
   "10":
     id: "10"
-    taskid: close
+    taskid: e7f8a9b0-c1d2-4e3f-4a5b-6c7d8e9f0a1b
     type: title
     task:
-      id: close
+      id: e7f8a9b0-c1d2-4e3f-4a5b-6c7d8e9f0a1b
+      version: -1
       name: Containment Complete
       description: |-
         All containment actions executed successfully.
@@ -358,49 +783,55 @@ tasks:
         - Patch the Spring Boot application (upgrade Spring Framework >= 5.3.18)
         - Review and harden Pod Security Standards
         - Implement least-privilege RBAC
+      type: title
       iscommand: false
       brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
     nexttasks: {}
     separatecontext: false
-    view:
-      position:
-        x: 450
-        y: 1890
-
-inputs:
-  - key: ClusterName
-    value:
-      simple: eks-escape-demo
-    required: true
-    description: EKS cluster name
-  - key: Namespace
-    value:
-      simple: vuln-app
-    required: true
-    description: Kubernetes namespace to contain
-  - key: Region
-    value:
-      simple: eu-west-3
-    required: true
-    description: AWS region
-  - key: LambdaFunction
-    value:
-      simple: k8s-escape-demo-containment
-    required: true
-    description: Name of the AWS Lambda containment function
-  - key: AutoContain
-    value:
-      simple: "true"
-    required: false
-    description: Auto-contain without analyst approval (true/false)
-
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 2070
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+inputs: []
+inputSections: []
+outputSections:
+  - outputs:
+      - K8sContainment.Results
+      - K8sContainment.Evidence
+    name: Containment Outputs
+    description: Results and evidence from the containment actions.
 outputs:
-  - contextPath: Containment.Results
+  - contextPath: K8sContainment.Results
     description: Results of all containment actions
-  - contextPath: Containment.Evidence
+  - contextPath: K8sContainment.Evidence
     description: Forensic evidence collected from the cluster
-
-fromversion: 6.0.0
+view: |-
+  {
+    "linkLabelsPosition": {},
+    "paper": {
+      "dimensions": {
+        "height": 2235,
+        "width": 630,
+        "x": 450,
+        "y": 50
+      }
+    }
+  }
+fromversion: "6.10.0"
 toversion: ""
 tags:
   - Kubernetes
@@ -410,3 +841,5 @@ tags:
   - EKS
   - Incident Response
   - AWS Lambda
+  - Cortex XDR
+  - XDR Issue

@@ -996,3 +996,24 @@ body {
     border-left: 2px solid rgba(99, 102, 241, 0.3);
     margin-bottom: 0.1rem;
 }
+
+.cortex-flow-ascii {
+    font-size: 0.6rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent-cyan);
+    line-height: 1.5;
+    margin: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    white-space: pre;
+}
+
+/* Lambda info */
+.lambda-info {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    background: rgba(59, 130, 246, 0.05);
+    border: 1px solid rgba(59, 130, 246, 0.15);
+    border-radius: 6px;
+}

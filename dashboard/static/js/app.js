@@ -109,6 +109,8 @@ function updateStepStatus(taskName, status) {
         'Step 2: Container Escape': 'escape',
         'Step 3: Cluster Takeover': 'takeover',
         'Terraform Destroy': null,
+        'Deploy Lambda': null,
+        'Destroy Lambda': null,
     };
 
     const stepId = mapping[taskName];
@@ -683,6 +685,96 @@ async function playbookRunAll() {
     }
 }
 
+// ─── Lambda ──────────────────────────────────────────────────────────────────
+
+function lambdaDeploy() {
+    switchTab('terminal');
+    termWriteHeader('Deploy Containment Lambda (Terraform)');
+    termWrite('Deploying Lambda + IAM role + EKS access entry...\n\n');
+    apiCall('/api/lambda/apply');
+}
+
+function lambdaDestroy() {
+    switchTab('terminal');
+    termWriteHeader('Destroy Containment Lambda (Terraform)');
+    termWrite('Destroying Lambda + IAM role + EKS access...\n\n');
+    apiCall('/api/lambda/destroy');
+}
+
+async function testLambda() {
+    switchTab('playbook');
+    playbookClear();
+    const line = '='.repeat(50);
+    playbookWrite(`${line}\n  TEST LAMBDA: collect_evidence\n${line}\n\n`);
+    playbookWrite('Invoking containment Lambda with action: collect_evidence...\n\n');
+
+    const badge = document.getElementById('lambda-test-status');
+    badge.textContent = 'testing...';
+    badge.style.color = '#f97316';
+
+    try {
+        const res = await fetch('/api/lambda/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+            playbookWrite(`ERROR: ${data.error}\n`);
+            badge.textContent = 'error';
+            badge.style.color = '#ef4444';
+            return;
+        }
+        if (data.task_id) {
+            playbookStartPolling(data.task_id, null);
+            // Update badge on completion
+            const checkDone = setInterval(async () => {
+                const tr = await fetch(`/api/tasks/${data.task_id}`);
+                const task = await tr.json();
+                if (task.status === 'success') {
+                    badge.textContent = 'ok';
+                    badge.style.color = '#22c55e';
+                    clearInterval(checkDone);
+                } else if (task.status === 'error') {
+                    badge.textContent = 'error';
+                    badge.style.color = '#ef4444';
+                    clearInterval(checkDone);
+                }
+            }, 2000);
+        }
+    } catch (e) {
+        playbookWrite(`Request failed: ${e.message}\n`);
+        badge.textContent = 'error';
+        badge.style.color = '#ef4444';
+    }
+}
+
+async function lambdaStatus() {
+    termWriteHeader('Lambda Status');
+    try {
+        const res = await fetch('/api/lambda/status');
+        const data = await res.json();
+        if (data.status === 'deployed') {
+            termWrite(`Status: Deployed\n`);
+            termWrite(`Name:   ${data.name}\n`);
+            termWrite(`ARN:    ${data.arn}\n`);
+            // Update lambda panel
+            const panel = document.getElementById('lambda-info-panel');
+            if (panel) {
+                panel.style.display = 'block';
+                document.getElementById('lambda-info-name').textContent = data.name;
+                document.getElementById('lambda-info-arn').textContent = data.arn || '-';
+            }
+            const badge = document.getElementById('lambda-deploy-status');
+            if (badge) {
+                badge.textContent = 'deployed';
+                badge.style.color = '#22c55e';
+            }
+        } else {
+            termWrite(`Status: Not deployed\n`);
+            termWrite('Run Terraform Apply to deploy the Lambda.\n');
+        }
+    } catch (e) {
+        termWrite(`Error: ${e.message}\n`);
+    }
+}
+
 // ─── Cortex ──────────────────────────────────────────────────────────────────
 
 function openCortexSettings() {
@@ -759,9 +851,8 @@ async function publishPlaybook() {
     playbookWrite(`${line}\n  PUBLISH PLAYBOOK TO CORTEX\n${line}\n\n`);
     playbookWrite('Uploading K8s_Container_Escape_Spring4Shell_Containment.yml...\n\n');
 
-    const badge = document.getElementById('playbook-publish-status');
-    badge.textContent = 'publishing...';
-    badge.style.color = '#f97316';
+    const badge = document.getElementById('cortex-deploy-status');
+    if (badge) { badge.textContent = 'publishing...'; badge.style.color = '#f97316'; }
 
     try {
         const res = await fetch('/api/cortex/publish-playbook', { method: 'POST' });
@@ -769,24 +860,109 @@ async function publishPlaybook() {
         if (data.status === 'ok') {
             playbookWrite(`${data.message}\n`);
             playbookWrite(`HTTP Status: ${data.http_status}\n`);
-            if (data.response) {
-                playbookWrite(`\nResponse:\n${data.response}\n`);
-            }
+            if (data.response) playbookWrite(`\nResponse:\n${data.response}\n`);
             playbookWrite(`\n${'─'.repeat(50)}\n`);
             playbookWrite('Playbook published successfully.\n');
-            badge.textContent = 'published';
-            badge.style.color = '#22c55e';
+            if (badge) { badge.textContent = 'published'; badge.style.color = '#22c55e'; }
+            const ps = document.getElementById('cortex-playbook-status');
+            if (ps) ps.textContent = 'deployed';
         } else {
             playbookWrite(`ERROR: ${data.message}\n`);
-            playbookWrite(`\n${'─'.repeat(50)}\n`);
-            playbookWrite('Publish failed.\n');
-            badge.textContent = 'failed';
-            badge.style.color = '#ef4444';
+            if (badge) { badge.textContent = 'failed'; badge.style.color = '#ef4444'; }
         }
     } catch (e) {
         playbookWrite(`Request failed: ${e.message}\n`);
-        badge.textContent = 'error';
-        badge.style.color = '#ef4444';
+        if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
+    }
+}
+
+async function cortexDeployScript(scriptName) {
+    switchTab('playbook');
+    playbookClear();
+    const line = '='.repeat(50);
+    playbookWrite(`${line}\n  DEPLOY SCRIPT: ${scriptName}\n${line}\n\n`);
+    playbookWrite(`Uploading automation-${scriptName}.yml to Cortex...\n\n`);
+
+    const badge = document.getElementById('cortex-deploy-status');
+    if (badge) { badge.textContent = 'deploying...'; badge.style.color = '#f97316'; }
+
+    try {
+        const res = await fetch('/api/cortex/deploy-script', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ script_name: scriptName })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            playbookWrite(`Script '${scriptName}' deployed to Cortex\n`);
+            playbookWrite(`API path: ${data.api_path}\n`);
+            if (data.response) playbookWrite(`\nResponse:\n${data.response}\n`);
+            playbookWrite(`\n${'─'.repeat(50)}\n`);
+            playbookWrite('Script deployed successfully.\n');
+            if (badge) { badge.textContent = 'deployed'; badge.style.color = '#22c55e'; }
+            const ss = document.getElementById('cortex-script-status');
+            if (ss) ss.textContent = 'deployed';
+        } else {
+            playbookWrite(`ERROR: ${data.message}\n`);
+            if (badge) { badge.textContent = 'failed'; badge.style.color = '#ef4444'; }
+        }
+    } catch (e) {
+        playbookWrite(`Request failed: ${e.message}\n`);
+        if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
+    }
+}
+
+async function cortexDeployAll() {
+    switchTab('playbook');
+    playbookClear();
+    const line = '='.repeat(50);
+    playbookWrite(`${line}\n  DEPLOY ALL CORTEX OBJECTS\n${line}\n\n`);
+    playbookWrite('Deploying scripts + playbook to Cortex...\n\n');
+
+    const badge = document.getElementById('cortex-deploy-status');
+    if (badge) { badge.textContent = 'deploying...'; badge.style.color = '#f97316'; }
+
+    const detailsPanel = document.getElementById('cortex-deploy-details');
+    if (detailsPanel) detailsPanel.style.display = 'block';
+
+    const scriptStatus = document.getElementById('cortex-script-status');
+    const playbookStatus = document.getElementById('cortex-playbook-status');
+    if (scriptStatus) scriptStatus.textContent = 'deploying...';
+    if (playbookStatus) playbookStatus.textContent = 'pending...';
+
+    try {
+        const res = await fetch('/api/cortex/deploy-all', { method: 'POST' });
+        const data = await res.json();
+
+        for (const r of (data.results || [])) {
+            const icon = r.status === 'ok' ? '\u2705' : '\u274C';
+            playbookWrite(`${icon} ${r.type.toUpperCase()}: ${r.name} - ${r.status}\n`);
+            if (r.api_path) playbookWrite(`   API: ${r.api_path}\n`);
+            if (r.message) playbookWrite(`   Error: ${r.message}\n`);
+            playbookWrite('\n');
+
+            // Update detail panel
+            if (r.type === 'script' && scriptStatus) {
+                scriptStatus.textContent = r.status === 'ok' ? 'deployed' : 'failed';
+                scriptStatus.style.color = r.status === 'ok' ? '#22c55e' : '#ef4444';
+            }
+            if (r.type === 'playbook' && playbookStatus) {
+                playbookStatus.textContent = r.status === 'ok' ? 'deployed' : 'failed';
+                playbookStatus.style.color = r.status === 'ok' ? '#22c55e' : '#ef4444';
+            }
+        }
+
+        playbookWrite(`${'─'.repeat(50)}\n`);
+        if (data.status === 'ok') {
+            playbookWrite('All Cortex objects deployed successfully.\n');
+            if (badge) { badge.textContent = 'deployed'; badge.style.color = '#22c55e'; }
+        } else {
+            playbookWrite(`Deploy status: ${data.status} - ${data.message}\n`);
+            if (badge) { badge.textContent = data.status; badge.style.color = '#f97316'; }
+        }
+    } catch (e) {
+        playbookWrite(`Request failed: ${e.message}\n`);
+        if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
     }
 }
 
@@ -807,6 +983,46 @@ function updateCortexStatus(status) {
 }
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
+
+// ─── S3 Backend ───────────────────────────────────────────────────────────────
+
+function backendApply() {
+    termWriteHeader('Provision S3 Backend (bucket + DynamoDB)');
+    apiCall('/api/backend/apply');
+}
+
+function backendDestroy() {
+    if (!confirm('Destroy S3 backend? Make sure all infrastructure is destroyed first.')) return;
+    termWriteHeader('Destroy S3 Backend');
+    apiCall('/api/backend/destroy');
+}
+
+function backendCheckStatus() {
+    fetch('/api/backend/status')
+        .then(r => r.json())
+        .then(data => {
+            const statusEl = document.getElementById('backend-status');
+            const panel = document.getElementById('backend-info-panel');
+            if (data.status === 'provisioned') {
+                statusEl.textContent = 'provisioned';
+                statusEl.className = 'step-status success';
+                panel.style.display = 'block';
+                document.getElementById('backend-info-bucket').textContent = data.bucket || '-';
+                document.getElementById('backend-info-table').textContent = data.table || '-';
+                document.getElementById('backend-info-region').textContent = data.region || '-';
+            } else {
+                statusEl.textContent = 'not provisioned';
+                statusEl.className = 'step-status error';
+                panel.style.display = 'none';
+            }
+        })
+        .catch(() => {
+            document.getElementById('backend-status').textContent = 'error';
+            document.getElementById('backend-status').className = 'step-status error';
+        });
+}
+
+// ─── Infrastructure ───────────────────────────────────────────────────────────
 
 function infraPlan() {
     termWriteHeader('Terraform Plan');

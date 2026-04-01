@@ -32,26 +32,51 @@ NAMESPACE = os.environ.get("TARGET_NAMESPACE", "vuln-app")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-def get_eks_token(cluster_name):
-    """Get a bearer token for EKS authentication using STS."""
-    sts = boto3.client("sts", region_name=REGION)
-    token = sts.get_caller_identity()  # validate creds
+def get_eks_token(cluster_name, region=None):
+    """Get a bearer token for EKS authentication using STS.
 
-    # Use the STS presigned URL method for EKS auth
-    sts_client = boto3.client("sts", region_name=REGION)
-    url = sts_client.generate_presigned_url(
-        "get_caller_identity",
-        HttpMethod="GET",
-        ExpiresIn=60,
+    EKS requires a presigned GetCallerIdentity URL with the
+    'x-k8s-aws-id' header set to the cluster name.
+    """
+    from botocore.signers import RequestSigner
+
+    region = region or REGION
+    sts = boto3.client("sts", region_name=region)
+
+    signer = RequestSigner(
+        sts._service_model.service_id,
+        region,
+        "sts",
+        "v4",
+        sts._request_signer._credentials,
+        sts._request_signer._event_emitter,
     )
-    # EKS expects the token as "k8s-aws-v1.<base64url-encoded presigned URL>"
-    token = "k8s-aws-v1." + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+
+    params = {
+        "method": "GET",
+        "url": f"https://sts.{region}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15",
+        "body": {},
+        "headers": {"x-k8s-aws-id": cluster_name},
+        "context": {},
+    }
+
+    signed_url = signer.generate_presigned_url(
+        params,
+        region_name=region,
+        expires_in=60,
+        operation_name="",
+    )
+
+    token = "k8s-aws-v1." + base64.urlsafe_b64encode(
+        signed_url.encode()
+    ).decode().rstrip("=")
     return token
 
 
-def get_cluster_info(cluster_name):
+def get_cluster_info(cluster_name, region=None):
     """Get EKS cluster endpoint and CA data."""
-    eks = boto3.client("eks", region_name=REGION)
+    region = region or REGION
+    eks = boto3.client("eks", region_name=region)
     resp = eks.describe_cluster(name=cluster_name)
     cluster = resp["cluster"]
     return {
@@ -174,32 +199,52 @@ def action_scale_down(endpoint, ca_data, token, namespace):
     return {"action": "scale_down", "status": "success", "detail": "Deployment scaled to 0 replicas"}
 
 
-def action_cordon_node(endpoint, ca_data, token, namespace):
-    """Cordon the node running the compromised pods."""
-    # Find node from pod spec
-    list_resp = k8s_request(endpoint, ca_data, token, "GET", f"/api/v1/namespaces/{namespace}/pods")
-    if list_resp["status"] >= 400:
-        return {"action": "cordon_node", "status": "error", "detail": "Cannot list pods"}
+def action_cordon_node(endpoint, ca_data, token, namespace, node_hostname=None):
+    """Cordon the node running the compromised pods.
 
-    pods = json.loads(list_resp["body"]).get("items", [])
+    If node_hostname is provided (from XDR alert xdm.source.host.hostname),
+    cordon that specific node directly. Otherwise, discover nodes from running pods.
+    """
     cordoned_nodes = []
 
-    for pod in pods:
-        node_name = pod.get("spec", {}).get("nodeName")
-        if node_name and node_name not in cordoned_nodes:
-            patch = {"spec": {"unschedulable": True}}
-            resp = k8s_request(
-                endpoint, ca_data, token, "PATCH",
-                f"/api/v1/nodes/{node_name}",
-                body=patch,
-            )
-            cordoned_nodes.append({"node": node_name, "status": resp["status"]})
+    if node_hostname:
+        # Targeted cordon using XDR alert hostname
+        logger.info(f"Cordoning targeted node from XDR alert: {node_hostname}")
+        patch = {"spec": {"unschedulable": True}}
+        resp = k8s_request(
+            endpoint, ca_data, token, "PATCH",
+            f"/api/v1/nodes/{node_hostname}",
+            body=patch,
+        )
+        cordoned_nodes.append({"node": node_hostname, "status": resp["status"], "source": "xdr_alert"})
+    else:
+        # Fallback: discover nodes from pods in namespace
+        list_resp = k8s_request(endpoint, ca_data, token, "GET", f"/api/v1/namespaces/{namespace}/pods")
+        if list_resp["status"] >= 400:
+            return {"action": "cordon_node", "status": "error", "detail": "Cannot list pods"}
+
+        pods = json.loads(list_resp["body"]).get("items", [])
+        seen_nodes = []
+        for pod in pods:
+            node_name = pod.get("spec", {}).get("nodeName")
+            if node_name and node_name not in seen_nodes:
+                patch = {"spec": {"unschedulable": True}}
+                resp = k8s_request(
+                    endpoint, ca_data, token, "PATCH",
+                    f"/api/v1/nodes/{node_name}",
+                    body=patch,
+                )
+                cordoned_nodes.append({"node": node_name, "status": resp["status"], "source": "pod_discovery"})
+                seen_nodes.append(node_name)
 
     return {"action": "cordon_node", "status": "success", "cordoned_nodes": cordoned_nodes}
 
 
-def action_collect_evidence(endpoint, ca_data, token, namespace):
-    """Collect forensic evidence from the compromised namespace."""
+def action_collect_evidence(endpoint, ca_data, token, namespace, node_hostname=None):
+    """Collect forensic evidence from the compromised namespace.
+
+    If node_hostname is provided (from XDR alert), also collects node-specific details.
+    """
     evidence = {}
 
     # Pod details
@@ -267,6 +312,23 @@ def action_collect_evidence(endpoint, ca_data, token, namespace):
             )
         ]
 
+    # Node-specific evidence (from XDR alert hostname)
+    if node_hostname:
+        logger.info(f"Collecting node evidence for XDR-identified host: {node_hostname}")
+        node_resp = k8s_request(endpoint, ca_data, token, "GET", f"/api/v1/nodes/{node_hostname}")
+        if node_resp["status"] < 400:
+            node_data = json.loads(node_resp["body"])
+            conditions = node_data.get("status", {}).get("conditions", [])
+            evidence["xdr_node"] = {
+                "hostname": node_hostname,
+                "unschedulable": node_data.get("spec", {}).get("unschedulable", False),
+                "conditions": [
+                    {"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason")}
+                    for c in conditions
+                ],
+                "labels": node_data.get("metadata", {}).get("labels", {}),
+            }
+
     return {"action": "collect_evidence", "status": "success", "evidence": evidence}
 
 
@@ -282,20 +344,23 @@ def lambda_handler(event, context):
         "action": "network_isolate|delete_pod|revoke_rbac|scale_down|cordon_node|collect_evidence|full_containment",
         "cluster_name": "eks-escape-demo",  (optional)
         "namespace": "vuln-app",            (optional)
-        "region": "eu-west-3"               (optional)
+        "region": "eu-west-3",              (optional)
+        "node_hostname": "ip-10-0-0-60..."  (optional, from XDR alert xdm.source.host.hostname)
     }
     """
     action = event.get("action", "full_containment")
     cluster_name = event.get("cluster_name", CLUSTER_NAME)
     namespace = event.get("namespace", NAMESPACE)
     region = event.get("region", REGION)
+    node_hostname = event.get("node_hostname")
 
-    logger.info(f"Containment action: {action} on {cluster_name}/{namespace}")
+    logger.info(f"Containment action: {action} on {cluster_name}/{namespace} (region: {region})" +
+                (f" (node: {node_hostname})" if node_hostname else ""))
 
     # Get cluster info and token
     try:
-        cluster_info = get_cluster_info(cluster_name)
-        token = get_eks_token(cluster_name)
+        cluster_info = get_cluster_info(cluster_name, region=region)
+        token = get_eks_token(cluster_name, region=region)
     except Exception as e:
         return {
             "statusCode": 500,
@@ -314,17 +379,26 @@ def lambda_handler(event, context):
         "collect_evidence": action_collect_evidence,
     }
 
+    # Actions that accept node_hostname from XDR alert
+    node_aware_actions = {"cordon_node", "collect_evidence"}
+
     results = []
 
     if action == "full_containment":
         # Run all containment steps in order
         for step_name in ["collect_evidence", "network_isolate", "revoke_rbac", "scale_down", "cordon_node", "delete_pod"]:
             logger.info(f"Running step: {step_name}")
-            result = actions_map[step_name](endpoint, ca_data, token, namespace)
+            if step_name in node_aware_actions and node_hostname:
+                result = actions_map[step_name](endpoint, ca_data, token, namespace, node_hostname=node_hostname)
+            else:
+                result = actions_map[step_name](endpoint, ca_data, token, namespace)
             results.append(result)
             logger.info(f"Step {step_name}: {result.get('status')}")
     elif action in actions_map:
-        result = actions_map[action](endpoint, ca_data, token, namespace)
+        if action in node_aware_actions and node_hostname:
+            result = actions_map[action](endpoint, ca_data, token, namespace, node_hostname=node_hostname)
+        else:
+            result = actions_map[action](endpoint, ca_data, token, namespace)
         results.append(result)
     else:
         return {

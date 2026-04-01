@@ -91,6 +91,33 @@
         <div class="section">
             <div class="section-title">Infrastructure</div>
 
+            <div class="step-card" id="card-backend">
+                <div class="step-header">
+                    <span class="step-number infra">S3</span>
+                    <span class="step-status" id="backend-status"></span>
+                </div>
+                <div class="step-name">Terraform State Backend</div>
+                <div class="step-desc">S3 bucket + DynamoDB for remote TF state</div>
+                <div class="step-actions">
+                    <button class="btn btn-primary" onclick="backendApply()">Create / Check</button>
+                    <button class="btn btn-ghost" onclick="backendCheckStatus()">Status</button>
+                </div>
+                <div class="cluster-info" id="backend-info-panel" style="display:none;">
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Bucket</span>
+                        <span class="cluster-info-value" id="backend-info-bucket">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">DynamoDB</span>
+                        <span class="cluster-info-value" id="backend-info-table">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Region</span>
+                        <span class="cluster-info-value" id="backend-info-region">-</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="step-card" id="card-infra">
                 <div class="step-header">
                     <span class="step-number infra">INFRA</span>
@@ -218,26 +245,97 @@
         <div class="section">
             <div class="section-title">Cortex - Response</div>
 
-            <div class="step-card" id="card-playbook-publish">
+            <div class="step-card" id="card-lambda-deploy">
                 <div class="step-header">
-                    <span class="step-number cortex">PLAYBOOK</span>
-                    <span class="step-status" id="playbook-publish-status"></span>
+                    <span class="step-number aws">LAMBDA</span>
+                    <span class="step-status" id="lambda-deploy-status"></span>
                 </div>
-                <div class="step-name">Publish Playbook</div>
-                <div class="step-desc">Push containment playbook to Cortex</div>
+                <div class="step-name">Deploy Containment Lambda</div>
+                <div class="step-desc">Terraform: IAM role, EKS access, Lambda function</div>
                 <div class="step-actions">
-                    <button class="btn btn-cortex" onclick="publishPlaybook()">Publish to Cortex</button>
+                    <button class="btn btn-primary" onclick="lambdaDeploy()">Deploy</button>
+                    <button class="btn btn-ghost" onclick="testLambda()">Test</button>
+                    <button class="btn btn-ghost" onclick="lambdaStatus()">Status</button>
+                </div>
+                <!-- Lambda info (shown after deploy) -->
+                <div class="lambda-info" id="lambda-info-panel" style="display:none;">
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Lambda</span>
+                        <span class="cluster-info-value" id="lambda-info-name">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">ARN</span>
+                        <span class="cluster-info-value" id="lambda-info-arn">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-cortex-deploy">
+                <div class="step-header">
+                    <span class="step-number cortex">CORTEX</span>
+                    <span class="step-status" id="cortex-deploy-status"></span>
+                </div>
+                <div class="step-name">Deploy Cortex Objects</div>
+                <div class="step-desc">Push scripts + playbook to Cortex XSOAR/XSIAM</div>
+                <div class="step-actions">
+                    <button class="btn btn-cortex" onclick="cortexDeployAll()">Deploy All</button>
+                    <button class="btn btn-ghost" onclick="cortexDeployScript('ExtractK8sContainerEscapeIOCs')">Script Only</button>
+                    <button class="btn btn-ghost" onclick="publishPlaybook()">Playbook Only</button>
+                </div>
+                <!-- Deploy details -->
+                <div class="cortex-deploy-details" id="cortex-deploy-details" style="display:none; margin-top: 0.5rem;">
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Script</span>
+                        <span class="cluster-info-value" id="cortex-script-status">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Playbook</span>
+                        <span class="cluster-info-value" id="cortex-playbook-status">-</span>
+                    </div>
                 </div>
             </div>
 
             <div class="cortex-playbook-info">
-                <div class="cortex-info-title">Playbook steps (executed by Cortex)</div>
-                <div class="cortex-info-step">1. Collect Evidence - Pod forensics, logs, RBAC</div>
-                <div class="cortex-info-step">2. Network Isolation - Deny-all NetworkPolicy</div>
-                <div class="cortex-info-step">3. Revoke RBAC - Delete cluster-admin binding</div>
-                <div class="cortex-info-step">4. Scale Down - Replicas to 0</div>
-                <div class="cortex-info-step">5. Cordon Node - Mark unschedulable</div>
-                <div class="cortex-info-step">6. Kill Pods - Force delete all pods</div>
+                <div class="cortex-info-title">Cortex Objects</div>
+                <div class="cortex-info-step"><b>Script</b> ExtractK8sContainerEscapeIOCs - Enrichissement IOC (container_id, node, process, severity)</div>
+                <div class="cortex-info-step"><b>Playbook</b> K8s Container Escape Containment - Orchestration containment via Lambda</div>
+            </div>
+
+            <div class="cortex-playbook-info">
+                <div class="cortex-info-title">XDR Issue Fields (Detection & Triage)</div>
+                <div class="cortex-info-step"><b>details</b> - "Dropped webshell using the SpringShell exploit"</div>
+                <div class="cortex-info-step"><b>container_id</b> - Compromised container ID</div>
+                <div class="cortex-info-step"><b>namespace</b> - K8s namespace (vuln-app)</div>
+                <div class="cortex-info-step"><b>xdm.source.host.fqdn</b> - EKS node FQDN</div>
+                <div class="cortex-info-step"><b>xdm.source.host.ipv4_addresses</b> - Node IPs</div>
+                <div class="cortex-info-step"><b>xdm.source.user.username</b> - root (privilege escalation)</div>
+                <div class="cortex-info-step"><b>causality_actor_process</b> - runc (container escape)</div>
+                <div class="cortex-info-step"><b>image_id</b> - Container image SHA256</div>
+            </div>
+
+            <div class="cortex-playbook-info" style="margin-top: 0.4rem;">
+                <div class="cortex-info-title">Playbook Flow (XDR Issue -> Lambda -> EKS)</div>
+                <div class="cortex-info-step">1. Triage - Analyze XDR issue (details, container_id, namespace)</div>
+                <div class="cortex-info-step">2. Collect Evidence - Pod forensics on identified node</div>
+                <div class="cortex-info-step">3. Severity Check - Auto-contain if webshell + root confirmed</div>
+                <div class="cortex-info-step">4. Network Isolation - Deny-all NetworkPolicy</div>
+                <div class="cortex-info-step">5. Revoke RBAC - Delete cluster-admin binding</div>
+                <div class="cortex-info-step">6. Scale Down - Replicas to 0</div>
+                <div class="cortex-info-step">7. Cordon Node - Target node from XDR issue FQDN</div>
+                <div class="cortex-info-step">8. Kill Pods - Force delete all pods</div>
+                <div class="cortex-info-step">9. Verify - Re-collect evidence</div>
+            </div>
+
+            <div class="cortex-playbook-info" style="margin-top: 0.4rem;">
+                <div class="cortex-info-title">Architecture</div>
+                <pre class="cortex-flow-ascii">Cortex XDR Issue
+  |-> details: "Dropped webshell using the SpringShell exploit"
+  |-> container_id + namespace -> Target scope
+  |-> xdm.source.host.fqdn -> NodeHostname (cordon)
+  |-> Playbook triggered
+      |-> AWS Lambda (aws-lambda-invoke)
+          |-> EKS API (STS auth)
+              |-> NetworkPolicy / RBAC / Scale / Cordon / Delete</pre>
             </div>
         </div>
 
@@ -297,12 +395,34 @@
 
             <div class="step-card">
                 <div class="step-header">
-                    <span class="step-number destroy">DESTROY</span>
+                    <span class="step-number destroy">LAMBDA</span>
+                </div>
+                <div class="step-name">Destroy Lambda</div>
+                <div class="step-desc">Remove containment Lambda + IAM + EKS access</div>
+                <div class="step-actions">
+                    <button class="btn btn-orange" onclick="lambdaDestroy()">Destroy Lambda</button>
+                </div>
+            </div>
+
+            <div class="step-card">
+                <div class="step-header">
+                    <span class="step-number destroy">INFRA</span>
                 </div>
                 <div class="step-name">Destroy Infrastructure</div>
-                <div class="step-desc">Remove all AWS resources</div>
+                <div class="step-desc">Remove EKS cluster, ECR, VPC + all AWS resources</div>
                 <div class="step-actions">
                     <button class="btn btn-orange" onclick="infraDestroy()">Destroy All</button>
+                </div>
+            </div>
+
+            <div class="step-card">
+                <div class="step-header">
+                    <span class="step-number destroy">S3</span>
+                </div>
+                <div class="step-name">Destroy TF State Backend</div>
+                <div class="step-desc">Remove S3 bucket + DynamoDB (destroy infra first!)</div>
+                <div class="step-actions">
+                    <button class="btn btn-orange" onclick="backendDestroy()">Destroy Backend</button>
                 </div>
             </div>
         </div>
