@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>K8s Escape Demo</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>">
+</head>
+<body>
+
+<!-- ─── Header ─────────────────────────────────── -->
+<header class="header">
+    <div class="header-left">
+        <span class="skull">&#x1F480;</span>
+        <div>
+            <h1>K8s Container Escape Demo</h1>
+            <div class="subtitle">EKS 1.35 &bull; Spring4Shell &bull; CVE-2022-22965</div>
+        </div>
+    </div>
+    <div class="status-bar">
+        <div class="status-item">
+            <span class="status-dot" id="host-dot"></span>
+            <span id="host-value">Not deployed</span>
+        </div>
+    </div>
+</header>
+
+<!-- ─── Main ───────────────────────────────────── -->
+<div class="main-container">
+
+    <!-- ─── Sidebar ────────────────────────────── -->
+    <aside class="sidebar">
+
+        <!-- AWS Settings -->
+        <div class="section">
+            <div class="section-title">AWS Settings</div>
+            <div class="step-card" id="card-aws-settings">
+                <div class="step-header">
+                    <span class="step-number aws">AWS</span>
+                    <span class="step-status" id="aws-status"></span>
+                </div>
+                <div class="step-name">AWS Credentials</div>
+                <div class="step-desc">Configure Access Key, Secret Key &amp; Session Token</div>
+                <div class="step-actions">
+                    <button class="btn btn-primary" onclick="openAwsSettings()">Configure</button>
+                    <button class="btn btn-ghost" onclick="testAwsCredentials()">Test</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Kill Chain Visual -->
+        <div class="kill-chain">
+            <div class="section-title">Kill Chain Progress</div>
+            <div class="chain-steps">
+                <div class="chain-node" title="Infrastructure">1</div>
+                <div class="chain-line"></div>
+                <div class="chain-node" title="Build Image">2</div>
+                <div class="chain-line"></div>
+                <div class="chain-node" title="Deploy App">3</div>
+                <div class="chain-line"></div>
+                <div class="chain-node" title="RCE">4</div>
+                <div class="chain-line"></div>
+                <div class="chain-node" title="Escape">5</div>
+                <div class="chain-line"></div>
+                <div class="chain-node" title="Takeover">6</div>
+            </div>
+            <div class="chain-labels">
+                <span class="chain-label">Infra</span>
+                <span class="chain-label">Build</span>
+                <span class="chain-label">Deploy</span>
+                <span class="chain-label">RCE</span>
+                <span class="chain-label">Escape</span>
+                <span class="chain-label">Takeover</span>
+            </div>
+        </div>
+
+        <!-- Infrastructure -->
+        <div class="section">
+            <div class="section-title">Infrastructure</div>
+
+            <div class="step-card" id="card-infra">
+                <div class="step-header">
+                    <span class="step-number infra">INFRA</span>
+                    <span class="step-status"></span>
+                </div>
+                <div class="step-name">EKS + ECR + VPC</div>
+                <div class="step-desc">Terraform: cluster K8s 1.35, ECR registry, VPC, IAM</div>
+                <div class="step-actions">
+                    <button class="btn btn-ghost" onclick="infraPlan()">Plan</button>
+                    <button class="btn btn-primary" onclick="infraApply()">Apply</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-cluster">
+                <div class="step-header">
+                    <span class="step-number cluster">CLUSTER</span>
+                    <span class="step-status" id="cluster-conn-status"></span>
+                </div>
+                <div class="step-name" id="cluster-conn-name">Cluster Connection</div>
+                <div class="step-desc" id="cluster-conn-desc">Generate kubeconfig to connect to EKS</div>
+                <!-- Error banner -->
+                <div class="cluster-error" id="cluster-error-panel" style="display:none;">
+                    <span class="cluster-error-text" id="cluster-error-text"></span>
+                </div>
+                <!-- Info panel (shown when connected) -->
+                <div class="cluster-info" id="cluster-info-panel" style="display:none;">
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Cluster</span>
+                        <span class="cluster-info-value" id="cluster-info-name">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Region</span>
+                        <span class="cluster-info-value" id="cluster-info-region">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">K8s Version</span>
+                        <span class="cluster-info-value" id="cluster-info-version">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Nodes</span>
+                        <pre class="cluster-info-nodes" id="cluster-info-nodes">-</pre>
+                    </div>
+                </div>
+                <!-- Debug log (collapsible) -->
+                <div class="cluster-debug" id="cluster-debug-panel" style="display:none;">
+                    <button class="cluster-debug-toggle" onclick="toggleClusterDebug()">
+                        <span id="cluster-debug-arrow">&#9654;</span> Debug Log
+                    </button>
+                    <pre class="cluster-debug-log" id="cluster-debug-log" style="display:none;"></pre>
+                </div>
+                <div class="step-actions">
+                    <button class="btn btn-success" onclick="connectCluster()">Connect</button>
+                    <button class="btn btn-ghost" onclick="refreshClusterStatus()">Refresh</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-build">
+                <div class="step-header">
+                    <span class="step-number build">BUILD</span>
+                    <span class="step-status"></span>
+                </div>
+                <div class="step-name">Build & Push Image</div>
+                <div class="step-desc">Docker build + push vuln app to ECR</div>
+                <div class="step-actions">
+                    <button class="btn btn-primary" onclick="buildPush()">Build & Push</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-deploy">
+                <div class="step-header">
+                    <span class="step-number deploy">DEPLOY</span>
+                    <span class="step-status"></span>
+                </div>
+                <div class="step-name">Deploy Vulnerable App</div>
+                <div class="step-desc">Privileged pod, hostPID, hostPath, cluster-admin SA</div>
+                <div class="step-actions">
+                    <button class="btn btn-primary" onclick="deployApp()">Deploy</button>
+                    <button class="btn btn-ghost" onclick="k8sStatus()">Status</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Attack -->
+        <div class="section">
+            <div class="section-title">Attack Chain</div>
+
+            <div class="step-card" id="card-rce">
+                <div class="step-header">
+                    <span class="step-number attack">STEP 1</span>
+                    <span class="step-status"></span>
+                </div>
+                <div class="step-name">Spring4Shell RCE</div>
+                <div class="step-desc">CVE-2022-22965 - deploy webshell on target pod</div>
+                <div class="step-actions">
+                    <button class="btn btn-danger" onclick="attackStep1()">Exploit</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-escape">
+                <div class="step-header">
+                    <span class="step-number attack">STEP 2</span>
+                    <span class="step-status"></span>
+                </div>
+                <div class="step-name">Container Escape</div>
+                <div class="step-desc">nsenter, host fs, IMDS - break out of the container</div>
+                <div class="step-actions">
+                    <button class="btn btn-danger" onclick="attackStep2()">Escape</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-takeover">
+                <div class="step-header">
+                    <span class="step-number attack">STEP 3</span>
+                    <span class="step-status"></span>
+                </div>
+                <div class="step-name">Cluster Takeover</div>
+                <div class="step-desc">SA token + cluster-admin - full K8s & AWS access</div>
+                <div class="step-actions">
+                    <button class="btn btn-danger" onclick="attackStep3()">Takeover</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cortex XSOAR Response -->
+        <div class="section">
+            <div class="section-title">Cortex XSOAR - Response</div>
+
+            <div class="step-card" id="card-playbook-auto">
+                <div class="step-header">
+                    <span class="step-number cortex">PLAYBOOK</span>
+                    <span class="step-status" id="playbook-status"></span>
+                </div>
+                <div class="step-name">Auto-Containment</div>
+                <div class="step-desc">Run full playbook: isolate, revoke, scale, cordon, kill</div>
+                <div class="step-actions">
+                    <button class="btn btn-cortex" onclick="playbookRunAll()">Run Playbook</button>
+                </div>
+            </div>
+
+            <div class="playbook-steps-list">
+                <div class="playbook-step" id="pb-collect_evidence">
+                    <span class="pb-indicator"></span>
+                    <span class="pb-name">Collect Evidence</span>
+                    <button class="pb-run" onclick="playbookRunStep('collect_evidence')">Run</button>
+                </div>
+                <div class="playbook-step" id="pb-network_isolate">
+                    <span class="pb-indicator"></span>
+                    <span class="pb-name">Network Isolation</span>
+                    <button class="pb-run" onclick="playbookRunStep('network_isolate')">Run</button>
+                </div>
+                <div class="playbook-step" id="pb-revoke_rbac">
+                    <span class="pb-indicator"></span>
+                    <span class="pb-name">Revoke RBAC</span>
+                    <button class="pb-run" onclick="playbookRunStep('revoke_rbac')">Run</button>
+                </div>
+                <div class="playbook-step" id="pb-scale_down">
+                    <span class="pb-indicator"></span>
+                    <span class="pb-name">Scale Down</span>
+                    <button class="pb-run" onclick="playbookRunStep('scale_down')">Run</button>
+                </div>
+                <div class="playbook-step" id="pb-cordon_node">
+                    <span class="pb-indicator"></span>
+                    <span class="pb-name">Cordon Node</span>
+                    <button class="pb-run" onclick="playbookRunStep('cordon_node')">Run</button>
+                </div>
+                <div class="playbook-step" id="pb-delete_pod">
+                    <span class="pb-indicator"></span>
+                    <span class="pb-name">Kill Pods</span>
+                    <button class="pb-run" onclick="playbookRunStep('delete_pod')">Run</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cleanup -->
+        <div class="section">
+            <div class="section-title">Cleanup</div>
+
+            <div class="step-card">
+                <div class="step-header">
+                    <span class="step-number destroy">DESTROY</span>
+                </div>
+                <div class="step-name">Destroy Infrastructure</div>
+                <div class="step-desc">Remove all AWS resources</div>
+                <div class="step-actions">
+                    <button class="btn btn-orange" onclick="infraDestroy()">Destroy All</button>
+                </div>
+            </div>
+        </div>
+
+    </aside>
+
+    <!-- ─── Content ────────────────────────────── -->
+    <main class="content">
+        <div class="content-header">
+            <div class="content-header-left">
+                <h2 id="current-task-name">Ready</h2>
+                <span class="task-info" id="current-task-status">idle</span>
+            </div>
+            <div class="tab-bar">
+                <button class="tab active" data-tab="terminal" onclick="switchTab('terminal')">Terminal</button>
+                <button class="tab" data-tab="kubectl" onclick="switchTab('kubectl')">kubectl</button>
+                <button class="tab" data-tab="playbook" onclick="switchTab('playbook')">Playbook</button>
+            </div>
+        </div>
+
+        <!-- Terminal Tab -->
+        <div class="terminal-container tab-content active" id="tab-terminal">
+            <div class="terminal" id="terminal-output"></div>
+            <div class="terminal-input-bar">
+                <span class="prompt-sign">$</span>
+                <input type="text" id="shell-input" placeholder="Execute command on compromised pod (e.g. id, cat /etc/passwd, ls /host)..." />
+                <button onclick="shellExec()">EXEC</button>
+            </div>
+        </div>
+
+        <!-- kubectl Tab -->
+        <div class="terminal-container tab-content" id="tab-kubectl">
+            <div class="kubectl-shortcuts">
+                <span class="shortcuts-label">Quick:</span>
+                <button class="btn-shortcut" onclick="kubectlRun('get nodes -o wide')">nodes</button>
+                <button class="btn-shortcut" onclick="kubectlRun('get pods -A -o wide')">pods (all)</button>
+                <button class="btn-shortcut" onclick="kubectlRun('get pods -n vuln-app -o wide')">pods (vuln)</button>
+                <button class="btn-shortcut" onclick="kubectlRun('get svc -A')">services</button>
+                <button class="btn-shortcut" onclick="kubectlRun('get namespaces')">namespaces</button>
+                <button class="btn-shortcut" onclick="kubectlRun('get secrets -A')">secrets</button>
+                <button class="btn-shortcut" onclick="kubectlRun('get events -n vuln-app --sort-by=.lastTimestamp')">events</button>
+                <button class="btn-shortcut" onclick="kubectlRun('top nodes')">top nodes</button>
+                <button class="btn-shortcut" onclick="kubectlRun('top pods -A')">top pods</button>
+                <button class="btn-shortcut" onclick="kubectlRun('get clusterrolebindings -o wide')">RBAC</button>
+                <button class="btn-shortcut" onclick="kubectlRun('describe pod -n vuln-app -l app=vuln-app')">describe pod</button>
+                <button class="btn-shortcut" onclick="kubectlRun('logs -n vuln-app -l app=vuln-app --tail=100')">logs</button>
+            </div>
+            <div class="terminal" id="kubectl-output"></div>
+            <div class="terminal-input-bar kubectl-bar">
+                <span class="prompt-sign kubectl-prompt">kubectl</span>
+                <input type="text" id="kubectl-input" placeholder="get pods -n vuln-app, describe node, logs deployment/vuln-app -n vuln-app..." />
+                <button onclick="kubectlExec()">RUN</button>
+            </div>
+        </div>
+
+        <!-- Playbook Tab -->
+        <div class="terminal-container tab-content" id="tab-playbook">
+            <div class="playbook-header">
+                <div class="playbook-title-bar">
+                    <span class="playbook-icon">CORTEX XSOAR</span>
+                    <span class="playbook-title">K8s Container Escape - Spring4Shell Containment</span>
+                </div>
+                <div class="playbook-flow">
+                    <div class="pf-node pf-triage" id="pf-collect_evidence">
+                        <div class="pf-label">Evidence</div>
+                    </div>
+                    <div class="pf-arrow"></div>
+                    <div class="pf-node pf-contain" id="pf-network_isolate">
+                        <div class="pf-label">Network</div>
+                    </div>
+                    <div class="pf-arrow"></div>
+                    <div class="pf-node pf-contain" id="pf-revoke_rbac">
+                        <div class="pf-label">RBAC</div>
+                    </div>
+                    <div class="pf-arrow"></div>
+                    <div class="pf-node pf-contain" id="pf-scale_down">
+                        <div class="pf-label">Scale</div>
+                    </div>
+                    <div class="pf-arrow"></div>
+                    <div class="pf-node pf-contain" id="pf-cordon_node">
+                        <div class="pf-label">Cordon</div>
+                    </div>
+                    <div class="pf-arrow"></div>
+                    <div class="pf-node pf-eradicate" id="pf-delete_pod">
+                        <div class="pf-label">Kill</div>
+                    </div>
+                </div>
+            </div>
+            <div class="terminal" id="playbook-output"></div>
+        </div>
+    </main>
+
+</div>
+
+<!-- ─── AWS Settings Modal ─────────────────────── -->
+<div class="modal-overlay" id="aws-modal">
+    <div class="modal modal-wide">
+        <h3>AWS Credentials</h3>
+        <p>Configure your AWS credentials to provision infrastructure. These are stored in-memory only (not persisted).</p>
+        <div class="form-group">
+            <label for="aws-region">AWS Region</label>
+            <input type="text" id="aws-region" placeholder="eu-west-3" value="eu-west-3" />
+        </div>
+        <div class="form-group">
+            <label for="aws-access-key">AWS Access Key ID</label>
+            <input type="text" id="aws-access-key" placeholder="AKIA..." autocomplete="off" />
+        </div>
+        <div class="form-group">
+            <label for="aws-secret-key">AWS Secret Access Key</label>
+            <input type="password" id="aws-secret-key" placeholder="Secret key..." autocomplete="off" />
+        </div>
+        <div class="form-group">
+            <label for="aws-session-token">AWS Session Token <span class="optional">(STS - optional)</span></label>
+            <textarea id="aws-session-token" rows="3" placeholder="Session token (if using temporary credentials)..."></textarea>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="closeAwsSettings()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveAwsCredentials()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- ─── Destroy Modal ──────────────────────────── -->
+<div class="modal-overlay" id="destroy-modal">
+    <div class="modal">
+        <h3>&#x26A0; Destroy Infrastructure</h3>
+        <p>This will permanently destroy the EKS cluster, ECR repository, and all associated AWS resources. This action cannot be undone.</p>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="cancelDestroy()">Cancel</button>
+            <button class="btn btn-danger" onclick="confirmDestroy()">Destroy Everything</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

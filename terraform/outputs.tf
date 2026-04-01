@@ -25,3 +25,11 @@ output "kubeconfig_command" {
 output "account_id" {
   value = data.aws_caller_identity.current.account_id
 }
+
+output "containment_lambda_arn" {
+  value = aws_lambda_function.containment.arn
+}
+
+output "containment_lambda_name" {
+  value = aws_lambda_function.containment.function_name
+}
