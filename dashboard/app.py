@@ -1476,6 +1476,80 @@ def deploy_all_to_cortex():
     })
 
 
+# ─── Reset Containment (Cleanup for Demo Replay) ─────────────────────────────
+
+
+@app.route("/api/containment/reset", methods=["POST"])
+def reset_containment():
+    """Undo all containment actions so the demo can be replayed."""
+    cmd = r"""
+set -e
+echo "=================================================="
+echo "  RESET CONTAINMENT - Preparing for demo replay"
+echo "=================================================="
+echo ""
+
+echo "==> [1/5] Removing NetworkPolicy containment-deny-all..."
+kubectl delete networkpolicy containment-deny-all -n vuln-app --ignore-not-found=true
+echo "    Done."
+echo ""
+
+echo "==> [2/5] Recreating ClusterRoleBinding vuln-app-cluster-admin..."
+cat <<'EOF' | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vuln-app-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: vuln-app-sa
+    namespace: vuln-app
+EOF
+echo "    Done."
+echo ""
+
+echo "==> [3/5] Uncordoning all nodes..."
+for NODE in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+  kubectl uncordon "$NODE" 2>/dev/null || true
+done
+echo "    Done."
+echo ""
+
+echo "==> [4/5] Scaling deployment vuln-app back to 1 replica..."
+kubectl scale deployment vuln-app -n vuln-app --replicas=1 2>/dev/null || echo "    Deployment not found, skipping."
+echo "    Done."
+echo ""
+
+echo "==> [5/5] Waiting for pod to be ready..."
+kubectl rollout status deployment/vuln-app -n vuln-app --timeout=120s 2>/dev/null || echo "    Timeout or deployment not found."
+echo ""
+
+echo "==> Verifying state..."
+echo ""
+echo "--- Pods ---"
+kubectl get pods -n vuln-app -o wide 2>/dev/null || echo "No pods"
+echo ""
+echo "--- NetworkPolicies ---"
+kubectl get networkpolicy -n vuln-app 2>/dev/null || echo "None"
+echo ""
+echo "--- ClusterRoleBinding ---"
+kubectl get clusterrolebinding vuln-app-cluster-admin -o wide 2>/dev/null || echo "Not found"
+echo ""
+echo "--- Nodes ---"
+kubectl get nodes -o wide 2>/dev/null
+echo ""
+echo "=================================================="
+echo "  RESET COMPLETE - Demo ready to replay"
+echo "=================================================="
+"""
+    task_id = create_task("Reset Containment", cmd)
+    return jsonify({"task_id": task_id})
+
+
 # ─── Task Status ─────────────────────────────────────────────────────────────
 
 

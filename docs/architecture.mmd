@@ -1,0 +1,49 @@
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1e293b', 'primaryTextColor': '#e2e8f0', 'primaryBorderColor': '#334155', 'lineColor': '#64748b', 'secondaryColor': '#0f172a', 'tertiaryColor': '#111827', 'edgeLabelBackground': '#0f172a', 'clusterBkg': '#0f172a', 'clusterBorder': '#334155', 'fontSize': '14px'}}}%%
+
+graph TB
+    subgraph OPERATOR["OPERATOR WORKSTATION"]
+        direction TB
+        DASH["Application Dashboard<br/><i>Settings | Infrastructure | Attack Chain<br/>Terminal | kubectl | Playbook | Security Radar</i>"]
+        CORTEX["Cortex<br/><i>ExtractK8sContainerEscapeIOCs<br/>InvokeK8sContainmentLambda<br/>K8s Container Escape Containment Playbook</i>"]
+    end
+
+    subgraph AWS["AWS CLOUD"]
+        direction TB
+        LAMBDA["AWS Lambda<br/><b>k8s-escape-demo-containment</b><br/><i>collect_evidence | network_isolate | revoke_rbac<br/>scale_down | cordon_node | delete_pod | full_containment</i>"]
+
+        subgraph EKS["Amazon EKS - eks-escape-demo (v1.35)"]
+            direction TB
+            subgraph NS["Namespace: vuln-app"]
+                DEP["Deployment vuln-app<br/><i>privileged | hostPID | hostNetwork | hostPath:/</i>"]
+                SA["ServiceAccount vuln-app-sa<br/><i>ClusterRoleBinding: cluster-admin</i>"]
+                SVC["Service LoadBalancer<br/><i>:80 → :8080</i>"]
+                APP["Spring4Shell App<br/><i>CVE-2022-22965</i>"]
+            end
+            NODES["Node Group<br/><i>2x t3.medium | AL2023 | GP3 | IMDS</i>"]
+        end
+
+        ECR["Amazon ECR<br/><i>vuln-app:latest</i>"]
+        S3["S3 Terraform State<br/><i>eks/ | lambda/</i>"]
+        VPC["VPC 10.0.0.0/16<br/><i>2 public subnets | IGW</i>"]
+    end
+
+    DASH -->|"deploy scripts<br/>+ playbook"| CORTEX
+    DASH -->|"terraform<br/>apply"| AWS
+    CORTEX -->|"XDR Issue<br/>triggers playbook"| LAMBDA
+    LAMBDA -->|"STS Token<br/>x-k8s-aws-id"| EKS
+
+    style DASH fill:#1a2332,stroke:#3b82f6,stroke-width:2px,color:#e2e8f0
+    style CORTEX fill:#1a1a2e,stroke:#818cf8,stroke-width:2px,color:#e2e8f0
+    style LAMBDA fill:#1a2332,stroke:#f97316,stroke-width:2px,color:#e2e8f0
+    style EKS fill:#0f172a,stroke:#22c55e,stroke-width:2px,color:#e2e8f0
+    style NS fill:#111827,stroke:#ef4444,stroke-width:1px,color:#e2e8f0
+    style DEP fill:#1e1e2e,stroke:#ef4444,stroke-width:1px,color:#e2e8f0
+    style SA fill:#1e1e2e,stroke:#ef4444,stroke-width:1px,color:#e2e8f0
+    style SVC fill:#1e1e2e,stroke:#06b6d4,stroke-width:1px,color:#e2e8f0
+    style APP fill:#1e1e2e,stroke:#ef4444,stroke-width:1px,color:#e2e8f0
+    style NODES fill:#1e1e2e,stroke:#64748b,stroke-width:1px,color:#e2e8f0
+    style ECR fill:#1e1e2e,stroke:#a855f7,stroke-width:1px,color:#e2e8f0
+    style S3 fill:#1e1e2e,stroke:#3b82f6,stroke-width:1px,color:#e2e8f0
+    style VPC fill:#1e1e2e,stroke:#06b6d4,stroke-width:1px,color:#e2e8f0
+    style OPERATOR fill:#0a0e17,stroke:#3b82f6,stroke-width:2px,color:#94a3b8
+    style AWS fill:#0a0e17,stroke:#f97316,stroke-width:2px,color:#94a3b8

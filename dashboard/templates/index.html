@@ -296,103 +296,125 @@
                 </div>
             </div>
 
-            <div class="cortex-playbook-info">
-                <div class="cortex-info-title">Cortex Objects</div>
-                <div class="cortex-info-step"><b>Script</b> ExtractK8sContainerEscapeIOCs - Enrichissement IOC (container_id, node, process, severity)</div>
-                <div class="cortex-info-step"><b>Playbook</b> K8s Container Escape Containment - Orchestration containment via Lambda</div>
+            <div class="cortex-console-link" id="cortex-console-link" style="display:none;">
+                <a href="#" id="cortex-console-url" target="_blank" rel="noopener noreferrer">
+                    <span class="cortex-console-icon">CORTEX</span>
+                    <span class="cortex-console-text" id="cortex-console-text">Open Console</span>
+                    <span class="cortex-console-arrow">&#x2197;</span>
+                </a>
             </div>
 
-            <div class="cortex-playbook-info">
-                <div class="cortex-info-title">XDR Issue Fields (Detection & Triage)</div>
-                <div class="cortex-info-step"><b>details</b> - "Dropped webshell using the SpringShell exploit"</div>
-                <div class="cortex-info-step"><b>container_id</b> - Compromised container ID</div>
-                <div class="cortex-info-step"><b>namespace</b> - K8s namespace (vuln-app)</div>
-                <div class="cortex-info-step"><b>xdm.source.host.fqdn</b> - EKS node FQDN</div>
-                <div class="cortex-info-step"><b>xdm.source.host.ipv4_addresses</b> - Node IPs</div>
-                <div class="cortex-info-step"><b>xdm.source.user.username</b> - root (privilege escalation)</div>
-                <div class="cortex-info-step"><b>causality_actor_process</b> - runc (container escape)</div>
-                <div class="cortex-info-step"><b>image_id</b> - Container image SHA256</div>
-            </div>
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">Cortex Objects (3)</summary>
+                <div class="cortex-details-body">
+                    <div class="cortex-info-step"><b>Script 1</b> ExtractK8sContainerEscapeIOCs - IOC extraction &amp; severity analysis</div>
+                    <div class="cortex-info-step"><b>Script 2</b> InvokeK8sContainmentLambda - Lambda invocation via SigV4</div>
+                    <div class="cortex-info-step"><b>Playbook</b> K8s Container Escape - Spring4Shell Containment</div>
+                </div>
+            </details>
 
-            <div class="cortex-playbook-info" style="margin-top: 0.4rem;">
-                <div class="cortex-info-title">Playbook Flow (XDR Issue -> Lambda -> EKS)</div>
-                <div class="cortex-info-step">1. Triage - Analyze XDR issue (details, container_id, namespace)</div>
-                <div class="cortex-info-step">2. Collect Evidence - Pod forensics on identified node</div>
-                <div class="cortex-info-step">3. Severity Check - Auto-contain if webshell + root confirmed</div>
-                <div class="cortex-info-step">4. Network Isolation - Deny-all NetworkPolicy</div>
-                <div class="cortex-info-step">5. Revoke RBAC - Delete cluster-admin binding</div>
-                <div class="cortex-info-step">6. Scale Down - Replicas to 0</div>
-                <div class="cortex-info-step">7. Cordon Node - Target node from XDR issue FQDN</div>
-                <div class="cortex-info-step">8. Kill Pods - Force delete all pods</div>
-                <div class="cortex-info-step">9. Verify - Re-collect evidence</div>
-            </div>
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">XDR Issue Fields (9)</summary>
+                <div class="cortex-details-body">
+                    <div class="cortex-info-step"><b>details</b> - "Dropped webshell using the SpringShell exploit"</div>
+                    <div class="cortex-info-step"><b>container_id</b> - Compromised container ID</div>
+                    <div class="cortex-info-step"><b>namespace</b> - K8s namespace (vuln-app)</div>
+                    <div class="cortex-info-step"><b>cluster_name</b> - EKS cluster name</div>
+                    <div class="cortex-info-step"><b>xdm.source.host.fqdn</b> - EKS node FQDN</div>
+                    <div class="cortex-info-step"><b>xdm.source.host.ipv4_addresses</b> - Node IPs</div>
+                    <div class="cortex-info-step"><b>xdm.source.user.username</b> - root</div>
+                    <div class="cortex-info-step"><b>causality_actor_process_*</b> - runc process</div>
+                    <div class="cortex-info-step"><b>image_id</b> - Container image SHA256</div>
+                </div>
+            </details>
 
-            <div class="cortex-playbook-info" style="margin-top: 0.4rem;">
-                <div class="cortex-info-title">Architecture</div>
-                <pre class="cortex-flow-ascii">Cortex XDR Issue
-  |-> details: "Dropped webshell using the SpringShell exploit"
-  |-> container_id + namespace -> Target scope
-  |-> xdm.source.host.fqdn -> NodeHostname (cordon)
-  |-> Playbook triggered
-      |-> AWS Lambda (aws-lambda-invoke)
-          |-> EKS API (STS auth)
-              |-> NetworkPolicy / RBAC / Scale / Cordon / Delete</pre>
-            </div>
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">Issue Output Fields (2)</summary>
+                <div class="cortex-details-body">
+                    <div class="cortex-info-step"><b>k8scontainerescapeiocs</b> - IOC report markdown</div>
+                    <div class="cortex-info-step"><b>k8scontainmentenrichment</b> - Lambda evidence report</div>
+                </div>
+            </details>
+
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">Playbook Flow (11 tasks)</summary>
+                <div class="cortex-details-body">
+                    <div class="cortex-info-step">1. Triage - Extract IOCs + severity</div>
+                    <div class="cortex-info-step">1a. AWS Credentials - Manual input</div>
+                    <div class="cortex-info-step">2. Evidence - Lambda collect_evidence</div>
+                    <div class="cortex-info-step">3. Severity Gate - Auto / operator approval</div>
+                    <div class="cortex-info-step">4. Network Isolation - deny-all NetworkPolicy</div>
+                    <div class="cortex-info-step">5. Revoke RBAC - delete cluster-admin</div>
+                    <div class="cortex-info-step">6. Scale Down - replicas to 0</div>
+                    <div class="cortex-info-step">7. Cordon Node - from XDR FQDN</div>
+                    <div class="cortex-info-step">8. Kill Pods - force delete</div>
+                    <div class="cortex-info-step">9. Verify - re-collect evidence</div>
+                    <div class="cortex-info-step">10. Complete</div>
+                </div>
+            </details>
+
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">Lambda Actions (7)</summary>
+                <div class="cortex-details-body">
+                    <div class="cortex-info-step"><b>collect_evidence</b> - Forensics, logs, RBAC, events</div>
+                    <div class="cortex-info-step"><b>network_isolate</b> - Deny-all NetworkPolicy</div>
+                    <div class="cortex-info-step"><b>revoke_rbac</b> - Delete ClusterRoleBinding</div>
+                    <div class="cortex-info-step"><b>scale_down</b> - Replicas to 0</div>
+                    <div class="cortex-info-step"><b>cordon_node</b> - Unschedulable</div>
+                    <div class="cortex-info-step"><b>delete_pod</b> - Force delete pods</div>
+                    <div class="cortex-info-step"><b>full_containment</b> - All actions</div>
+                </div>
+            </details>
+
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">Architecture</summary>
+                <div class="cortex-details-body">
+                    <pre class="cortex-flow-ascii">XDR Issue -> ExtractIOCs -> AWS Creds
+  -> Lambda (collect_evidence)
+  -> Severity Gate (auto/manual)
+  -> Lambda (contain)
+      |-> STS -> EKS API
+          |-> NetPol / RBAC / Scale
+          |-> Cordon / Delete
+  -> Verify -> Close</pre>
+                </div>
+            </details>
         </div>
 
-        <!-- Local Containment (fallback) -->
-        <div class="section">
+        <!-- Local Containment (hidden, kept for JS references) -->
+        <div class="section" style="display:none;">
             <div class="section-title">Local Containment (kubectl)</div>
-
             <div class="step-card" id="card-playbook-auto">
                 <div class="step-header">
                     <span class="step-number cortex">LOCAL</span>
                     <span class="step-status" id="playbook-status"></span>
                 </div>
-                <div class="step-name">Run Locally</div>
-                <div class="step-desc">Execute containment via kubectl (without Cortex)</div>
-                <div class="step-actions">
-                    <button class="btn btn-ghost" onclick="playbookRunAll()">Run All Steps</button>
-                </div>
             </div>
-
             <div class="playbook-steps-list">
-                <div class="playbook-step" id="pb-collect_evidence">
-                    <span class="pb-indicator"></span>
-                    <span class="pb-name">Collect Evidence</span>
-                    <button class="pb-run" onclick="playbookRunStep('collect_evidence')">Run</button>
-                </div>
-                <div class="playbook-step" id="pb-network_isolate">
-                    <span class="pb-indicator"></span>
-                    <span class="pb-name">Network Isolation</span>
-                    <button class="pb-run" onclick="playbookRunStep('network_isolate')">Run</button>
-                </div>
-                <div class="playbook-step" id="pb-revoke_rbac">
-                    <span class="pb-indicator"></span>
-                    <span class="pb-name">Revoke RBAC</span>
-                    <button class="pb-run" onclick="playbookRunStep('revoke_rbac')">Run</button>
-                </div>
-                <div class="playbook-step" id="pb-scale_down">
-                    <span class="pb-indicator"></span>
-                    <span class="pb-name">Scale Down</span>
-                    <button class="pb-run" onclick="playbookRunStep('scale_down')">Run</button>
-                </div>
-                <div class="playbook-step" id="pb-cordon_node">
-                    <span class="pb-indicator"></span>
-                    <span class="pb-name">Cordon Node</span>
-                    <button class="pb-run" onclick="playbookRunStep('cordon_node')">Run</button>
-                </div>
-                <div class="playbook-step" id="pb-delete_pod">
-                    <span class="pb-indicator"></span>
-                    <span class="pb-name">Kill Pods</span>
-                    <button class="pb-run" onclick="playbookRunStep('delete_pod')">Run</button>
-                </div>
+                <div class="playbook-step" id="pb-collect_evidence"><span class="pb-indicator"></span></div>
+                <div class="playbook-step" id="pb-network_isolate"><span class="pb-indicator"></span></div>
+                <div class="playbook-step" id="pb-revoke_rbac"><span class="pb-indicator"></span></div>
+                <div class="playbook-step" id="pb-scale_down"><span class="pb-indicator"></span></div>
+                <div class="playbook-step" id="pb-cordon_node"><span class="pb-indicator"></span></div>
+                <div class="playbook-step" id="pb-delete_pod"><span class="pb-indicator"></span></div>
             </div>
         </div>
 
         <!-- Cleanup -->
         <div class="section">
             <div class="section-title">Cleanup</div>
+
+            <div class="step-card" id="card-reset-containment">
+                <div class="step-header">
+                    <span class="step-number deploy">RESET</span>
+                    <span class="step-status" id="reset-status"></span>
+                </div>
+                <div class="step-name">Reset Containment</div>
+                <div class="step-desc">Undo remediation (NetworkPolicy, RBAC, scale, uncordon) to replay the demo</div>
+                <div class="step-actions">
+                    <button class="btn btn-success" onclick="resetContainment()">Reset</button>
+                </div>
+            </div>
 
             <div class="step-card">
                 <div class="step-header">
@@ -438,10 +460,10 @@
                 <span class="task-info" id="current-task-status">idle</span>
             </div>
             <div class="tab-bar">
-                <button class="tab active" data-tab="terminal" onclick="switchTab('terminal')">Terminal</button>
-                <button class="tab" data-tab="kubectl" onclick="switchTab('kubectl')">kubectl</button>
-                <button class="tab" data-tab="playbook" onclick="switchTab('playbook')">Playbook</button>
-                <button class="tab" data-tab="radar" onclick="switchTab('radar')">Radar</button>
+                <button class="tab active" data-tab="terminal" onclick="openTab('terminal')">Terminal</button>
+                <button class="tab" data-tab="kubectl" onclick="openTab('kubectl')">kubectl</button>
+                <button class="tab" data-tab="playbook" onclick="openTab('playbook')">Playbook</button>
+                <button class="tab tab-radar-btn" data-tab="radar" onclick="openTab('radar')">Security Radar</button>
             </div>
         </div>
 
@@ -468,6 +490,7 @@
                 <button class="btn-shortcut" onclick="kubectlRun('get events -n vuln-app --sort-by=.lastTimestamp')">events</button>
                 <button class="btn-shortcut" onclick="kubectlRun('top nodes')">top nodes</button>
                 <button class="btn-shortcut" onclick="kubectlRun('top pods -A')">top pods</button>
+                <button class="btn-shortcut" onclick="kubectlRun('get networkpolicy -A')">netpol</button>
                 <button class="btn-shortcut" onclick="kubectlRun('get clusterrolebindings -o wide')">RBAC</button>
                 <button class="btn-shortcut" onclick="kubectlRun('describe pod -n vuln-app -l app=vuln-app')">describe pod</button>
                 <button class="btn-shortcut" onclick="kubectlRun('logs -n vuln-app -l app=vuln-app --tail=100')">logs</button>
@@ -649,6 +672,15 @@
             <button class="btn btn-danger" onclick="confirmDestroy()">Destroy Everything</button>
         </div>
     </div>
+</div>
+
+<!-- ─── Fullscreen Tab Overlay ─────────────────── -->
+<div class="fullscreen-overlay" id="fullscreen-overlay">
+    <div class="fullscreen-header">
+        <div class="fullscreen-title" id="fullscreen-title">Terminal</div>
+        <button class="fullscreen-close" onclick="closeFullscreen()" title="Close fullscreen">&#x2715;</button>
+    </div>
+    <div class="fullscreen-body" id="fullscreen-body"></div>
 </div>
 
 <script src="/static/js/app.js"></script>

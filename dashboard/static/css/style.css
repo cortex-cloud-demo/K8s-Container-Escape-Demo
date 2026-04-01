@@ -303,12 +303,24 @@ body {
     color: white;
 }
 
+.tab.tab-radar-btn {
+    color: var(--accent-cyan);
+    font-weight: 700;
+}
+
+.tab.tab-radar-btn.active {
+    background: linear-gradient(135deg, #0891b2, #06b6d4);
+    color: white;
+}
+
 .tab-content {
     display: none;
 }
 
 .tab-content.active {
     display: flex;
+    flex: 1;
+    overflow: hidden;
 }
 
 /* ─── kubectl shortcuts ───────────────────────── */
@@ -1009,6 +1021,113 @@ body {
     white-space: pre;
 }
 
+/* ─── Cortex Collapsible Details ──────────────── */
+
+.cortex-details {
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 0.35rem;
+    overflow: hidden;
+}
+
+.cortex-details-summary {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.45rem 0.8rem;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: color 0.2s;
+}
+
+.cortex-details-summary::-webkit-details-marker { display: none; }
+
+.cortex-details-summary::before {
+    content: '\25B6';
+    font-size: 0.5rem;
+    color: var(--text-dim);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+}
+
+.cortex-details[open] > .cortex-details-summary::before {
+    transform: rotate(90deg);
+}
+
+.cortex-details-summary:hover {
+    color: #818cf8;
+}
+
+.cortex-details-body {
+    padding: 0 0.8rem 0.5rem 0.8rem;
+}
+
+.cortex-details-body .cortex-info-step {
+    padding-left: 0.3rem;
+    border-left: 2px solid rgba(99, 102, 241, 0.3);
+}
+
+.cortex-details-body .cortex-flow-ascii {
+    margin: 0;
+}
+
+/* ─── Cortex Console Link ─────────────────────── */
+
+.cortex-console-link {
+    margin-bottom: 0.5rem;
+}
+
+.cortex-console-link a {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 0.8rem;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(129, 140, 248, 0.08));
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    border-radius: 8px;
+    text-decoration: none;
+    transition: all 0.2s;
+}
+
+.cortex-console-link a:hover {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.22), rgba(129, 140, 248, 0.15));
+    border-color: #818cf8;
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.2);
+}
+
+.cortex-console-icon {
+    font-size: 0.55rem;
+    font-weight: 800;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: rgba(99, 102, 241, 0.25);
+    color: #818cf8;
+    letter-spacing: 0.08em;
+    flex-shrink: 0;
+}
+
+.cortex-console-text {
+    flex: 1;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #818cf8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cortex-console-arrow {
+    font-size: 0.85rem;
+    color: #818cf8;
+    flex-shrink: 0;
+}
+
 /* ─── Radar Tab ────────────────────────────────── */
 
 .radar-tab {
@@ -1077,8 +1196,10 @@ body {
 }
 
 #security-radar {
-    max-width: 500px;
-    max-height: 500px;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 600px;
+    max-height: 600px;
 }
 
 .radar-legend {
@@ -1290,6 +1411,98 @@ body {
     text-shadow: 0 0 20px rgba(6, 182, 212, 0.5);
     animation: pulse 1s infinite;
     z-index: 10;
+}
+
+/* ─── Fullscreen Overlay ─────────────────────── */
+
+.fullscreen-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    background: var(--bg-dark);
+    flex-direction: column;
+}
+
+.fullscreen-overlay.visible {
+    display: flex;
+}
+
+.fullscreen-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1.5rem;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.fullscreen-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.fullscreen-close {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.fullscreen-close:hover {
+    color: var(--accent-red);
+    border-color: var(--accent-red);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.fullscreen-body {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* When tab content is inside fullscreen, make it fill */
+.fullscreen-body > .tab-content {
+    display: flex !important;
+    flex: 1;
+    overflow: hidden;
+}
+
+.fullscreen-body > .terminal-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.fullscreen-body > .radar-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Larger terminal text in fullscreen */
+.fullscreen-body .terminal {
+    font-size: 0.95rem;
+    padding: 1.5rem 2rem;
+}
+
+/* Larger radar chart in fullscreen */
+.fullscreen-body #security-radar {
+    max-width: 800px;
+    max-height: 800px;
 }
 
 /* Lambda info */

@@ -192,13 +192,24 @@ async function apiCall(url, method = 'POST', body = null) {
 function switchTab(tabId) {
     // Update tab buttons
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelector(`.tab[data-tab="${tabId}"]`).classList.add('active');
+    const tabBtn = document.querySelector(`.tab[data-tab="${tabId}"]`);
+    if (tabBtn) tabBtn.classList.add('active');
 
     // Update tab content
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.getElementById(`tab-${tabId}`).classList.add('active');
 
     state.activeTab = tabId;
+}
+
+function openTab(tabId) {
+    // Close current fullscreen if different tab
+    if (isFullscreen && state.activeTab !== tabId) {
+        closeFullscreen();
+    }
+
+    switchTab(tabId);
+    openFullscreen(tabId);
 }
 
 // ─── kubectl ─────────────────────────────────────────────────────────────────
@@ -785,6 +796,7 @@ function openCortexSettings() {
             document.getElementById('cortex-key-id').value = data.api_key_id || '';
             document.getElementById('cortex-key').value = '';
             document.getElementById('cortex-modal').classList.add('visible');
+            updateCortexConsoleLink(data.base_url);
         });
 }
 
@@ -812,6 +824,7 @@ async function saveCortexCredentials() {
         if (res.ok) {
             closeCortexSettings();
             updateCortexStatus('configured');
+            updateCortexConsoleLink(payload.base_url);
             termWriteHeader('Cortex');
             termWrite('Cortex API credentials saved.\n');
             termWrite(`Base URL: ${payload.base_url}\n`);
@@ -966,6 +979,27 @@ async function cortexDeployAll() {
     }
 }
 
+function updateCortexConsoleLink(apiBaseUrl) {
+    const panel = document.getElementById('cortex-console-link');
+    const link = document.getElementById('cortex-console-url');
+    const text = document.getElementById('cortex-console-text');
+    if (!panel || !link || !text) return;
+
+    if (!apiBaseUrl) { panel.style.display = 'none'; return; }
+
+    // Derive console URL: remove "api-" prefix from hostname
+    try {
+        const url = new URL(apiBaseUrl);
+        url.hostname = url.hostname.replace(/^api-/, '');
+        const consoleUrl = url.toString().replace(/\/+$/, '');
+        link.href = consoleUrl;
+        text.textContent = url.hostname;
+        panel.style.display = 'block';
+    } catch (e) {
+        panel.style.display = 'none';
+    }
+}
+
 function updateCortexStatus(status) {
     const el = document.getElementById('cortex-status');
     if (status === 'connected') {
@@ -1097,6 +1131,104 @@ function shellExec() {
     apiCall('/api/attack/shell', 'POST', { command: cmd });
     input.value = '';
 }
+
+// ─── Reset Containment ──────────────────────────────────────────────────────
+
+function resetContainment() {
+    switchTab('terminal');
+    termWriteHeader('RESET CONTAINMENT - Undo remediation for demo replay');
+    termWrite('Removing NetworkPolicy, recreating RBAC, uncordoning nodes, scaling up...\n\n');
+
+    const badge = document.getElementById('reset-status');
+    if (badge) { badge.textContent = 'running'; badge.style.color = '#f97316'; }
+
+    apiCall('/api/containment/reset');
+
+    // Poll to update status badge
+    const checkDone = setInterval(async () => {
+        const currentTask = state.currentTaskId;
+        if (!currentTask) return;
+        try {
+            const res = await fetch(`/api/tasks/${currentTask}`);
+            const task = await res.json();
+            if (task.status === 'success') {
+                if (badge) { badge.textContent = 'done'; badge.style.color = '#22c55e'; }
+                // Reset playbook step indicators
+                PLAYBOOK_STEPS.forEach(s => updatePlaybookStepStatus(s, null));
+                document.querySelectorAll('.pf-arrow').forEach(a => a.classList.remove('done'));
+                const pbBadge = document.getElementById('playbook-status');
+                if (pbBadge) { pbBadge.textContent = ''; }
+                clearInterval(checkDone);
+            } else if (task.status === 'error') {
+                if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
+                clearInterval(checkDone);
+            }
+        } catch (e) { /* ignore */ }
+    }, 2000);
+}
+
+// ─── Fullscreen Tab ──────────────────────────────────────────────────────────
+
+let isFullscreen = false;
+let fullscreenOriginalParent = null;
+let fullscreenTabElement = null;
+
+const TAB_TITLES = {
+    terminal: 'Terminal',
+    kubectl: 'kubectl',
+    playbook: 'Playbook',
+    radar: 'Security Radar',
+};
+
+function openFullscreen(tabId) {
+    const tabEl = document.getElementById(`tab-${tabId}`);
+    if (!tabEl) return;
+
+    fullscreenOriginalParent = tabEl.parentElement;
+    fullscreenTabElement = tabEl;
+
+    const body = document.getElementById('fullscreen-body');
+    body.innerHTML = '';
+    body.appendChild(tabEl);
+
+    document.getElementById('fullscreen-title').textContent =
+        TAB_TITLES[tabId] || tabId;
+
+    document.getElementById('fullscreen-overlay').classList.add('visible');
+    isFullscreen = true;
+
+    // Init or resize radar
+    if (tabId === 'radar') {
+        if (!radarChart) {
+            setTimeout(() => initRadarChart(), 50);
+        } else {
+            setTimeout(() => radarChart.resize(), 50);
+        }
+    }
+}
+
+function closeFullscreen() {
+    if (!isFullscreen) return;
+
+    if (fullscreenTabElement && fullscreenOriginalParent) {
+        fullscreenOriginalParent.appendChild(fullscreenTabElement);
+    }
+    document.getElementById('fullscreen-overlay').classList.remove('visible');
+    isFullscreen = false;
+    fullscreenOriginalParent = null;
+    fullscreenTabElement = null;
+
+    if (state.activeTab === 'radar' && radarChart) {
+        setTimeout(() => radarChart.resize(), 50);
+    }
+}
+
+// Close fullscreen on Escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isFullscreen) {
+        closeFullscreen();
+    }
+});
 
 // ─── Radar Chart ─────────────────────────────────────────────────────────────
 
@@ -1369,7 +1501,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     refreshHost();
     refreshClusterStatus();
-    initRadarChart();
+
+    // Load Cortex console link if credentials exist
+    fetch('/api/cortex/credentials').then(r => r.json()).then(data => {
+        if (data.base_url) updateCortexConsoleLink(data.base_url);
+    }).catch(() => {});
 
     // Welcome message
     const el = document.getElementById('terminal-output');

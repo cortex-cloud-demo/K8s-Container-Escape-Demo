@@ -1,0 +1,46 @@
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1e293b', 'primaryTextColor': '#e2e8f0', 'primaryBorderColor': '#334155', 'lineColor': '#64748b', 'secondaryColor': '#0f172a', 'tertiaryColor': '#111827', 'fontSize': '13px'}}}%%
+
+graph TB
+    subgraph ATTACK["ATTACK CHAIN"]
+        direction TB
+        A1["Step 1: Spring4Shell RCE<br/><i>CVE-2022-22965</i>"]
+        A2["Webshell deployed<br/><i>AccessLogValve → JSP</i>"]
+        A3["Step 2: Container Escape<br/><i>nsenter + hostPID</i>"]
+        A4["Node access<br/><i>Host FS R/W + AWS IMDS</i>"]
+        A6["Step 3: Cluster Takeover<br/><i>SA token cluster-admin</i>"]
+        A7["Full compromise<br/><i>K8s secrets + AWS creds</i>"]
+
+        A1 --> A2 --> A3 --> A4
+        A3 --> A6 --> A7
+    end
+
+    subgraph RESPONSE["CORTEX RESPONSE"]
+        direction TB
+        R1["XDR Issue triggered<br/><i>Spring4Shell detection</i>"]
+        R2["1. Triage<br/><i>ExtractK8sContainerEscapeIOCs</i>"]
+        R3["2. AWS Credentials<br/><i>Operator manual input</i>"]
+        R4["3. Collect Evidence<br/><i>Lambda → EKS API</i>"]
+        R5["4. Severity Gate<br/><i>Critical = auto-contain</i>"]
+        R6["5-8. Containment<br/><i>NetPol | RBAC | Scale | Cordon</i>"]
+        R7["9. Kill Pods + Verify<br/><i>Force delete + re-collect evidence</i>"]
+
+        R1 --> R2 --> R3 --> R4 --> R5 --> R6 --> R7
+    end
+
+    A1 -.->|"XDR detects"| R1
+
+    style A1 fill:#2d1b1b,stroke:#ef4444,stroke-width:2px,color:#fca5a5
+    style A2 fill:#2d1b1b,stroke:#ef4444,stroke-width:1px,color:#fca5a5
+    style A3 fill:#2d1b1b,stroke:#ef4444,stroke-width:2px,color:#fca5a5
+    style A4 fill:#2d1b1b,stroke:#f97316,stroke-width:1px,color:#fca5a5
+    style A6 fill:#2d1b1b,stroke:#ef4444,stroke-width:2px,color:#fca5a5
+    style A7 fill:#2d1b1b,stroke:#ef4444,stroke-width:1px,color:#fca5a5
+    style R1 fill:#1a1a2e,stroke:#818cf8,stroke-width:2px,color:#c4b5fd
+    style R2 fill:#1a1a2e,stroke:#818cf8,stroke-width:1px,color:#c4b5fd
+    style R3 fill:#1a1a2e,stroke:#f97316,stroke-width:1px,color:#c4b5fd
+    style R4 fill:#1b2d1b,stroke:#22c55e,stroke-width:1px,color:#86efac
+    style R5 fill:#1a1a2e,stroke:#818cf8,stroke-width:1px,color:#c4b5fd
+    style R6 fill:#1b2d1b,stroke:#22c55e,stroke-width:2px,color:#86efac
+    style R7 fill:#1b2d1b,stroke:#22c55e,stroke-width:1px,color:#86efac
+    style ATTACK fill:#0a0e17,stroke:#ef4444,stroke-width:2px,color:#fca5a5
+    style RESPONSE fill:#0a0e17,stroke:#22c55e,stroke-width:2px,color:#86efac

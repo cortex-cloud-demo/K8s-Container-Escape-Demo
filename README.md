@@ -1,114 +1,20 @@
 # Kubernetes Container Escape Demo
 
-Security demonstration: exploitation of a vulnerable containerized application leading to container escape and full cluster takeover on AWS EKS, with automated incident response via Cortex XSIAM/XSOAR playbook and AWS Lambda containment.
+Security demonstration: exploitation of a vulnerable containerized application leading to container escape and full cluster takeover on AWS EKS, with automated incident response via Cortex playbook and AWS Lambda containment.
 
 ## Architecture Diagram
 
-```
-+-----------------------------------------------------------------------------------+
-|                              OPERATOR WORKSTATION                                  |
-|                                                                                    |
-|   +---------------------------+         +-----------------------------------+      |
-|   |    Flask Dashboard :5000  |         |       Cortex XSIAM / XSOAR       |      |
-|   |  +---------------------+ |         |  +-----------------------------+  |      |
-|   |  | Settings            | |         |  | ExtractK8sContainerEscape   |  |      |
-|   |  |  - AWS Credentials  | |  deploy |  |   IOCs (automation script)  |  |      |
-|   |  |  - Cortex API Keys  | | ------> |  +-----------------------------+  |      |
-|   |  +---------------------+ |  scripts|  | InvokeK8sContainmentLambda  |  |      |
-|   |  | Infrastructure      | |    +    |  |   (automation script)       |  |      |
-|   |  |  - S3 Backend       | | playbook|  +-----------------------------+  |      |
-|   |  |  - EKS/ECR/VPC      | |         |  | Playbook: K8s Container     |  |      |
-|   |  |  - Lambda Deploy    | |         |  |   Escape Containment        |  |      |
-|   |  +---------------------+ |         |  +-------------+---------------+  |      |
-|   |  | Attack Chain        | |         |                |                  |      |
-|   |  |  1. Spring4Shell RCE| |         |    XDR Issue   | Playbook         |      |
-|   |  |  2. Container Escape| |         |    triggers    | invokes          |      |
-|   |  |  3. Cluster Takeover| |         |    playbook    | Lambda           |      |
-|   |  +---------------------+ |         +----------------|-----------------+      |
-|   +---------------------------+                          |                         |
-+----------------------------------------------------------|-------------------------+
-                                                           |
-                              +----------------------------v----------------------------+
-                              |                      AWS CLOUD                          |
-                              |                                                         |
-                              |   +--------------------------------------------------+  |
-                              |   |              AWS Lambda Function                  |  |
-                              |   |         k8s-escape-demo-containment               |  |
-                              |   |                                                   |  |
-                              |   |  Actions:                                         |  |
-                              |   |   - collect_evidence  (pod forensics, logs, RBAC) |  |
-                              |   |   - network_isolate   (deny-all NetworkPolicy)    |  |
-                              |   |   - revoke_rbac       (delete ClusterRoleBinding) |  |
-                              |   |   - scale_down        (replicas -> 0)             |  |
-                              |   |   - cordon_node       (mark unschedulable)        |  |
-                              |   |   - delete_pod        (force delete pods)         |  |
-                              |   |   - full_containment  (all steps in sequence)     |  |
-                              |   +------------------+-------------------------------+  |
-                              |                      | STS Token                        |
-                              |                      | (x-k8s-aws-id)                   |
-                              |                      v                                  |
-                              |   +--------------------------------------------------+  |
-                              |   |                 Amazon EKS                        |  |
-                              |   |            eks-escape-demo (v1.35)                |  |
-                              |   |                                                   |  |
-                              |   |   +------- Namespace: vuln-app ----------------+  |  |
-                              |   |   |                                            |  |  |
-                              |   |   |  +------------------+   +--------------+   |  |  |
-                              |   |   |  | Deployment       |   | ServiceAcct  |   |  |  |
-                              |   |   |  | vuln-app         |   | vuln-app-sa  |   |  |  |
-                              |   |   |  |  privileged:true  |   |  cluster-    |   |  |  |
-                              |   |   |  |  hostPID:true     |   |  admin       |   |  |  |
-                              |   |   |  |  hostNetwork:true |   +--------------+   |  |  |
-                              |   |   |  |  hostPath: /      |                      |  |  |
-                              |   |   |  +------------------+   +--------------+   |  |  |
-                              |   |   |                         | LoadBalancer  |   |  |  |
-                              |   |   |  Spring4Shell App       | :80 -> :8080  |   |  |  |
-                              |   |   |  (CVE-2022-22965)       +--------------+   |  |  |
-                              |   |   +--------------------------------------------+  |  |
-                              |   |                                                   |  |
-                              |   |   +-- Node Group (2x t3.medium, AL2023) -------+  |  |
-                              |   |   |   EC2 instances with GP3 EBS volumes       |  |  |
-                              |   |   |   IMDS accessible (credential theft)       |  |  |
-                              |   |   +--------------------------------------------+  |  |
-                              |   +--------------------------------------------------+  |
-                              |                                                         |
-                              |   +------------------+  +----------------------------+  |
-                              |   |   Amazon ECR      |  |  S3 Terraform State       |  |
-                              |   |   vuln-app:latest |  |  k8s-escape-demo-tfstate- |  |
-                              |   +------------------+  |    <account-id>            |  |
-                              |                         |  Keys: eks/ , lambda/      |  |
-                              |   +------------------+  +----------------------------+  |
-                              |   |   VPC 10.0.0.0/16|                                  |
-                              |   |   2 public subnets|                                 |
-                              |   |   IGW + routes    |                                 |
-                              |   +------------------+                                  |
-                              +---------------------------------------------------------+
-```
+![Architecture Diagram](docs/architecture.png)
 
 ## Attack & Response Chain
 
-```
-ATTACK                                          RESPONSE (Cortex XSIAM + Lambda)
-------                                          --------------------------------
-Spring4Shell RCE (CVE-2022-22965)               1. XDR Issue -> Playbook triggered
-  |-> Webshell on the pod                       2. Triage - Extract IOCs from issue fields
-      |-> Container Escape                      3. Operator enters AWS credentials
-          |-> Node access (nsenter)             4. Collect Evidence (Lambda -> EKS API)
-          |-> Host filesystem r/w                  |-> Pod forensics, logs, RBAC audit
-          |-> AWS IMDS credential theft         5. Severity Check + Operator Approval
-      |-> Cluster Takeover                      6. Network Isolation (deny-all NetworkPolicy)
-          |-> Full K8s API access               7. Revoke RBAC (delete cluster-admin)
-          |-> Secrets exfiltration              8. Scale Down (replicas -> 0)
-          |-> Lateral movement to AWS           9. Cordon Node (mark unschedulable)
-                                               10. Kill Pods (force delete)
-                                               11. Verify Containment (re-collect evidence)
-```
+![Attack & Response Chain](docs/attack-response-chain.png)
 
 ## Components
 
 | Component | Description |
 |-----------|-------------|
-| **Flask Dashboard** | Web UI to orchestrate the full demo (infra, attack, response, security radar) |
+| **Application Dashboard** | Web UI to orchestrate the full demo (infra, attack, response, security radar) |
 | **Terraform Backend** | S3 bucket for remote state storage (shared across environments) |
 | **EKS Cluster** | AWS managed Kubernetes (v1.35) on AL2023 with GP3 volumes |
 | **ECR** | Container registry for the vulnerable image |
@@ -116,7 +22,7 @@ Spring4Shell RCE (CVE-2022-22965)               1. XDR Issue -> Playbook trigger
 | **Pod Misconfigs** | `privileged`, `hostPID`, `hostNetwork`, `hostPath: /`, SA `cluster-admin` |
 | **Lambda** | Containment function authenticating to EKS via STS (x-k8s-aws-id) |
 | **Cortex Scripts** | `ExtractK8sContainerEscapeIOCs` (triage) + `InvokeK8sContainmentLambda` (containment) |
-| **Cortex Playbook** | XSIAM/XSOAR playbook orchestrating the full incident response |
+| **Cortex Playbook** | Playbook orchestrating the full incident response |
 
 ## Prerequisites
 
@@ -125,7 +31,7 @@ Spring4Shell RCE (CVE-2022-22965)               1. XDR Issue -> Playbook trigger
 - `kubectl`, `terraform` (>= 1.5) installed
 - Docker with buildx support (for cross-compilation ARM -> AMD64)
 - Python 3.9+ with pip
-- Cortex XSIAM/XSOAR instance (for playbook deployment)
+- Cortex instance (for playbook deployment)
 
 ## Web Dashboard
 
@@ -177,7 +83,7 @@ The **Terminal** tab shows live output. Use the command bar to execute commands 
 | Step | Card | Action |
 |------|------|--------|
 | **Deploy Lambda** | Lambda | Terraform: IAM role, EKS access entry, Lambda function |
-| **Deploy Cortex Objects** | Cortex | Push 2 automation scripts + playbook to Cortex XSIAM |
+| **Deploy Cortex Objects** | Cortex | Push 2 automation scripts + playbook to Cortex |
 
 #### 5. Cleanup
 
@@ -234,7 +140,7 @@ The tab also shows:
 - **K8s Objects** - 6 cards showing live status of each resource (red = vulnerable, green = secure)
 - **Remediation Timeline** - status of each playbook step (pending / done)
 
-## Cortex XSIAM Integration
+## Cortex Integration
 
 ### Automation Scripts
 
@@ -346,7 +252,7 @@ cd terraform-backend && terraform destroy -auto-approve
 ```
 .
 ├── dashboard/
-│   ├── app.py                           # Flask web dashboard (backend API + security posture API)
+│   ├── app.py                           # Application dashboard (backend API + security posture API)
 │   ├── requirements.txt                 # flask, pyyaml
 │   ├── templates/index.html             # Dashboard UI (dark theme, 4 tabs)
 │   └── static/
