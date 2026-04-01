@@ -41,15 +41,17 @@ def get_eks_token(cluster_name, region=None):
     from botocore.signers import RequestSigner
 
     region = region or REGION
-    sts = boto3.client("sts", region_name=region)
+    session = boto3.Session()
+    credentials = session.get_credentials()
+    sts = session.client("sts", region_name=region)
 
     signer = RequestSigner(
-        sts._service_model.service_id,
+        sts.meta.service_model.service_id,
         region,
         "sts",
         "v4",
-        sts._request_signer._credentials,
-        sts._request_signer._event_emitter,
+        credentials,
+        sts.meta.events,
     )
 
     params = {
@@ -94,9 +96,10 @@ def k8s_request(endpoint, ca_data, token, method, path, body=None):
     ca_file.close()
 
     http = urllib3.PoolManager(ca_certs=ca_file.name)
+    content_type = "application/strategic-merge-patch+json" if method == "PATCH" else "application/json"
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
+        "Content-Type": content_type,
         "Accept": "application/json",
     }
 

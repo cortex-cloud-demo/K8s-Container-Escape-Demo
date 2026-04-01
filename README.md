@@ -108,7 +108,7 @@ Spring4Shell RCE (CVE-2022-22965)               1. XDR Issue -> Playbook trigger
 
 | Component | Description |
 |-----------|-------------|
-| **Flask Dashboard** | Web UI to orchestrate the full demo (infra, attack, response, Cortex deploy) |
+| **Flask Dashboard** | Web UI to orchestrate the full demo (infra, attack, response, security radar) |
 | **Terraform Backend** | S3 bucket for remote state storage (shared across environments) |
 | **EKS Cluster** | AWS managed Kubernetes (v1.35) on AL2023 with GP3 volumes |
 | **ECR** | Container registry for the vulnerable image |
@@ -164,11 +164,13 @@ Open **http://localhost:5000**
 
 | Step | Button | Action |
 |------|--------|--------|
-| **Step 1** | Exploit | Spring4Shell RCE - deploys webshell (`shell.jsp`) |
-| **Step 2** | Escape | Container escape - nsenter, host fs, IMDS |
+| **Step 1** | Exploit | Spring4Shell RCE - deploys webshell (unique name per run, valve auto-reset) |
+| **Step 2** | Escape | Container escape - nsenter, host fs, IMDS (IMDSv2 token support) |
 | **Step 3** | Takeover | Cluster takeover - SA token, secrets, AWS creds |
 
 The **Terminal** tab shows live output. Use the command bar to execute commands on the compromised pod.
+
+> **Note:** Attack scripts use unique webshell filenames (timestamp-based) and reset the Tomcat AccessLogValve after deployment to prevent JSP corruption on re-runs. Steps 2 and 3 automatically read the webshell name from step 1 via `/tmp/.k8s-escape-shell`.
 
 #### 4. Cortex Response
 
@@ -188,6 +190,49 @@ Destroy Lambda, EKS infrastructure, and S3 backend (in that order).
 | **Terminal** | Main output for all operations + webshell command execution |
 | **kubectl** | Interactive kubectl with shortcut buttons (nodes, pods, services, secrets, events, RBAC, logs) |
 | **Playbook** | Cortex playbook flow visualization + containment output |
+| **Radar** | Security posture radar chart - before/after comparison with K8s object status |
+
+### Security Radar
+
+The **Radar** tab provides a visual security posture assessment of the cluster:
+
+```
+                    Network Isolation
+                         /\
+                        /  \
+       Evidence -------/    \------- RBAC Security
+                      /  RED  \
+                     / (before) \
+  Deployment  ------/    GREEN   \------ Pod Security
+    Control         \  (after)  /
+                     \        /
+                      \      /
+                       \    /
+                        \  /
+                    Node Security
+```
+
+**Usage:**
+
+1. After running the attack chain, click **"Snapshot Before"** to capture the compromised state (red radar)
+2. Run the containment playbook (Local or Cortex)
+3. Click **"Scan Current"** to see the remediated state (green radar overlaid on red)
+
+**Security dimensions (0-100):**
+
+| Axis | Score 10 (vulnerable) | Score 95 (secure) |
+|------|----------------------|-------------------|
+| Network Isolation | No NetworkPolicy | deny-all applied |
+| RBAC Security | cluster-admin bound to SA | ClusterRoleBinding deleted |
+| Pod Security | Privileged pods running | No pods running |
+| Node Security | All nodes schedulable | Node(s) cordoned |
+| Deployment Control | Replicas > 0 | Scaled to 0 |
+| Evidence | No forensic data | Events + logs collected |
+
+The tab also shows:
+- **Security Score** - overall percentage (red < 40%, orange 40-70%, green > 70%)
+- **K8s Objects** - 6 cards showing live status of each resource (red = vulnerable, green = secure)
+- **Remediation Timeline** - status of each playbook step (pending / done)
 
 ## Cortex XSIAM Integration
 
@@ -301,12 +346,12 @@ cd terraform-backend && terraform destroy -auto-approve
 ```
 .
 ├── dashboard/
-│   ├── app.py                           # Flask web dashboard (backend API)
+│   ├── app.py                           # Flask web dashboard (backend API + security posture API)
 │   ├── requirements.txt                 # flask, pyyaml
-│   ├── templates/index.html             # Dashboard UI (dark theme)
+│   ├── templates/index.html             # Dashboard UI (dark theme, 4 tabs)
 │   └── static/
-│       ├── css/style.css                # Styles, playbook flow, kill chain
-│       └── js/app.js                    # Tabs, polling, API calls, state
+│       ├── css/style.css                # Styles, playbook flow, kill chain, radar chart
+│       └── js/app.js                    # Tabs, polling, API calls, radar chart (Chart.js)
 ├── terraform-backend/
 │   ├── main.tf                          # S3 bucket for remote TF state
 │   ├── outputs.tf                       # bucket_name, region
@@ -339,10 +384,10 @@ cd terraform-backend && terraform destroy -auto-approve
 │   ├── service-account.yaml             # SA + cluster-admin ClusterRoleBinding
 │   └── deployment.yaml                  # Privileged pod + LoadBalancer
 ├── attack/
-│   ├── 01-exploit-rce.sh               # Spring4Shell webshell deployment
-│   ├── 02-container-escape.sh          # nsenter, host fs, IMDS
-│   ├── 03-cluster-takeover.sh          # SA token, secrets, AWS creds
-│   └── remote_shell.sh                 # Helper script
+│   ├── 01-exploit-rce.sh               # Spring4Shell RCE (unique filenames, valve reset)
+│   ├── 02-container-escape.sh          # nsenter, host fs, IMDS (IMDSv2 support)
+│   ├── 03-cluster-takeover.sh          # SA token, kubectl, secrets, AWS creds
+│   └── remote_shell.sh                 # Helper: exec command via webshell
 ├── .github/workflows/                   # CI/CD alternative (GitHub Actions)
 ├── Dockerfile                           # Multi-stage: Maven build + Tomcat 9
 ├── .gitignore                           # Excludes tfstate, .terraform, credentials

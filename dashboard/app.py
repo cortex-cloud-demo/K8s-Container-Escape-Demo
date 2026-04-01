@@ -1479,6 +1479,169 @@ def deploy_all_to_cortex():
 # ─── Task Status ─────────────────────────────────────────────────────────────
 
 
+# ─── Security Posture (Radar) ──────────────────────────────────────────────
+
+
+@app.route("/api/security/posture", methods=["GET"])
+def security_posture():
+    """Query K8s cluster and return security posture scores for the radar chart."""
+    env = os.environ.copy()
+    env.update(get_aws_env())
+    timeout = 10
+
+    posture = {
+        "network_isolation": 0,
+        "rbac_security": 0,
+        "pod_security": 0,
+        "node_security": 0,
+        "deployment_control": 0,
+        "evidence": 0,
+        "objects": {},
+    }
+
+    # 1. NetworkPolicy: deny-all exists?
+    r = subprocess.run(
+        "kubectl get networkpolicy containment-deny-all -n vuln-app -o jsonpath='{.metadata.name}' 2>/dev/null",
+        shell=True, capture_output=True, text=True, env=env, timeout=timeout,
+    )
+    has_netpol = r.returncode == 0 and "containment-deny-all" in r.stdout
+    posture["network_isolation"] = 95 if has_netpol else 10
+    posture["objects"]["networkpolicy"] = {
+        "name": "containment-deny-all",
+        "exists": has_netpol,
+        "status": "deny-all applied" if has_netpol else "no policy (open)",
+        "secure": has_netpol,
+    }
+
+    # 2. ClusterRoleBinding: cluster-admin for vuln-app SA?
+    r = subprocess.run(
+        "kubectl get clusterrolebinding vuln-app-cluster-admin -o jsonpath='{.metadata.name}' 2>/dev/null",
+        shell=True, capture_output=True, text=True, env=env, timeout=timeout,
+    )
+    has_crb = r.returncode == 0 and "vuln-app-cluster-admin" in r.stdout
+    posture["rbac_security"] = 10 if has_crb else 95
+    posture["objects"]["clusterrolebinding"] = {
+        "name": "vuln-app-cluster-admin",
+        "exists": has_crb,
+        "status": "cluster-admin BOUND" if has_crb else "revoked",
+        "secure": not has_crb,
+    }
+
+    # 3. Pods: running in vuln-app?
+    r = subprocess.run(
+        "kubectl get pods -n vuln-app -o json 2>/dev/null",
+        shell=True, capture_output=True, text=True, env=env, timeout=timeout,
+    )
+    pods = []
+    pod_count = 0
+    any_privileged = False
+    if r.returncode == 0:
+        try:
+            items = json.loads(r.stdout).get("items", [])
+            pod_count = len(items)
+            for p in items:
+                name = p["metadata"]["name"]
+                phase = p.get("status", {}).get("phase", "Unknown")
+                priv = False
+                for c in p.get("spec", {}).get("containers", []):
+                    if c.get("securityContext", {}).get("privileged"):
+                        priv = True
+                        any_privileged = True
+                host_pid = p.get("spec", {}).get("hostPID", False)
+                pods.append({"name": name, "phase": phase, "privileged": priv, "hostPID": host_pid})
+        except Exception:
+            pass
+
+    posture["pod_security"] = 95 if pod_count == 0 else (5 if any_privileged else 40)
+    posture["objects"]["pods"] = {
+        "count": pod_count,
+        "items": pods[:5],
+        "privileged": any_privileged,
+        "status": "no pods running" if pod_count == 0 else f"{pod_count} pod(s) running" + (" [PRIVILEGED]" if any_privileged else ""),
+        "secure": pod_count == 0,
+    }
+
+    # 4. Deployment: replicas?
+    r = subprocess.run(
+        "kubectl get deployment vuln-app -n vuln-app -o json 2>/dev/null",
+        shell=True, capture_output=True, text=True, env=env, timeout=timeout,
+    )
+    replicas = -1
+    ready_replicas = 0
+    if r.returncode == 0:
+        try:
+            dep = json.loads(r.stdout)
+            replicas = dep.get("spec", {}).get("replicas", 0)
+            ready_replicas = dep.get("status", {}).get("readyReplicas", 0) or 0
+        except Exception:
+            pass
+
+    posture["deployment_control"] = 95 if replicas == 0 else (10 if replicas > 0 else 50)
+    posture["objects"]["deployment"] = {
+        "name": "vuln-app",
+        "replicas": replicas,
+        "ready": ready_replicas,
+        "status": f"{replicas} replica(s) ({ready_replicas} ready)" if replicas >= 0 else "not found",
+        "secure": replicas == 0,
+    }
+
+    # 5. Nodes: cordoned?
+    r = subprocess.run(
+        "kubectl get nodes -o json 2>/dev/null",
+        shell=True, capture_output=True, text=True, env=env, timeout=timeout,
+    )
+    nodes = []
+    any_cordoned = False
+    if r.returncode == 0:
+        try:
+            for n in json.loads(r.stdout).get("items", []):
+                name = n["metadata"]["name"]
+                unschedulable = n.get("spec", {}).get("unschedulable", False)
+                if unschedulable:
+                    any_cordoned = True
+                nodes.append({"name": name, "cordoned": bool(unschedulable)})
+        except Exception:
+            pass
+
+    posture["node_security"] = 90 if any_cordoned else 25
+    posture["objects"]["nodes"] = {
+        "items": nodes[:5],
+        "any_cordoned": any_cordoned,
+        "status": "node(s) cordoned" if any_cordoned else "all nodes schedulable",
+        "secure": any_cordoned,
+    }
+
+    # 6. Evidence: check if events exist
+    r = subprocess.run(
+        "kubectl get events -n vuln-app --no-headers 2>/dev/null | wc -l",
+        shell=True, capture_output=True, text=True, env=env, timeout=timeout,
+    )
+    event_count = 0
+    try:
+        event_count = int(r.stdout.strip())
+    except Exception:
+        pass
+    posture["evidence"] = min(90, event_count * 10) if event_count > 0 else 5
+    posture["objects"]["events"] = {
+        "count": event_count,
+        "status": f"{event_count} events captured" if event_count > 0 else "no events",
+        "secure": event_count > 0,
+    }
+
+    # Overall score
+    scores = [
+        posture["network_isolation"],
+        posture["rbac_security"],
+        posture["pod_security"],
+        posture["node_security"],
+        posture["deployment_control"],
+        posture["evidence"],
+    ]
+    posture["overall_score"] = int(sum(scores) / len(scores))
+
+    return jsonify(posture)
+
+
 @app.route("/api/tasks/<task_id>", methods=["GET"])
 def get_task(task_id):
     task = tasks.get(task_id)

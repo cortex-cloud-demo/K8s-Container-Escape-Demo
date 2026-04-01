@@ -6,6 +6,7 @@
     <title>K8s Escape Demo</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -440,6 +441,7 @@
                 <button class="tab active" data-tab="terminal" onclick="switchTab('terminal')">Terminal</button>
                 <button class="tab" data-tab="kubectl" onclick="switchTab('kubectl')">kubectl</button>
                 <button class="tab" data-tab="playbook" onclick="switchTab('playbook')">Playbook</button>
+                <button class="tab" data-tab="radar" onclick="switchTab('radar')">Radar</button>
             </div>
         </div>
 
@@ -475,6 +477,74 @@
                 <span class="prompt-sign kubectl-prompt">kubectl</span>
                 <input type="text" id="kubectl-input" placeholder="get pods -n vuln-app, describe node, logs deployment/vuln-app -n vuln-app..." />
                 <button onclick="kubectlExec()">RUN</button>
+            </div>
+        </div>
+
+        <!-- Radar Tab -->
+        <div class="radar-tab tab-content" id="tab-radar">
+            <div class="radar-controls">
+                <div class="radar-controls-left">
+                    <button class="btn btn-primary" onclick="radarSnapshot()">Snapshot Before</button>
+                    <button class="btn btn-success" onclick="radarScan()">Scan Current</button>
+                    <button class="btn btn-ghost" onclick="radarReset()">Reset</button>
+                </div>
+                <div class="radar-score-display">
+                    <span class="radar-score-label">Security Score</span>
+                    <span class="radar-score-value" id="radar-score">--</span>
+                </div>
+            </div>
+            <div class="radar-content">
+                <div class="radar-chart-section">
+                    <canvas id="security-radar"></canvas>
+                    <div class="radar-legend">
+                        <span class="radar-legend-item before-legend">Before (compromised)</span>
+                        <span class="radar-legend-item after-legend">After (remediated)</span>
+                    </div>
+                </div>
+                <div class="radar-info-section">
+                    <div class="radar-info-title">K8s Security Objects</div>
+                    <div class="k8s-objects-grid">
+                        <div class="k8s-obj" id="obj-pods">
+                            <div class="k8s-obj-icon">POD</div>
+                            <div class="k8s-obj-name">Pods</div>
+                            <div class="k8s-obj-status" id="obj-pods-status">--</div>
+                        </div>
+                        <div class="k8s-obj" id="obj-netpol">
+                            <div class="k8s-obj-icon">NET</div>
+                            <div class="k8s-obj-name">NetworkPolicy</div>
+                            <div class="k8s-obj-status" id="obj-netpol-status">--</div>
+                        </div>
+                        <div class="k8s-obj" id="obj-rbac">
+                            <div class="k8s-obj-icon">RBAC</div>
+                            <div class="k8s-obj-name">ClusterRoleBinding</div>
+                            <div class="k8s-obj-status" id="obj-rbac-status">--</div>
+                        </div>
+                        <div class="k8s-obj" id="obj-deploy">
+                            <div class="k8s-obj-icon">DEP</div>
+                            <div class="k8s-obj-name">Deployment</div>
+                            <div class="k8s-obj-status" id="obj-deploy-status">--</div>
+                        </div>
+                        <div class="k8s-obj" id="obj-node">
+                            <div class="k8s-obj-icon">NODE</div>
+                            <div class="k8s-obj-name">Nodes</div>
+                            <div class="k8s-obj-status" id="obj-node-status">--</div>
+                        </div>
+                        <div class="k8s-obj" id="obj-evidence">
+                            <div class="k8s-obj-icon">LOG</div>
+                            <div class="k8s-obj-name">Evidence</div>
+                            <div class="k8s-obj-status" id="obj-evidence-status">--</div>
+                        </div>
+                    </div>
+                    <div class="radar-info-title" style="margin-top:1rem;">Remediation Timeline</div>
+                    <div class="remediation-timeline" id="remediation-timeline">
+                        <div class="rem-step" data-step="collect_evidence"><span class="rem-dot"></span><span class="rem-label">Collect Evidence</span><span class="rem-badge" id="rem-collect_evidence">pending</span></div>
+                        <div class="rem-step" data-step="network_isolate"><span class="rem-dot"></span><span class="rem-label">Network Isolation</span><span class="rem-badge" id="rem-network_isolate">pending</span></div>
+                        <div class="rem-step" data-step="revoke_rbac"><span class="rem-dot"></span><span class="rem-label">Revoke RBAC</span><span class="rem-badge" id="rem-revoke_rbac">pending</span></div>
+                        <div class="rem-step" data-step="scale_down"><span class="rem-dot"></span><span class="rem-label">Scale Down</span><span class="rem-badge" id="rem-scale_down">pending</span></div>
+                        <div class="rem-step" data-step="cordon_node"><span class="rem-dot"></span><span class="rem-label">Cordon Node</span><span class="rem-badge" id="rem-cordon_node">pending</span></div>
+                        <div class="rem-step" data-step="delete_pod"><span class="rem-dot"></span><span class="rem-label">Kill Pods</span><span class="rem-badge" id="rem-delete_pod">pending</span></div>
+                    </div>
+                </div>
             </div>
         </div>
 

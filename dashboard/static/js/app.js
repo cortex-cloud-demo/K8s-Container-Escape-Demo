@@ -1098,6 +1098,262 @@ function shellExec() {
     input.value = '';
 }
 
+// ─── Radar Chart ─────────────────────────────────────────────────────────────
+
+let radarChart = null;
+const radarState = {
+    before: null,  // snapshot data
+    current: null, // live scan data
+};
+
+const RADAR_LABELS = [
+    'Network Isolation',
+    'RBAC Security',
+    'Pod Security',
+    'Node Security',
+    'Deployment Control',
+    'Evidence',
+];
+
+const RADAR_KEYS = [
+    'network_isolation',
+    'rbac_security',
+    'pod_security',
+    'node_security',
+    'deployment_control',
+    'evidence',
+];
+
+function initRadarChart() {
+    const ctx = document.getElementById('security-radar');
+    if (!ctx) return;
+
+    radarChart = new Chart(ctx, {
+        type: 'radar',
+        data: {
+            labels: RADAR_LABELS,
+            datasets: [
+                {
+                    label: 'Before (compromised)',
+                    data: [0, 0, 0, 0, 0, 0],
+                    borderColor: 'rgba(239, 68, 68, 0.8)',
+                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                    borderWidth: 2,
+                    pointBackgroundColor: 'rgba(239, 68, 68, 0.9)',
+                    pointBorderColor: '#fff',
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    hidden: true,
+                },
+                {
+                    label: 'After (remediated)',
+                    data: [0, 0, 0, 0, 0, 0],
+                    borderColor: 'rgba(34, 197, 94, 0.8)',
+                    backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                    borderWidth: 2,
+                    pointBackgroundColor: 'rgba(34, 197, 94, 0.9)',
+                    pointBorderColor: '#fff',
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    hidden: true,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            animation: {
+                duration: 1200,
+                easing: 'easeOutQuart',
+            },
+            scales: {
+                r: {
+                    beginAtZero: true,
+                    max: 100,
+                    min: 0,
+                    ticks: {
+                        stepSize: 20,
+                        color: '#64748b',
+                        backdropColor: 'transparent',
+                        font: { size: 10 },
+                    },
+                    grid: {
+                        color: 'rgba(30, 41, 59, 0.8)',
+                    },
+                    angleLines: {
+                        color: 'rgba(30, 41, 59, 0.6)',
+                    },
+                    pointLabels: {
+                        color: '#94a3b8',
+                        font: { size: 12, weight: '600' },
+                    },
+                },
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1e293b',
+                    titleColor: '#e2e8f0',
+                    bodyColor: '#94a3b8',
+                    borderColor: '#334155',
+                    borderWidth: 1,
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.dataset.label}: ${context.raw}/100`;
+                        }
+                    }
+                },
+            },
+        },
+    });
+}
+
+function updateRadarScore(score) {
+    const el = document.getElementById('radar-score');
+    el.textContent = score + '%';
+    el.classList.remove('score-low', 'score-mid', 'score-high');
+    if (score >= 70) el.classList.add('score-high');
+    else if (score >= 40) el.classList.add('score-mid');
+    else el.classList.add('score-low');
+}
+
+function updateK8sObjects(objects) {
+    const mapping = {
+        'obj-pods': { data: objects.pods, statusId: 'obj-pods-status' },
+        'obj-netpol': { data: objects.networkpolicy, statusId: 'obj-netpol-status' },
+        'obj-rbac': { data: objects.clusterrolebinding, statusId: 'obj-rbac-status' },
+        'obj-deploy': { data: objects.deployment, statusId: 'obj-deploy-status' },
+        'obj-node': { data: objects.nodes, statusId: 'obj-node-status' },
+        'obj-evidence': { data: objects.events, statusId: 'obj-evidence-status' },
+    };
+
+    for (const [elemId, info] of Object.entries(mapping)) {
+        const card = document.getElementById(elemId);
+        const statusEl = document.getElementById(info.statusId);
+        if (!card || !statusEl || !info.data) continue;
+
+        statusEl.textContent = info.data.status || '--';
+        card.classList.remove('secure', 'vulnerable');
+        card.classList.add(info.data.secure ? 'secure' : 'vulnerable');
+    }
+}
+
+function updateRemediationTimeline(posture) {
+    // Determine which remediation steps are "done" based on posture scores
+    const stepScores = {
+        'collect_evidence': posture.evidence > 50,
+        'network_isolate': posture.network_isolation > 50,
+        'revoke_rbac': posture.rbac_security > 50,
+        'scale_down': posture.deployment_control > 50,
+        'cordon_node': posture.node_security > 50,
+        'delete_pod': posture.pod_security > 50,
+    };
+
+    for (const [stepId, isDone] of Object.entries(stepScores)) {
+        const stepEl = document.querySelector(`.rem-step[data-step="${stepId}"]`);
+        const badge = document.getElementById(`rem-${stepId}`);
+        if (!stepEl || !badge) continue;
+
+        stepEl.classList.remove('done', 'running', 'failed');
+        if (isDone) {
+            stepEl.classList.add('done');
+            badge.textContent = 'done';
+        } else {
+            badge.textContent = 'pending';
+        }
+    }
+}
+
+async function radarSnapshot() {
+    switchTab('radar');
+    const tab = document.getElementById('tab-radar');
+    tab.classList.add('radar-scanning');
+
+    try {
+        const res = await fetch('/api/security/posture');
+        const data = await res.json();
+        radarState.before = data;
+
+        // Update chart - Before dataset
+        const values = RADAR_KEYS.map(k => data[k] || 0);
+        radarChart.data.datasets[0].data = values;
+        radarChart.data.datasets[0].hidden = false;
+        radarChart.update();
+
+        updateRadarScore(data.overall_score);
+        updateK8sObjects(data.objects);
+        updateRemediationTimeline(data);
+    } catch (e) {
+        console.error('Radar snapshot error:', e);
+    }
+
+    tab.classList.remove('radar-scanning');
+}
+
+async function radarScan() {
+    switchTab('radar');
+    const tab = document.getElementById('tab-radar');
+    tab.classList.add('radar-scanning');
+
+    try {
+        const res = await fetch('/api/security/posture');
+        const data = await res.json();
+        radarState.current = data;
+
+        // If no before snapshot, use current as before
+        if (!radarState.before) {
+            radarState.before = data;
+            const beforeValues = RADAR_KEYS.map(k => data[k] || 0);
+            radarChart.data.datasets[0].data = beforeValues;
+            radarChart.data.datasets[0].hidden = false;
+        }
+
+        // Update chart - After dataset
+        const values = RADAR_KEYS.map(k => data[k] || 0);
+        radarChart.data.datasets[1].data = values;
+        radarChart.data.datasets[1].hidden = false;
+        radarChart.update();
+
+        updateRadarScore(data.overall_score);
+        updateK8sObjects(data.objects);
+        updateRemediationTimeline(data);
+    } catch (e) {
+        console.error('Radar scan error:', e);
+    }
+
+    tab.classList.remove('radar-scanning');
+}
+
+function radarReset() {
+    radarState.before = null;
+    radarState.current = null;
+
+    if (radarChart) {
+        radarChart.data.datasets[0].data = [0, 0, 0, 0, 0, 0];
+        radarChart.data.datasets[0].hidden = true;
+        radarChart.data.datasets[1].data = [0, 0, 0, 0, 0, 0];
+        radarChart.data.datasets[1].hidden = true;
+        radarChart.update();
+    }
+
+    document.getElementById('radar-score').textContent = '--';
+    document.getElementById('radar-score').className = 'radar-score-value';
+
+    // Reset objects
+    ['obj-pods', 'obj-netpol', 'obj-rbac', 'obj-deploy', 'obj-node', 'obj-evidence'].forEach(id => {
+        const card = document.getElementById(id);
+        if (card) card.classList.remove('secure', 'vulnerable');
+    });
+    ['obj-pods-status', 'obj-netpol-status', 'obj-rbac-status', 'obj-deploy-status', 'obj-node-status', 'obj-evidence-status'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '--';
+    });
+
+    // Reset timeline
+    document.querySelectorAll('.rem-step').forEach(el => el.classList.remove('done', 'running', 'failed'));
+    document.querySelectorAll('.rem-badge').forEach(el => el.textContent = 'pending');
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1113,6 +1369,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     refreshHost();
     refreshClusterStatus();
+    initRadarChart();
 
     // Welcome message
     const el = document.getElementById('terminal-output');
