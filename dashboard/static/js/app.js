@@ -547,7 +547,7 @@ function playbookClear() {
 function playbookWriteHeader(title) {
     playbookClear();
     const line = '='.repeat(50);
-    playbookWrite(`${line}\n  CORTEX XSOAR - ${title}\n${line}\n\n`);
+    playbookWrite(`${line}\n  CORTEX - ${title}\n${line}\n\n`);
 }
 
 function updatePlaybookStepStatus(stepId, status) {
@@ -680,6 +680,129 @@ async function playbookRunAll() {
         }
     } catch (e) {
         playbookWrite(`Request failed: ${e.message}\n`);
+    }
+}
+
+// ─── Cortex ──────────────────────────────────────────────────────────────────
+
+function openCortexSettings() {
+    fetch('/api/cortex/credentials')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('cortex-base-url').value = data.base_url || '';
+            document.getElementById('cortex-key-id').value = data.api_key_id || '';
+            document.getElementById('cortex-key').value = '';
+            document.getElementById('cortex-modal').classList.add('visible');
+        });
+}
+
+function closeCortexSettings() {
+    document.getElementById('cortex-modal').classList.remove('visible');
+}
+
+async function saveCortexCredentials() {
+    const payload = {
+        base_url: document.getElementById('cortex-base-url').value.trim(),
+        api_key_id: document.getElementById('cortex-key-id').value.trim(),
+    };
+
+    const apiKey = document.getElementById('cortex-key').value;
+    if (apiKey) {
+        payload.api_key = apiKey;
+    }
+
+    try {
+        const res = await fetch('/api/cortex/credentials', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+            closeCortexSettings();
+            updateCortexStatus('configured');
+            termWriteHeader('Cortex');
+            termWrite('Cortex API credentials saved.\n');
+            termWrite(`Base URL: ${payload.base_url}\n`);
+            termWrite(`Key ID: ${payload.api_key_id}\n`);
+        }
+    } catch (e) {
+        termWriteHeader('Error');
+        termWrite(`Failed to save Cortex credentials: ${e.message}\n`);
+    }
+}
+
+async function testCortexConnection() {
+    termWriteHeader('Testing Cortex Connection');
+    termWrite('Connecting to Cortex API...\n\n');
+
+    try {
+        const res = await fetch('/api/cortex/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            termWrite(`${data.message}\n`);
+            termWrite('\nCortex connection successful.\n');
+            updateCortexStatus('connected');
+        } else {
+            termWrite(`ERROR: ${data.message}\n`);
+            updateCortexStatus('error');
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        updateCortexStatus('error');
+    }
+}
+
+async function publishPlaybook() {
+    switchTab('playbook');
+    playbookClear();
+    const line = '='.repeat(50);
+    playbookWrite(`${line}\n  PUBLISH PLAYBOOK TO CORTEX\n${line}\n\n`);
+    playbookWrite('Uploading K8s_Container_Escape_Spring4Shell_Containment.yml...\n\n');
+
+    const badge = document.getElementById('playbook-publish-status');
+    badge.textContent = 'publishing...';
+    badge.style.color = '#f97316';
+
+    try {
+        const res = await fetch('/api/cortex/publish-playbook', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            playbookWrite(`${data.message}\n`);
+            playbookWrite(`HTTP Status: ${data.http_status}\n`);
+            if (data.response) {
+                playbookWrite(`\nResponse:\n${data.response}\n`);
+            }
+            playbookWrite(`\n${'─'.repeat(50)}\n`);
+            playbookWrite('Playbook published successfully.\n');
+            badge.textContent = 'published';
+            badge.style.color = '#22c55e';
+        } else {
+            playbookWrite(`ERROR: ${data.message}\n`);
+            playbookWrite(`\n${'─'.repeat(50)}\n`);
+            playbookWrite('Publish failed.\n');
+            badge.textContent = 'failed';
+            badge.style.color = '#ef4444';
+        }
+    } catch (e) {
+        playbookWrite(`Request failed: ${e.message}\n`);
+        badge.textContent = 'error';
+        badge.style.color = '#ef4444';
+    }
+}
+
+function updateCortexStatus(status) {
+    const el = document.getElementById('cortex-status');
+    if (status === 'connected') {
+        el.textContent = 'connected';
+        el.style.color = '#22c55e';
+    } else if (status === 'configured') {
+        el.textContent = 'configured';
+        el.style.color = '#f97316';
+    } else if (status === 'error') {
+        el.textContent = 'error';
+        el.style.color = '#ef4444';
+    } else {
+        el.textContent = '';
     }
 }
 

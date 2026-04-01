@@ -32,19 +32,31 @@
     <!-- ─── Sidebar ────────────────────────────── -->
     <aside class="sidebar">
 
-        <!-- AWS Settings -->
+        <!-- Settings -->
         <div class="section">
-            <div class="section-title">AWS Settings</div>
+            <div class="section-title">Settings</div>
             <div class="step-card" id="card-aws-settings">
                 <div class="step-header">
                     <span class="step-number aws">AWS</span>
                     <span class="step-status" id="aws-status"></span>
                 </div>
                 <div class="step-name">AWS Credentials</div>
-                <div class="step-desc">Configure Access Key, Secret Key &amp; Session Token</div>
+                <div class="step-desc">Access Key, Secret Key &amp; Session Token</div>
                 <div class="step-actions">
                     <button class="btn btn-primary" onclick="openAwsSettings()">Configure</button>
                     <button class="btn btn-ghost" onclick="testAwsCredentials()">Test</button>
+                </div>
+            </div>
+            <div class="step-card" id="card-cortex-settings">
+                <div class="step-header">
+                    <span class="step-number cortex">CORTEX</span>
+                    <span class="step-status" id="cortex-status"></span>
+                </div>
+                <div class="step-name">Cortex API</div>
+                <div class="step-desc">Base URL, API Key ID &amp; API Key</div>
+                <div class="step-actions">
+                    <button class="btn btn-cortex" onclick="openCortexSettings()">Configure</button>
+                    <button class="btn btn-ghost" onclick="testCortexConnection()">Test</button>
                 </div>
             </div>
         </div>
@@ -202,19 +214,46 @@
             </div>
         </div>
 
-        <!-- Cortex XSOAR Response -->
+        <!-- Cortex Playbook -->
         <div class="section">
-            <div class="section-title">Cortex XSOAR - Response</div>
+            <div class="section-title">Cortex - Response</div>
+
+            <div class="step-card" id="card-playbook-publish">
+                <div class="step-header">
+                    <span class="step-number cortex">PLAYBOOK</span>
+                    <span class="step-status" id="playbook-publish-status"></span>
+                </div>
+                <div class="step-name">Publish Playbook</div>
+                <div class="step-desc">Push containment playbook to Cortex</div>
+                <div class="step-actions">
+                    <button class="btn btn-cortex" onclick="publishPlaybook()">Publish to Cortex</button>
+                </div>
+            </div>
+
+            <div class="cortex-playbook-info">
+                <div class="cortex-info-title">Playbook steps (executed by Cortex)</div>
+                <div class="cortex-info-step">1. Collect Evidence - Pod forensics, logs, RBAC</div>
+                <div class="cortex-info-step">2. Network Isolation - Deny-all NetworkPolicy</div>
+                <div class="cortex-info-step">3. Revoke RBAC - Delete cluster-admin binding</div>
+                <div class="cortex-info-step">4. Scale Down - Replicas to 0</div>
+                <div class="cortex-info-step">5. Cordon Node - Mark unschedulable</div>
+                <div class="cortex-info-step">6. Kill Pods - Force delete all pods</div>
+            </div>
+        </div>
+
+        <!-- Local Containment (fallback) -->
+        <div class="section">
+            <div class="section-title">Local Containment (kubectl)</div>
 
             <div class="step-card" id="card-playbook-auto">
                 <div class="step-header">
-                    <span class="step-number cortex">PLAYBOOK</span>
+                    <span class="step-number cortex">LOCAL</span>
                     <span class="step-status" id="playbook-status"></span>
                 </div>
-                <div class="step-name">Auto-Containment</div>
-                <div class="step-desc">Run full playbook: isolate, revoke, scale, cordon, kill</div>
+                <div class="step-name">Run Locally</div>
+                <div class="step-desc">Execute containment via kubectl (without Cortex)</div>
                 <div class="step-actions">
-                    <button class="btn btn-cortex" onclick="playbookRunAll()">Run Playbook</button>
+                    <button class="btn btn-ghost" onclick="playbookRunAll()">Run All Steps</button>
                 </div>
             </div>
 
@@ -323,7 +362,7 @@
         <div class="terminal-container tab-content" id="tab-playbook">
             <div class="playbook-header">
                 <div class="playbook-title-bar">
-                    <span class="playbook-icon">CORTEX XSOAR</span>
+                    <span class="playbook-icon">CORTEX</span>
                     <span class="playbook-title">K8s Container Escape - Spring4Shell Containment</span>
                 </div>
                 <div class="playbook-flow">
@@ -382,6 +421,30 @@
         <div class="modal-actions">
             <button class="btn btn-ghost" onclick="closeAwsSettings()">Cancel</button>
             <button class="btn btn-primary" onclick="saveAwsCredentials()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- ─── Cortex Settings Modal ─────────────────────── -->
+<div class="modal-overlay" id="cortex-modal">
+    <div class="modal modal-wide">
+        <h3 style="color: #818cf8;">Cortex API</h3>
+        <p>Configure your Cortex API credentials to publish the containment playbook. These are stored in-memory only.</p>
+        <div class="form-group">
+            <label for="cortex-base-url">API Base URL</label>
+            <input type="text" id="cortex-base-url" placeholder="https://api-myinstance.xdr.eu.paloaltonetworks.com" autocomplete="off" />
+        </div>
+        <div class="form-group">
+            <label for="cortex-key-id">API Key ID</label>
+            <input type="text" id="cortex-key-id" placeholder="1, 2, 3..." autocomplete="off" />
+        </div>
+        <div class="form-group">
+            <label for="cortex-key">API Key</label>
+            <input type="password" id="cortex-key" placeholder="API key..." autocomplete="off" />
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="closeCortexSettings()">Cancel</button>
+            <button class="btn btn-cortex" onclick="saveCortexCredentials()">Save</button>
         </div>
     </div>
 </div>

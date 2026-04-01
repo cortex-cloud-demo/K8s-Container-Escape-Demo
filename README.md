@@ -116,12 +116,26 @@ Three steps, each with a dedicated button:
 
 The **Terminal** tab shows live output. Use the command bar at the bottom to execute commands on the compromised pod (e.g. `id`, `cat /etc/passwd`, `ls /host`).
 
-#### 7. Cortex XSOAR Response (Containment)
+#### 7. Connect Cortex XSOAR
 
-The **Cortex XSOAR - Response** section provides automated incident response:
+Click **Configure** in the Cortex XSOAR card. Enter:
+- **FQDN** (e.g. `myinstance.xdr.us.paloaltonetworks.com`)
+- **API Key ID** (numeric ID)
+- **API Key** (Standard or Advanced)
 
-- **Run Playbook** - Executes all 6 containment steps sequentially
-- **Individual steps** - Click any step to run it independently
+Click **Test** to validate the connection.
+
+> API format: `https://api-{fqdn}/xsoar/public/v1/` with `Authorization: {api_key}` + `x-xdr-auth-id: {key_id}` headers.
+
+#### 8. Publish Playbook to Cortex
+
+Click **Publish to Cortex** to push the containment playbook (`K8s_Container_Escape_Spring4Shell_Containment.yml`) to your Cortex XSOAR instance via the `POST /playbook/save/yaml` API endpoint.
+
+Once published, the playbook runs **from Cortex XSOAR** (not the dashboard). The dashboard is the attack platform; Cortex handles the response.
+
+#### Local Containment (fallback)
+
+The **Local Containment** section allows running containment steps directly via kubectl without Cortex:
 
 | Step | Action | Effect |
 |------|--------|--------|
@@ -131,10 +145,6 @@ The **Cortex XSOAR - Response** section provides automated incident response:
 | **Scale Down** | Replicas -> 0 | Terminates pods while preserving deployment for forensics |
 | **Cordon Node** | Mark unschedulable | Prevents new workloads on the compromised node |
 | **Kill Pods** | Force delete pods | Ensures no compromised containers remain running |
-
-The **Playbook** tab shows:
-- Visual flow diagram with step status (running/success/error)
-- Live terminal output for each step
 
 ### Dashboard Tabs
 
@@ -154,7 +164,7 @@ Click **Destroy All** in the Cleanup section. Confirms with a modal, then:
 
 ### Playbook
 
-The file `playbook/cortex_xsoar_playbook.json` is a ready-to-import XSOAR playbook:
+The file `playbook/K8s_Container_Escape_Spring4Shell_Containment.yml` is a ready-to-import XSOAR playbook (YAML format). You can import it via the dashboard's **Publish to Cortex** button or manually:
 
 ```
 Start -> Triage -> Collect Evidence -> Severity Check
@@ -167,7 +177,7 @@ Start -> Triage -> Collect Evidence -> Severity Check
               -> Cordon Node -> Kill Pods -> Verify -> Done
 ```
 
-Import into XSOAR: **Settings > Playbooks > Import** and select the JSON file.
+Import into XSOAR: **Settings > Playbooks > Import** and select the YAML file, or use the dashboard's **Publish to Cortex** button to push it via API.
 
 ### Lambda Function
 
@@ -263,7 +273,7 @@ cd terraform && terraform destroy -auto-approve
 │       ├── handler.py                   # Lambda containment handler
 │       └── requirements.txt
 ├── playbook/
-│   └── cortex_xsoar_playbook.json       # Cortex XSOAR playbook (importable)
+│   └── K8s_Container_Escape_Spring4Shell_Containment.yml  # Cortex XSOAR playbook (YAML)
 ├── app/                                 # Spring4Shell vulnerable app (Java)
 ├── k8s/
 │   ├── namespace.yaml

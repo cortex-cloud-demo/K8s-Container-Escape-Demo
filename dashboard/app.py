@@ -5,6 +5,10 @@ import threading
 import time
 import uuid
 
+import ssl
+import urllib.request
+import urllib.error
+
 from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
@@ -14,6 +18,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TERRAFORM_DIR = os.path.join(PROJECT_ROOT, "terraform")
 K8S_DIR = os.path.join(PROJECT_ROOT, "k8s")
 ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")
+PLAYBOOK_DIR = os.path.join(PROJECT_ROOT, "playbook")
 KUBECONFIG_PATH = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig")
 
 # In-memory store for task outputs
@@ -25,6 +30,13 @@ aws_credentials = {
     "aws_secret_access_key": "",
     "aws_session_token": "",
     "aws_region": "eu-west-3",
+}
+
+# In-memory store for Cortex credentials
+cortex_settings = {
+    "base_url": "",
+    "api_key_id": "",
+    "api_key": "",
 }
 
 
@@ -825,6 +837,136 @@ def playbook_lambda_step(step_id):
         return jsonify({"task_id": task_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─── Cortex API ──────────────────────────────────────────────────────────────
+
+
+@app.route("/api/cortex/credentials", methods=["GET"])
+def get_cortex_credentials():
+    """Return current Cortex settings (masked API key)."""
+    masked = dict(cortex_settings)
+    if masked["api_key"]:
+        masked["api_key"] = "****" + masked["api_key"][-4:]
+    return jsonify(masked)
+
+
+@app.route("/api/cortex/credentials", methods=["POST"])
+def set_cortex_credentials():
+    """Set Cortex API credentials."""
+    data = request.json
+    if "base_url" in data:
+        # Normalize: strip trailing slashes
+        cortex_settings["base_url"] = data["base_url"].strip().rstrip("/")
+    if "api_key_id" in data:
+        cortex_settings["api_key_id"] = data["api_key_id"].strip()
+    if "api_key" in data:
+        cortex_settings["api_key"] = data["api_key"].strip()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/cortex/test", methods=["POST"])
+def test_cortex_connection():
+    """Test Cortex API connection."""
+    base_url = cortex_settings["base_url"]
+    api_key = cortex_settings["api_key"]
+    api_key_id = cortex_settings["api_key_id"]
+
+    if not base_url or not api_key or not api_key_id:
+        return jsonify({"status": "error", "message": "Missing Cortex credentials (Base URL, API Key ID, API Key)"}), 400
+
+    url = f"{base_url}/xsoar/public/v1/settings/integration/search"
+    headers = {
+        "Authorization": api_key,
+        "x-xdr-auth-id": api_key_id,
+        "Content-Type": "application/json",
+    }
+
+    try:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url, data=b'{"size": 1}', headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as resp:
+            return jsonify({"status": "ok", "message": f"Connected to Cortex ({base_url})", "http_status": resp.status})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:500]
+        return jsonify({"status": "error", "message": f"HTTP {e.code}: {body}"}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/cortex/publish-playbook", methods=["POST"])
+def publish_playbook_to_cortex():
+    """Publish the YAML playbook to Cortex via API."""
+    base_url = cortex_settings["base_url"]
+    api_key = cortex_settings["api_key"]
+    api_key_id = cortex_settings["api_key_id"]
+
+    if not base_url or not api_key or not api_key_id:
+        return jsonify({"status": "error", "message": "Missing Cortex credentials. Configure them first."}), 400
+
+    playbook_path = os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Spring4Shell_Containment.yml")
+    if not os.path.exists(playbook_path):
+        return jsonify({"status": "error", "message": f"Playbook file not found: {playbook_path}"}), 400
+
+    with open(playbook_path, "rb") as f:
+        playbook_content = f.read()
+
+    # Build multipart/form-data using standard boundary format (matching curl -F)
+    boundary = uuid.uuid4().hex
+    filename = "K8s_Container_Escape_Spring4Shell_Containment.yml"
+
+    body = b""
+    body += f"--{boundary}\r\n".encode()
+    body += f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode()
+    body += b"Content-Type: application/octet-stream\r\n"
+    body += b"\r\n"
+    body += playbook_content
+    body += f"\r\n--{boundary}--\r\n".encode()
+
+    # Try the public API path first, fallback to direct path
+    api_paths = [
+        "/xsoar/public/v1/playbook/save/yaml",
+        "/playbook/save/yaml",
+    ]
+
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    last_error = None
+    for api_path in api_paths:
+        url = f"{base_url}{api_path}"
+        headers = {
+            "Authorization": api_key,
+            "x-xdr-auth-id": api_key_id,
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+        }
+
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
+                resp_body = resp.read().decode("utf-8", errors="replace")
+                return jsonify({
+                    "status": "ok",
+                    "message": f"Playbook published to Cortex ({base_url})",
+                    "http_status": resp.status,
+                    "api_path": api_path,
+                    "response": resp_body[:1000],
+                })
+        except urllib.error.HTTPError as e:
+            last_error = f"HTTP {e.code} on {api_path}: {e.read().decode('utf-8', errors='replace')[:500]}"
+            # If 400 "request body is required", try next path
+            if e.code == 400:
+                continue
+            return jsonify({"status": "error", "message": last_error}), 400
+        except Exception as e:
+            last_error = f"{api_path}: {e}"
+            continue
+
+    return jsonify({"status": "error", "message": f"All API paths failed. Last error: {last_error}"}), 400
 
 
 # ─── Task Status ─────────────────────────────────────────────────────────────

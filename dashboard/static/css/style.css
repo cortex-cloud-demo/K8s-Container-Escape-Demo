@@ -968,3 +968,31 @@ body {
 .pf-arrow.done::after {
     border-left-color: var(--accent-green);
 }
+
+/* ─── Cortex Playbook Info ────────────────────── */
+
+.cortex-playbook-info {
+    padding: 0.6rem 0.8rem;
+    margin-top: 0.3rem;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.cortex-info-title {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.4rem;
+}
+
+.cortex-info-step {
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    padding: 0.15rem 0;
+    padding-left: 0.3rem;
+    border-left: 2px solid rgba(99, 102, 241, 0.3);
+    margin-bottom: 0.1rem;
+}
