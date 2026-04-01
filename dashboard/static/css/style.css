@@ -1128,6 +1128,60 @@ body {
     flex-shrink: 0;
 }
 
+/* ─── GitHub Repo Link ─────────────────────────── */
+
+.sidebar-repo-link {
+    margin-top: 0.5rem;
+    padding: 0 0.2rem;
+}
+
+.sidebar-repo-link a {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 0.8rem;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    text-decoration: none;
+    color: var(--text);
+    transition: all 0.2s;
+}
+
+.sidebar-repo-link a:hover {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.06));
+    border-color: rgba(255, 255, 255, 0.25);
+    box-shadow: 0 0 12px rgba(255, 255, 255, 0.08);
+}
+
+.github-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: var(--text-dim);
+}
+
+.sidebar-repo-link a:hover .github-icon {
+    color: var(--text);
+}
+
+.repo-link-text {
+    flex: 1;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-dim);
+}
+
+.sidebar-repo-link a:hover .repo-link-text {
+    color: var(--text);
+}
+
+.repo-link-arrow {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
 /* ─── Radar Tab ────────────────────────────────── */
 
 .radar-tab {
