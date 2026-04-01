@@ -431,18 +431,8 @@ def get_tf_backend_config(state_key):
     if not backend or not backend["bucket"]:
         raise RuntimeError("S3 backend not provisioned. Deploy 'Terraform Backend' first.")
 
-    # Check if state already exists in S3 to decide migrate vs reconfigure
-    tf_dir = TERRAFORM_DIR if "eks" in state_key else TERRAFORM_LAMBDA_DIR
-    local_state = os.path.join(tf_dir, "terraform.tfstate")
-    has_local_state = os.path.exists(local_state) and os.path.getsize(local_state) > 100
-
-    if has_local_state:
-        init_flag = "-migrate-state -force-copy"
-    else:
-        init_flag = "-reconfigure"
-
     return (
-        f'terraform init {init_flag} '
+        f'terraform init -reconfigure '
         f'-backend-config="bucket={backend["bucket"]}" '
         f'-backend-config="key={state_key}" '
         f'-backend-config="region={backend["region"]}" '
