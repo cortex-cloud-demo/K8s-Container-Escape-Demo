@@ -7,8 +7,4 @@ terraform {
       version = "~> 5.0"
     }
   }
-
-  # S3 backend - bucket created by scripts/setup-tf-backend.sh
-  # Initialized dynamically via: terraform init -backend-config=...
-  backend "s3" {}
 }

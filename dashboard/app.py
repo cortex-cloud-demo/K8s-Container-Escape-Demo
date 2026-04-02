@@ -20,7 +20,6 @@ app = Flask(__name__)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TERRAFORM_DIR = os.path.join(PROJECT_ROOT, "terraform")
 TERRAFORM_LAMBDA_DIR = os.path.join(PROJECT_ROOT, "terraform-lambda")
-TERRAFORM_BACKEND_DIR = os.path.join(PROJECT_ROOT, "terraform-backend")
 K8S_DIR = os.path.join(PROJECT_ROOT, "k8s")
 ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")
 PLAYBOOK_DIR = os.path.join(PROJECT_ROOT, "playbook")
@@ -412,110 +411,27 @@ def api_kubeconfig_status():
     return jsonify(result)
 
 
-# ─── Terraform S3 Backend Helpers ────────────────────────────────────────────
+# ─── Terraform Helpers ───────────────────────────────────────────────────────
 
 
-def get_tf_backend_outputs(env=None):
-    """Get S3 backend bucket name, table name and region from terraform-backend outputs."""
-    if env is None:
-        env = os.environ.copy()
-        env.update(get_aws_env())
-    result = subprocess.run(
-        "terraform output -json",
-        shell=True, capture_output=True, text=True,
-        cwd=TERRAFORM_BACKEND_DIR, env=env, timeout=15,
-    )
-    if result.returncode == 0:
-        outputs = json.loads(result.stdout)
-        return {
-            "bucket": outputs.get("bucket_name", {}).get("value", ""),
-            "region": outputs.get("region", {}).get("value", "eu-west-3"),
-        }
-    return None
-
-
-def get_tf_backend_config(state_key):
-    """Build terraform init -backend-config args for S3 backend.
-
-    Reads bucket from terraform-backend outputs.
-    Uses -migrate-state on first run (local state exists), -reconfigure after.
-    """
-    env = os.environ.copy()
-    env.update(get_aws_env())
-    backend = get_tf_backend_outputs(env)
-    if not backend or not backend["bucket"]:
-        raise RuntimeError("S3 backend not provisioned. Deploy 'Terraform Backend' first.")
-
-    # Remove any stale lock file before init (prevents lock errors from interrupted runs)
-    lock_key = f"{state_key}.tflock"
-    unlock_cmd = f'aws s3 rm "s3://{backend["bucket"]}/{lock_key}" --region {backend["region"]} 2>/dev/null; '
-
-    return (
-        f'{unlock_cmd}'
-        f'terraform init -reconfigure '
-        f'-backend-config="bucket={backend["bucket"]}" '
-        f'-backend-config="key={state_key}" '
-        f'-backend-config="region={backend["region"]}" '
-        f'-backend-config="use_lockfile=true" '
-        f'-backend-config="encrypt=true"'
-    )
+def tf_init_cmd():
+    """Simple terraform init command (local backend)."""
+    return "terraform init -input=false"
 
 
 def tf_output(tf_dir, output_name, env=None):
-    """Run terraform output with proper S3 backend init.
+    """Run terraform output for a given module.
 
     Returns the output value as string, or empty string on failure.
     """
-    state_key = "eks/terraform.tfstate" if tf_dir == TERRAFORM_DIR else "lambda/terraform.tfstate"
-    try:
-        tf_init = get_tf_backend_config(state_key)
-    except RuntimeError:
-        return ""
     if env is None:
         env = os.environ.copy()
         env.update(get_aws_env())
     result = subprocess.run(
-        f'{tf_init} >/dev/null 2>&1; terraform output -raw {output_name}',
+        f'terraform output -raw {output_name}',
         shell=True, capture_output=True, text=True, cwd=tf_dir, env=env, timeout=30,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
-
-
-# ─── Terraform Backend ──────────────────────────────────────────────────────
-
-
-@app.route("/api/backend/apply", methods=["POST"])
-def backend_apply():
-    """Provision the S3 backend (bucket + DynamoDB) via Terraform."""
-    task_id = create_task(
-        "Provision S3 Backend",
-        f"terraform init -input=false && terraform apply -auto-approve -no-color {tf_var_region()}",
-        cwd=TERRAFORM_BACKEND_DIR,
-    )
-    return jsonify({"task_id": task_id})
-
-
-@app.route("/api/backend/destroy", methods=["POST"])
-def backend_destroy():
-    """Destroy the S3 backend resources."""
-    task_id = create_task(
-        "Destroy S3 Backend",
-        f"terraform init -input=false && terraform destroy -auto-approve -no-color {tf_var_region()}",
-        cwd=TERRAFORM_BACKEND_DIR,
-    )
-    return jsonify({"task_id": task_id})
-
-
-
-@app.route("/api/backend/status", methods=["GET"])
-def backend_status():
-    """Check if the S3 backend is provisioned."""
-    env = os.environ.copy()
-    env.update(get_aws_env())
-    backend = get_tf_backend_outputs(env)
-    if backend and backend["bucket"]:
-        return jsonify({"status": "provisioned", **backend})
-    return jsonify({"status": "not_provisioned"})
 
 
 # ─── Infrastructure ──────────────────────────────────────────────────────────
@@ -523,13 +439,9 @@ def backend_status():
 
 @app.route("/api/infra/plan", methods=["POST"])
 def infra_plan():
-    try:
-        tf_init = get_tf_backend_config("eks/terraform.tfstate")
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 400
     task_id = create_task(
         "Terraform Plan",
-        f"{tf_init} && terraform plan -no-color {tf_var_region()}",
+        f"{tf_init_cmd()} && terraform plan -no-color {tf_var_region()}",
         cwd=TERRAFORM_DIR,
     )
     return jsonify({"task_id": task_id})
@@ -537,13 +449,9 @@ def infra_plan():
 
 @app.route("/api/infra/apply", methods=["POST"])
 def infra_apply():
-    try:
-        tf_init = get_tf_backend_config("eks/terraform.tfstate")
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 400
     task_id = create_task(
         "Terraform Apply",
-        f"{tf_init} && terraform apply -auto-approve -no-color {tf_var_region()}",
+        f"{tf_init_cmd()} && terraform apply -auto-approve -no-color {tf_var_region()}",
         cwd=TERRAFORM_DIR,
     )
     return jsonify({"task_id": task_id})
@@ -551,14 +459,10 @@ def infra_apply():
 
 @app.route("/api/infra/destroy", methods=["POST"])
 def infra_destroy():
-    try:
-        tf_init = get_tf_backend_config("eks/terraform.tfstate")
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 400
     cmd = (
         "kubectl delete namespace vuln-app --ignore-not-found=true 2>/dev/null; "
         "kubectl delete clusterrolebinding vuln-app-cluster-admin --ignore-not-found=true 2>/dev/null; "
-        f"{tf_init} && terraform destroy -auto-approve -no-color {tf_var_region()}"
+        f"{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()}"
     )
     task_id = create_task("Terraform Destroy", cmd, cwd=TERRAFORM_DIR)
     return jsonify({"task_id": task_id})
@@ -569,9 +473,8 @@ def infra_outputs():
     try:
         env = os.environ.copy()
         env.update(get_aws_env())
-        tf_init = get_tf_backend_config("eks/terraform.tfstate")
         result = subprocess.run(
-            f"{tf_init} >/dev/null 2>&1; terraform output -json",
+            "terraform output -json",
             shell=True,
             capture_output=True,
             text=True,
@@ -590,13 +493,8 @@ def infra_outputs():
 
 @app.route("/api/image/build-push", methods=["POST"])
 def image_build_push():
-    try:
-        tf_init = get_tf_backend_config("eks/terraform.tfstate")
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 400
     cmd = f"""
 set -e
-cd terraform && {tf_init} >/dev/null 2>&1 && cd ..
 REGION=$(cd terraform && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ECR_URL=$(cd terraform && terraform output -raw ecr_repository_url 2>/dev/null)
@@ -631,13 +529,8 @@ def k8s_deploy():
     except Exception as e:
         return jsonify({"error": f"Failed to generate kubeconfig: {e}"}), 500
 
-    try:
-        tf_init = get_tf_backend_config("eks/terraform.tfstate")
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 400
     cmd = f"""
 set -e
-cd terraform && {tf_init} >/dev/null 2>&1 && cd ..
 REGION=$(cd terraform && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
 ECR_URL=$(cd terraform && terraform output -raw ecr_repository_url 2>/dev/null)
 
@@ -805,13 +698,9 @@ def lambda_apply():
     """Deploy the containment Lambda via Terraform (separate state)."""
     if not os.path.isdir(TERRAFORM_LAMBDA_DIR):
         return jsonify({"error": f"Terraform Lambda directory not found: {TERRAFORM_LAMBDA_DIR}"}), 400
-    try:
-        tf_init = get_tf_backend_config("lambda/terraform.tfstate")
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 400
     task_id = create_task(
         "Deploy Lambda",
-        f"echo '>>> Terraform Lambda Deploy starting...' && {tf_init} 2>&1 && terraform apply -auto-approve -no-color {tf_var_region()} 2>&1",
+        f"echo '>>> Terraform Lambda Deploy starting...' && {tf_init_cmd()} 2>&1 && terraform apply -auto-approve -no-color {tf_var_region()} 2>&1",
         cwd=TERRAFORM_LAMBDA_DIR,
     )
     return jsonify({"task_id": task_id})
@@ -820,13 +709,9 @@ def lambda_apply():
 @app.route("/api/lambda/destroy", methods=["POST"])
 def lambda_destroy():
     """Destroy the containment Lambda via Terraform."""
-    try:
-        tf_init = get_tf_backend_config("lambda/terraform.tfstate")
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 400
     task_id = create_task(
         "Destroy Lambda",
-        f"{tf_init} && terraform destroy -auto-approve -no-color {tf_var_region()}",
+        f"{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()}",
         cwd=TERRAFORM_LAMBDA_DIR,
     )
     return jsonify({"task_id": task_id})

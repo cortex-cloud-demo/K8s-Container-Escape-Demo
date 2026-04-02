@@ -121,8 +121,6 @@ function updateStepStatus(taskName, status) {
 
     // Update status badges for all sidebar cards
     const badgeMap = {
-        'Provision S3 Backend':     { id: 'backend-status',        ok: 'provisioned', run: 'provisioning...' },
-        'Destroy S3 Backend':       { id: 'backend-destroy-status', ok: 'destroyed',  run: 'destroying...' },
         'Terraform Plan':           { id: 'infra-status',          ok: 'planned',     run: 'planning...' },
         'Terraform Apply':          { id: 'infra-status',          ok: 'provisioned', run: 'applying...' },
         'Build & Push Image':       { id: 'build-status',          ok: 'built',       run: 'building...' },
@@ -1326,47 +1324,6 @@ function updateCortexStatus(status) {
 }
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
-
-// ─── S3 Backend ───────────────────────────────────────────────────────────────
-
-function backendApply() {
-    openTab('terminal');
-    termWriteHeader('Provision S3 Backend (bucket + DynamoDB)');
-    apiCall('/api/backend/apply');
-}
-
-function backendDestroy() {
-    if (!confirm('Destroy S3 backend? Make sure all infrastructure is destroyed first.')) return;
-    openTab('terminal');
-    termWriteHeader('Destroy S3 Backend');
-    apiCall('/api/backend/destroy');
-}
-
-
-function backendCheckStatus() {
-    fetch('/api/backend/status')
-        .then(r => r.json())
-        .then(data => {
-            const statusEl = document.getElementById('backend-status');
-            const panel = document.getElementById('backend-info-panel');
-            if (data.status === 'provisioned') {
-                statusEl.textContent = 'provisioned';
-                statusEl.className = 'step-status success';
-                panel.style.display = 'block';
-                document.getElementById('backend-info-bucket').textContent = data.bucket || '-';
-                document.getElementById('backend-info-table').textContent = data.table || '-';
-                document.getElementById('backend-info-region').textContent = data.region || '-';
-            } else {
-                statusEl.textContent = 'not provisioned';
-                statusEl.className = 'step-status error';
-                panel.style.display = 'none';
-            }
-        })
-        .catch(() => {
-            document.getElementById('backend-status').textContent = 'error';
-            document.getElementById('backend-status').className = 'step-status error';
-        });
-}
 
 // ─── Infrastructure ───────────────────────────────────────────────────────────
 

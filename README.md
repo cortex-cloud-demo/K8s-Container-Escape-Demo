@@ -15,7 +15,6 @@ Security demonstration: exploitation of a vulnerable containerized application l
 | Component | Description |
 |-----------|-------------|
 | **Application Dashboard** | Web UI to orchestrate the full demo (infra, attack, response, security radar) |
-| **Terraform Backend** | S3 bucket for remote state storage (shared across environments) |
 | **EKS Cluster** | AWS managed Kubernetes (v1.35) on AL2023 with GP3 volumes |
 | **ECR** | Container registry for the vulnerable image |
 | **Vulnerable App** | Spring Boot app with CVE-2022-22965 (Spring4Shell) on Tomcat 9 |
@@ -85,7 +84,6 @@ Each user has a single permission: `sts:AssumeRole` on its corresponding role.
 |---------|-------|-------------|
 | **EKS** | cluster `eks-escape-demo` | Cluster CRUD, node groups, access entries, addons |
 | **ECR** | repo `k8s-escape-demo/*` | Repository CRUD, image push/pull |
-| **S3** | bucket `k8s-escape-demo-tfstate-*` | Terraform state R/W |
 | **Lambda** | functions `k8s-escape-demo-*` | Function CRUD, invoke |
 | **IAM** | roles `k8s-escape-demo-*` | Create/manage project roles only |
 | **EC2/VPC** | region `eu-west-3` | Network infrastructure |
@@ -143,7 +141,6 @@ Configure admin AWS credentials to create the infrastructure:
 
 | Step | Card | Action |
 |------|------|--------|
-| **S3 Backend** | Terraform State Backend | Creates S3 bucket + versioning + encryption for remote TF state |
 | **EKS + ECR + VPC** | Infrastructure | Terraform: VPC, EKS v1.35, ECR, IAM, dashboard user + operator role (~15 min) |
 
 #### 2. Switch to Dashboard User (permanent credentials)
@@ -188,7 +185,7 @@ The **Terminal** tab shows live output. Use the command bar to execute commands 
 
 #### 6. Cleanup
 
-Destroy Lambda, EKS infrastructure, and S3 backend (in that order).
+Destroy Lambda and EKS infrastructure (in that order).
 
 ### Dashboard Tabs
 
@@ -340,15 +337,14 @@ Supported actions:
 
 ## Terraform State Management
 
-The project uses 3 separate Terraform configurations with S3 remote state:
+The project uses 2 separate Terraform configurations with local state:
 
-| Module | State Key | Resources |
-|--------|-----------|-----------|
-| `terraform-backend/` | Local only | S3 bucket (bootstraps remote state) |
-| `terraform/` | `eks/terraform.tfstate` | VPC, EKS, ECR, IAM, Dashboard user + operator role |
-| `terraform-lambda/` | `lambda/terraform.tfstate` | Lambda, IAM, EKS access entry, Cortex user + lambda invoker role |
+| Module | Resources |
+|--------|-----------|
+| `terraform/` | VPC, EKS, ECR, IAM, Dashboard user + operator role |
+| `terraform-lambda/` | Lambda, IAM, EKS access entry, Cortex user + lambda invoker role |
 
-The S3 bucket is created via `terraform-backend/` (local state) and used as remote backend by the other modules. State locking uses S3 native lock files (`use_lockfile = true`).
+State files (`terraform.tfstate`) are stored locally in each module directory and excluded from git via `.gitignore`.
 
 ## CLI Deployment (alternative)
 
@@ -373,7 +369,6 @@ kubectl delete namespace vuln-app
 kubectl delete clusterrolebinding vuln-app-cluster-admin
 cd terraform-lambda && terraform destroy -auto-approve
 cd terraform && terraform destroy -auto-approve
-cd terraform-backend && terraform destroy -auto-approve
 ```
 
 ## Misconfigurations Exploited
@@ -400,19 +395,15 @@ cd terraform-backend && terraform destroy -auto-approve
 │   └── static/
 │       ├── css/style.css                # Styles, playbook flow, kill chain, radar chart
 │       └── js/app.js                    # Tabs, polling, API calls, radar chart (Chart.js)
-├── terraform-backend/
-│   ├── main.tf                          # S3 bucket for remote TF state
-│   ├── outputs.tf                       # bucket_name, region
-│   └── variables.tf                     # region, project_name
 ├── terraform/
 │   ├── main.tf                          # VPC, EKS, ECR, IAM, node group
 │   ├── iam-dashboard.tf                 # Dashboard IAM User + Operator Role (scoped permissions)
-│   ├── backend.tf                       # S3 backend (dynamic config)
+│   ├── backend.tf                       # Provider config
 │   ├── outputs.tf                       # cluster_name, ecr_url, region, dashboard user + role outputs
 │   └── variables.tf
 ├── terraform-lambda/
 │   ├── main.tf                          # Lambda function, IAM, EKS access, Cortex user + invoker role
-│   ├── backend.tf                       # S3 backend (dynamic config)
+│   ├── backend.tf                       # Provider config
 │   ├── outputs.tf                       # lambda_name, lambda_arn, cortex user + invoker role outputs
 │   └── variables.tf                     # region, project_name, cortex_aws_account_id, cortex_external_id
 ├── lambda/containment/

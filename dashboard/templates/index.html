@@ -92,33 +92,6 @@
         <div class="section">
             <div class="section-title">Infrastructure</div>
 
-            <div class="step-card" id="card-backend">
-                <div class="step-header">
-                    <span class="step-number infra">S3</span>
-                    <span class="step-status" id="backend-status"></span>
-                </div>
-                <div class="step-name">Terraform State Backend</div>
-                <div class="step-desc">S3 bucket for remote TF state</div>
-                <div class="step-actions">
-                    <button class="btn btn-primary" onclick="backendApply()">Create / Check</button>
-                    <button class="btn btn-ghost" onclick="backendCheckStatus()">Status</button>
-                </div>
-                <div class="cluster-info" id="backend-info-panel" style="display:none;">
-                    <div class="cluster-info-row">
-                        <span class="cluster-info-label">Bucket</span>
-                        <span class="cluster-info-value" id="backend-info-bucket">-</span>
-                    </div>
-                    <div class="cluster-info-row">
-                        <span class="cluster-info-label">DynamoDB</span>
-                        <span class="cluster-info-value" id="backend-info-table">-</span>
-                    </div>
-                    <div class="cluster-info-row">
-                        <span class="cluster-info-label">Region</span>
-                        <span class="cluster-info-value" id="backend-info-region">-</span>
-                    </div>
-                </div>
-            </div>
-
             <div class="step-card" id="card-infra">
                 <div class="step-header">
                     <span class="step-number infra">INFRA</span>
@@ -518,17 +491,6 @@
                 </div>
             </div>
 
-            <div class="step-card">
-                <div class="step-header">
-                    <span class="step-number destroy">S3</span>
-                    <span class="step-status" id="backend-destroy-status"></span>
-                </div>
-                <div class="step-name">Destroy TF State Backend</div>
-                <div class="step-desc">Remove S3 bucket + DynamoDB (destroy infra first!)</div>
-                <div class="step-actions">
-                    <button class="btn btn-orange" onclick="backendDestroy()">Destroy Backend</button>
-                </div>
-            </div>
         </div>
 
         <!-- GitHub Repository -->
@@ -572,7 +534,7 @@
                             <span class="overview-phase-num phase-infra">1</span>
                             <span class="overview-phase-title">Infrastructure Setup</span>
                         </div>
-                        <p>Deploy an EKS cluster on AWS with Terraform using admin credentials (one-time bootstrap). Terraform creates a dedicated <strong>dashboard IAM User</strong> with permanent Access Key credentials and a scoped <strong>dashboard operator IAM Role</strong> with least-privilege permissions (EKS, ECR, S3, Lambda, VPC, IAM). After deployment, use the dashboard user's permanent credentials &mdash; the dashboard automatically assumes the operator role via STS AssumeRole.</p>
+                        <p>Deploy an EKS cluster on AWS with Terraform using admin credentials (one-time bootstrap). Terraform creates a dedicated <strong>dashboard IAM User</strong> with permanent Access Key credentials and a scoped <strong>dashboard operator IAM Role</strong> with least-privilege permissions (EKS, ECR, Lambda, VPC, IAM). After deployment, use the dashboard user's permanent credentials &mdash; the dashboard automatically assumes the operator role via STS AssumeRole. Terraform state is stored locally (no S3 backend needed).</p>
                         <p>Build a vulnerable Spring Boot application (CVE-2022-22965) as a Docker image and push it to ECR. Deploy it as a <strong>privileged pod</strong> with dangerous security settings:</p>
                         <ul>
                             <li><code>privileged: true</code> - full access to host devices</li>
@@ -657,7 +619,7 @@
                         <div class="arch-arrow">&rarr;</div>
                         <div class="arch-box arch-lambda">Operator Role<br><small>Scoped IAM</small></div>
                         <div class="arch-arrow">&rarr;</div>
-                        <div class="arch-box arch-lambda">EKS / ECR / S3<br><small>Least Privilege</small></div>
+                        <div class="arch-box arch-lambda">EKS / ECR / VPC<br><small>Least Privilege</small></div>
                     </div>
                     <div class="overview-arch-diagram" style="margin-top: 0.75rem;">
                         <div class="arch-box arch-cortex">Cortex XDR Agent<br><small>Detection</small></div>
@@ -882,6 +844,6 @@
 </div>
 
 
-<script src="/static/js/app.js?v=15"></script>
+<script src="/static/js/app.js?v=16"></script>
 </body>
 </html>
