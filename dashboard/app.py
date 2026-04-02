@@ -46,18 +46,33 @@ cortex_settings = {
 
 
 def get_aws_env():
-    """Build AWS credential environment variables."""
-    env = {"KUBECONFIG": KUBECONFIG_PATH}
+    """Build AWS credential environment variables.
+
+    Explicitly sets all AWS env vars to prevent fallback to ~/.aws/credentials
+    or ~/.aws/config which can cause credential mixing between accounts.
+    """
+    env = {
+        "KUBECONFIG": KUBECONFIG_PATH,
+        # Prevent AWS SDK from reading ~/.aws/credentials and ~/.aws/config
+        "AWS_SHARED_CREDENTIALS_FILE": "/dev/null",
+        "AWS_CONFIG_FILE": "/dev/null",
+    }
     if aws_credentials["aws_access_key_id"]:
         env["AWS_ACCESS_KEY_ID"] = aws_credentials["aws_access_key_id"]
     if aws_credentials["aws_secret_access_key"]:
         env["AWS_SECRET_ACCESS_KEY"] = aws_credentials["aws_secret_access_key"]
-    if aws_credentials["aws_session_token"]:
-        env["AWS_SESSION_TOKEN"] = aws_credentials["aws_session_token"]
+    # Always set session token (empty string clears any inherited value)
+    env["AWS_SESSION_TOKEN"] = aws_credentials.get("aws_session_token", "")
     if aws_credentials["aws_region"]:
         env["AWS_DEFAULT_REGION"] = aws_credentials["aws_region"]
         env["AWS_REGION"] = aws_credentials["aws_region"]
     return env
+
+
+def tf_var_region():
+    """Return -var='region=...' flag using the configured AWS region."""
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+    return f'-var="region={region}"'
 
 
 def generate_kubeconfig(cluster_name, region):
@@ -431,7 +446,12 @@ def get_tf_backend_config(state_key):
     if not backend or not backend["bucket"]:
         raise RuntimeError("S3 backend not provisioned. Deploy 'Terraform Backend' first.")
 
+    # Remove any stale lock file before init (prevents lock errors from interrupted runs)
+    lock_key = f"{state_key}.tflock"
+    unlock_cmd = f'aws s3 rm "s3://{backend["bucket"]}/{lock_key}" --region {backend["region"]} 2>/dev/null; '
+
     return (
+        f'{unlock_cmd}'
         f'terraform init -reconfigure '
         f'-backend-config="bucket={backend["bucket"]}" '
         f'-backend-config="key={state_key}" '
@@ -469,7 +489,7 @@ def backend_apply():
     """Provision the S3 backend (bucket + DynamoDB) via Terraform."""
     task_id = create_task(
         "Provision S3 Backend",
-        "terraform init -input=false && terraform apply -auto-approve -no-color",
+        f"terraform init -input=false && terraform apply -auto-approve -no-color {tf_var_region()}",
         cwd=TERRAFORM_BACKEND_DIR,
     )
     return jsonify({"task_id": task_id})
@@ -480,10 +500,11 @@ def backend_destroy():
     """Destroy the S3 backend resources."""
     task_id = create_task(
         "Destroy S3 Backend",
-        "terraform init -input=false && terraform destroy -auto-approve -no-color",
+        f"terraform init -input=false && terraform destroy -auto-approve -no-color {tf_var_region()}",
         cwd=TERRAFORM_BACKEND_DIR,
     )
     return jsonify({"task_id": task_id})
+
 
 
 @app.route("/api/backend/status", methods=["GET"])
@@ -508,7 +529,7 @@ def infra_plan():
         return jsonify({"error": str(e)}), 400
     task_id = create_task(
         "Terraform Plan",
-        f"{tf_init} && terraform plan -no-color",
+        f"{tf_init} && terraform plan -no-color {tf_var_region()}",
         cwd=TERRAFORM_DIR,
     )
     return jsonify({"task_id": task_id})
@@ -522,7 +543,7 @@ def infra_apply():
         return jsonify({"error": str(e)}), 400
     task_id = create_task(
         "Terraform Apply",
-        f"{tf_init} && terraform apply -auto-approve -no-color",
+        f"{tf_init} && terraform apply -auto-approve -no-color {tf_var_region()}",
         cwd=TERRAFORM_DIR,
     )
     return jsonify({"task_id": task_id})
@@ -537,7 +558,7 @@ def infra_destroy():
     cmd = (
         "kubectl delete namespace vuln-app --ignore-not-found=true 2>/dev/null; "
         "kubectl delete clusterrolebinding vuln-app-cluster-admin --ignore-not-found=true 2>/dev/null; "
-        f"{tf_init} && terraform destroy -auto-approve -no-color"
+        f"{tf_init} && terraform destroy -auto-approve -no-color {tf_var_region()}"
     )
     task_id = create_task("Terraform Destroy", cmd, cwd=TERRAFORM_DIR)
     return jsonify({"task_id": task_id})
@@ -576,7 +597,7 @@ def image_build_push():
     cmd = f"""
 set -e
 cd terraform && {tf_init} >/dev/null 2>&1 && cd ..
-REGION=$(cd terraform && terraform output -raw region 2>/dev/null || echo "eu-west-3")
+REGION=$(cd terraform && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ECR_URL=$(cd terraform && terraform output -raw ecr_repository_url 2>/dev/null)
 
@@ -617,7 +638,7 @@ def k8s_deploy():
     cmd = f"""
 set -e
 cd terraform && {tf_init} >/dev/null 2>&1 && cd ..
-REGION=$(cd terraform && terraform output -raw region 2>/dev/null || echo "eu-west-3")
+REGION=$(cd terraform && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
 ECR_URL=$(cd terraform && terraform output -raw ecr_repository_url 2>/dev/null)
 
 echo "==> Kubeconfig generated with embedded AWS credentials"
@@ -790,7 +811,7 @@ def lambda_apply():
         return jsonify({"error": str(e)}), 400
     task_id = create_task(
         "Deploy Lambda",
-        f"echo '>>> Terraform Lambda Deploy starting...' && {tf_init} 2>&1 && terraform apply -auto-approve -no-color 2>&1",
+        f"echo '>>> Terraform Lambda Deploy starting...' && {tf_init} 2>&1 && terraform apply -auto-approve -no-color {tf_var_region()} 2>&1",
         cwd=TERRAFORM_LAMBDA_DIR,
     )
     return jsonify({"task_id": task_id})
@@ -805,7 +826,7 @@ def lambda_destroy():
         return jsonify({"error": str(e)}), 400
     task_id = create_task(
         "Destroy Lambda",
-        f"{tf_init} && terraform destroy -auto-approve -no-color",
+        f"{tf_init} && terraform destroy -auto-approve -no-color {tf_var_region()}",
         cwd=TERRAFORM_LAMBDA_DIR,
     )
     return jsonify({"task_id": task_id})
@@ -846,7 +867,7 @@ def test_lambda():
             f"echo 'Invoking Lambda: {lambda_name}...' && "
             f"aws lambda invoke --function-name {lambda_name} "
             f"--payload '{payload}' --cli-binary-format raw-in-base64-out "
-            f"--region eu-west-3 "
+            f"--region {aws_credentials.get('aws_region') or 'eu-west-3'} "
             f"/tmp/lambda_response.json 2>&1 && "
             f"echo '' && echo '--- Lambda Response ---' && "
             f"python3 -m json.tool /tmp/lambda_response.json"
@@ -1250,7 +1271,7 @@ def cortex_json_request(api_path, json_data):
                 "status": "ok",
                 "message": f"Request to {api_path} succeeded",
                 "http_status": resp.status,
-                "response": resp_body[:1000],
+                "response": resp_body,
             }, 200
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")[:500]
@@ -1490,6 +1511,535 @@ def deploy_all_to_cortex():
         "status": "ok" if all_ok else "partial",
         "message": f"{'All' if all_ok else 'Some'} objects deployed to Cortex",
         "results": results,
+    })
+
+
+# ─── Cortex Policy Import ────────────────────────────────────────────────────
+
+CORTEX_POLICY_DIR = os.path.join(PROJECT_ROOT, "cortex-policy")
+
+CORTEX_POLICY_OBJECTS = [
+    {
+        "key": "policy_rules",
+        "file": "policy_rules_k8s_cortex-cloud-demo.export",
+        "name": "k8s_cortex-cloud-demo",
+        "label": "Policy Rules",
+    },
+    {
+        "key": "profiles",
+        "file": "profiles_k8s_cortex-cloud-demo.export",
+        "name": "k8s_cortex-cloud-demo",
+        "label": "Profiles",
+    },
+]
+
+CORTEX_POLICY_GROUP = "eks-k8s-container-escape-demo"
+CORTEX_POLICY_NAME = "k8s_cortex-cloud-demo"
+
+
+@app.route("/api/cortex/policy-check", methods=["GET"])
+def cortex_policy_check():
+    """Check if Cortex policy objects exist on the configured tenant."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    results = []
+
+    # 1. Check endpoint group via endpoints API
+    try:
+        resp, code = cortex_json_request(
+            "/public_api/v1/endpoints/get_endpoint",
+            {"request_data": {
+                "search_from": 0, "search_to": 5,
+                "filters": [{"field": "group_name", "operator": "in", "value": [CORTEX_POLICY_GROUP]}],
+            }},
+        )
+        if resp.get("status") == "ok":
+            data = json.loads(resp.get("response", "{}"))
+            reply = data.get("reply", {})
+            count = reply.get("result_count", 0) if isinstance(reply, dict) else 0
+            endpoints = reply.get("endpoints", []) if isinstance(reply, dict) else []
+            results.append({
+                "type": "Endpoint Group",
+                "name": CORTEX_POLICY_GROUP,
+                "exists": count > 0,
+                "detail": f"{count} endpoint(s)",
+            })
+        else:
+            results.append({"type": "Endpoint Group", "name": CORTEX_POLICY_GROUP, "exists": None, "detail": resp.get("message", "")})
+    except Exception as e:
+        results.append({"type": "Endpoint Group", "name": CORTEX_POLICY_GROUP, "exists": None, "detail": str(e)})
+
+    # 2. Check prevention policy assignment on endpoints
+    try:
+        resp, code = cortex_json_request(
+            "/public_api/v1/endpoints/get_endpoint",
+            {"request_data": {"search_from": 0, "search_to": 100}},
+        )
+        if resp.get("status") == "ok":
+            data = json.loads(resp.get("response", "{}"))
+            reply = data.get("reply", {})
+            endpoints = reply.get("endpoints", []) if isinstance(reply, dict) else []
+            matched = [e for e in endpoints if CORTEX_POLICY_NAME in str(e.get("policy_name", ""))]
+            results.append({
+                "type": "Prevention Policy",
+                "name": CORTEX_POLICY_NAME,
+                "exists": len(matched) > 0,
+                "detail": f"assigned to {len(matched)}/{len(endpoints)} endpoint(s)",
+            })
+        else:
+            results.append({"type": "Prevention Policy", "name": CORTEX_POLICY_NAME, "exists": None, "detail": resp.get("message", "")})
+    except Exception as e:
+        results.append({"type": "Prevention Policy", "name": CORTEX_POLICY_NAME, "exists": None, "detail": str(e)})
+
+    # 3. Check local export files
+    for obj in CORTEX_POLICY_OBJECTS:
+        fpath = os.path.join(CORTEX_POLICY_DIR, obj["file"])
+        exists = os.path.isfile(fpath)
+        size = os.path.getsize(fpath) if exists else 0
+        results.append({
+            "type": f"Local: {obj['label']}",
+            "name": obj["file"],
+            "exists": exists,
+            "detail": f"{size} bytes" if exists else "file not found",
+        })
+
+    # Check group TSV
+    group_files = [f for f in os.listdir(CORTEX_POLICY_DIR) if f.endswith(".tsv")] if os.path.isdir(CORTEX_POLICY_DIR) else []
+    if group_files:
+        fpath = os.path.join(CORTEX_POLICY_DIR, group_files[0])
+        results.append({
+            "type": "Local: Endpoint Group",
+            "name": group_files[0],
+            "exists": True,
+            "detail": f"{os.path.getsize(fpath)} bytes",
+        })
+
+    return jsonify({"status": "ok", "results": results})
+
+
+@app.route("/api/cortex/policy-import", methods=["POST"])
+def cortex_policy_import():
+    """Import Cortex policy objects from local export files."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    base_url = cortex_settings["base_url"].rstrip("/")
+    api_key = cortex_settings["api_key"]
+    api_key_id = cortex_settings["api_key_id"]
+
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    results = []
+
+    # Import policy rules and profiles via multipart upload
+    import_endpoints = {
+        "policy_rules": "/public_api/v1/policy/import_policy_rules",
+        "profiles": "/public_api/v1/policy/import_profiles",
+    }
+
+    for obj in CORTEX_POLICY_OBJECTS:
+        fpath = os.path.join(CORTEX_POLICY_DIR, obj["file"])
+        if not os.path.isfile(fpath):
+            results.append({"type": obj["label"], "status": "error", "message": f"File not found: {obj['file']}"})
+            continue
+
+        with open(fpath, "rb") as f:
+            file_data = f.read()
+
+        api_path = import_endpoints.get(obj["key"], "")
+        url = f"{base_url}{api_path}"
+
+        # Build multipart body manually (no requests library)
+        boundary = f"----CortexImport{uuid.uuid4().hex[:12]}"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{obj["file"]}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n"
+        ).encode("utf-8") + file_data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        headers = {
+            "Authorization": api_key,
+            "x-xdr-auth-id": api_key_id,
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+        }
+
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
+                resp_body = resp.read().decode("utf-8", errors="replace")
+                results.append({
+                    "type": obj["label"],
+                    "status": "ok",
+                    "http_code": resp.status,
+                    "message": f"Imported successfully",
+                    "response": resp_body[:500],
+                })
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")[:500]
+            results.append({
+                "type": obj["label"],
+                "status": "error",
+                "http_code": e.code,
+                "message": f"HTTP {e.code}: {err_body}",
+            })
+        except Exception as e:
+            results.append({
+                "type": obj["label"],
+                "status": "error",
+                "message": str(e),
+            })
+
+    overall = "ok" if all(r.get("status") == "ok" for r in results) else "partial" if any(r.get("status") == "ok" for r in results) else "error"
+    return jsonify({"status": overall, "results": results})
+
+
+# ─── XDR Agent for Kubernetes ────────────────────────────────────────────────
+
+# In-memory store for XDR distribution
+xdr_distribution = {
+    "distribution_id": "",
+    "status": "",
+}
+
+
+@app.route("/api/cortex/xdr-k8s-versions", methods=["GET"])
+def xdr_k8s_versions():
+    """Get available agent versions from Cortex API."""
+    api_path = "/public_api/v1/distributions/get_versions"
+    result, status_code = cortex_json_request(api_path, {})
+    if result.get("status") == "ok":
+        try:
+            resp = json.loads(result.get("response", "{}"))
+            linux_versions = resp.get("reply", {}).get("linux", [])
+            return jsonify({"status": "ok", "versions": linux_versions})
+        except Exception:
+            return jsonify({"status": "ok", "versions": [], "raw": result.get("response", "")[:500]})
+    return jsonify(result), status_code
+
+
+@app.route("/api/cortex/xdr-k8s-deploy", methods=["POST"])
+def xdr_k8s_deploy():
+    """Create or reuse a Cortex XDR Kubernetes distribution (agent installer).
+
+    Flow:
+    1. Check if a K8s distribution already exists via get_distributions
+    2. If exists with latest agent version, reuse it
+    3. Otherwise, get latest agent version and create a new distribution
+    """
+    # Get cluster name from terraform outputs
+    try:
+        env = os.environ.copy()
+        env.update(get_aws_env())
+        cluster_name = tf_output(TERRAFORM_DIR, "cluster_name", env) or "eks-escape-demo"
+    except Exception:
+        cluster_name = "eks-escape-demo"
+
+    dist_name = request.json.get("name", f"K8s-Container-Escape-Demo-{cluster_name}")
+    agent_version = request.json.get("agent_version", "")
+    tags = ["K8s-Container-Escape-Demo", cluster_name]
+
+    # Step 1: Get latest agent version
+    latest_version = ""
+    ver_result, ver_status = cortex_json_request("/public_api/v1/distributions/get_versions", {})
+    if ver_result.get("status") == "ok":
+        try:
+            resp = json.loads(ver_result.get("response", "{}"))
+            linux_versions = resp.get("reply", {}).get("linux", [])
+            if linux_versions:
+                latest_version = linux_versions[-1]
+        except Exception:
+            pass
+
+    if not agent_version:
+        agent_version = latest_version
+
+    # Step 2: Check for existing K8s distributions
+    search_payload = {
+        "request_data": {
+            "search_from": 0,
+            "search_to": 100,
+            "sort": {"field": "name", "keyword": "asc"},
+            "filters": [
+                {"field": "package_type", "operator": "eq", "value": "kubernetes"},
+                {"field": "name", "operator": "contains", "value": "K8s-Container-Escape-Demo"},
+            ],
+        }
+    }
+
+    existing_dist = None
+    list_result, list_status = cortex_json_request(
+        "/public_api/v1/distributions/get_distributions", search_payload
+    )
+    if list_result.get("status") == "ok":
+        try:
+            resp = json.loads(list_result.get("response", "{}"))
+            distributions = resp.get("reply", {}).get("data", [])
+            for dist in distributions:
+                dist_status = dist.get("status", "")
+                dist_ver = dist.get("agent_version", "")
+                # Reuse if completed and matches latest version
+                if dist_status == "completed" and dist_ver == agent_version:
+                    existing_dist = dist
+                    break
+                # Also reuse if still in progress
+                if dist_status == "in_progress":
+                    existing_dist = dist
+                    break
+        except Exception:
+            pass
+
+    if existing_dist:
+        dist_id = existing_dist["distribution_id"]
+        xdr_distribution["distribution_id"] = dist_id
+        xdr_distribution["status"] = existing_dist.get("status", "")
+        return jsonify({
+            "status": "exists",
+            "message": f"Reusing existing distribution: {existing_dist.get('name', dist_id)}",
+            "distribution_id": dist_id,
+            "agent_version": existing_dist.get("agent_version", ""),
+            "cluster_name": cluster_name,
+            "distribution_status": existing_dist.get("status", ""),
+            "tags": existing_dist.get("tags", []),
+        })
+
+    # Step 3: Create a new distribution
+    create_payload = {
+        "request_data": {
+            "name": dist_name,
+            "package_type": "kubernetes",
+            "agent_version": agent_version,
+            "deployment_platform": "standard",
+            "default_namespace": "cortex-xdr",
+            "cluster_name": cluster_name,
+            "run_on_master_node": True,
+            "run_on_all_nodes": True,
+            "description": f"XDR agent for K8s Container Escape Demo - cluster {cluster_name}",
+            "endpoint_tags": tags,
+        }
+    }
+
+    result, status_code = cortex_json_request(
+        "/public_api/v1/distributions/create", create_payload
+    )
+
+    if result.get("status") == "ok":
+        try:
+            resp = json.loads(result.get("response", "{}"))
+            dist_id = resp.get("reply", {}).get("distribution_id", "")
+            xdr_distribution["distribution_id"] = dist_id
+            xdr_distribution["status"] = "pending"
+            return jsonify({
+                "status": "ok",
+                "message": f"Distribution created: {dist_name}",
+                "distribution_id": dist_id,
+                "agent_version": agent_version,
+                "cluster_name": cluster_name,
+                "tags": tags,
+            })
+        except Exception:
+            return jsonify({
+                "status": "ok",
+                "message": "Distribution created (could not parse response)",
+                "raw": result.get("response", "")[:500],
+            })
+
+    return jsonify(result), status_code
+
+
+@app.route("/api/cortex/xdr-k8s-status", methods=["GET"])
+def xdr_k8s_status():
+    """Check the status of the XDR K8s distribution."""
+    dist_id = request.args.get("distribution_id", "") or xdr_distribution.get("distribution_id", "")
+    if not dist_id:
+        return jsonify({"status": "error", "message": "No distribution ID. Create one first."}), 400
+
+    payload = {"request_data": {"distribution_id": dist_id}}
+    result, status_code = cortex_json_request(
+        "/public_api/v1/distributions/get_status", payload
+    )
+
+    if result.get("status") == "ok":
+        try:
+            resp = json.loads(result.get("response", "{}"))
+            dist_status = resp.get("reply", {}).get("status", "unknown")
+            xdr_distribution["status"] = dist_status
+            return jsonify({
+                "status": "ok",
+                "distribution_id": dist_id,
+                "distribution_status": dist_status,
+            })
+        except Exception:
+            return jsonify({"status": "ok", "raw": result.get("response", "")[:500]})
+
+    return jsonify(result), status_code
+
+
+@app.route("/api/cortex/xdr-k8s-agent-status", methods=["GET"])
+def xdr_k8s_agent_status():
+    """Check the XDR agent installation status on the K8s cluster via kubectl."""
+    env = os.environ.copy()
+    env.update(get_aws_env())
+
+    try:
+        # Check for XDR daemonset/pods across all namespaces
+        result = subprocess.run(
+            ["kubectl", "get", "pods", "-A", "-l", "app=cortex-xdr",
+             "-o", "jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.phase}{'\\n'}{end}"],
+            capture_output=True, text=True, env=env, timeout=15
+        )
+        pods_output = result.stdout.strip()
+
+        if not pods_output:
+            # Try broader search
+            result2 = subprocess.run(
+                ["kubectl", "get", "pods", "-A", "--no-headers"],
+                capture_output=True, text=True, env=env, timeout=15
+            )
+            xdr_lines = [l for l in result2.stdout.strip().split("\n") if l and "xdr" in l.lower()]
+            pods_output = "\n".join(xdr_lines) if xdr_lines else ""
+
+        if not pods_output:
+            return jsonify({"status": "ok", "installed": False, "message": "No XDR agent pods found", "pods": []})
+
+        pods = []
+        for line in pods_output.strip().split("\n"):
+            parts = line.split()
+            if len(parts) >= 2:
+                pods.append({"name": parts[0], "phase": parts[1]})
+            elif parts:
+                pods.append({"name": parts[0], "phase": "unknown"})
+
+        all_running = all(p["phase"] == "Running" for p in pods)
+        return jsonify({
+            "status": "ok",
+            "installed": True,
+            "agent_status": "Running" if all_running else "Pending",
+            "pods_total": len(pods),
+            "pods_running": sum(1 for p in pods if p["phase"] == "Running"),
+            "pods": pods,
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"status": "error", "message": "kubectl timed out"}), 504
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/cortex/xdr-k8s-install", methods=["POST"])
+def xdr_k8s_install():
+    """Download the distribution YAML from Cortex and apply to the EKS cluster.
+    Uses the same payload as the Cortex console download:
+    POST /public_api/v1/distributions/get_dist_url with
+    {"distribution_id": "...", "package_type": "yaml", "cpu_type": null}
+    """
+    dist_id = request.json.get("distribution_id", "") or xdr_distribution.get("distribution_id", "")
+    if not dist_id:
+        return jsonify({"status": "error", "message": "No distribution ID. Create one first."}), 400
+
+    base_url = cortex_settings.get("base_url", "")
+    api_key = cortex_settings.get("api_key", "")
+    api_key_id = cortex_settings.get("api_key_id", "")
+
+    if not base_url or not api_key or not api_key_id:
+        return jsonify({"status": "error", "message": "Missing Cortex credentials. Configure them in Settings."}), 400
+
+    # Everything in a single shell task for full visibility
+    cmd = f"""set -e
+echo "=================================================="
+echo "  XDR Agent for Kubernetes - Install"
+echo "=================================================="
+echo ""
+
+DIST_ID="{dist_id}"
+XDR_URL="{base_url}"
+AUTH_ID="{api_key_id}"
+AUTH_TOKEN="{api_key}"
+
+# Step 1: Get distribution download URL
+echo "==> [1/3] Getting distribution download URL..."
+echo "    Distribution ID: $DIST_ID"
+
+RESPONSE=$(curl --silent --location "$XDR_URL/public_api/v1/distributions/get_dist_url" \
+  --header "Accept: application/json" \
+  --header "x-xdr-auth-id: $AUTH_ID" \
+  --header "Authorization: $AUTH_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{{"request_data": {{"distribution_id": "'$DIST_ID'", "package_type": "yaml"}}}}')
+
+echo "    API Response: $RESPONSE"
+
+# Extract distribution_url
+DIST_URL=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('reply',{{}}).get('distribution_url',''))" 2>/dev/null || echo "")
+
+if [ -z "$DIST_URL" ] || [ "$DIST_URL" = "None" ]; then
+    echo "[FAIL] Could not extract distribution_url from response."
+    echo "    Full response: $RESPONSE"
+    exit 1
+fi
+
+echo "    Download URL: $DIST_URL"
+echo ""
+
+# Step 2: Download the YAML from the distribution URL
+echo "==> [2/3] Downloading K8s YAML..."
+HTTP_CODE=$(curl --silent --location --output /tmp/xdr-agent-k8s.yaml --write-out "%{{http_code}}" \
+  --header "x-xdr-auth-id: $AUTH_ID" \
+  --header "Authorization: $AUTH_TOKEN" \
+  "$DIST_URL")
+
+FILE_SIZE=$(wc -c < /tmp/xdr-agent-k8s.yaml | tr -d ' ')
+echo "    HTTP Status: $HTTP_CODE"
+echo "    Downloaded: /tmp/xdr-agent-k8s.yaml ($FILE_SIZE bytes)"
+
+if [ "$HTTP_CODE" != "200" ]; then
+    echo "[FAIL] Download failed (HTTP $HTTP_CODE):"
+    cat /tmp/xdr-agent-k8s.yaml
+    exit 1
+fi
+
+# Check if the response is an error (JSON instead of YAML)
+if head -1 /tmp/xdr-agent-k8s.yaml | grep -q "err_code"; then
+    echo "[FAIL] Cortex returned an error instead of YAML:"
+    cat /tmp/xdr-agent-k8s.yaml
+    exit 1
+fi
+
+echo ""
+echo "    YAML preview:"
+echo "    ---"
+head -30 /tmp/xdr-agent-k8s.yaml | sed 's/^/    /'
+echo ""
+echo "    ... (truncated)"
+echo ""
+
+# Step 3: Apply to cluster
+echo "==> [3/3] Applying XDR agent to EKS cluster..."
+kubectl apply -f /tmp/xdr-agent-k8s.yaml
+echo ""
+
+echo "==> Waiting for XDR agent pods to start (15s)..."
+sleep 15
+
+echo ""
+echo "==> XDR agent pods status:"
+kubectl get pods -A -l app=cortex-xdr -o wide 2>/dev/null || kubectl get pods -A | grep -i xdr || echo "(no XDR pods found yet)"
+echo ""
+kubectl get daemonset -A 2>/dev/null | head -5 || true
+echo ""
+
+echo "=================================================="
+echo "  XDR Agent deployment complete!"
+echo "=================================================="
+"""
+
+    task_id = create_task("XDR Agent: Install on K8s", cmd)
+    return jsonify({
+        "status": "ok",
+        "task_id": task_id,
+        "distribution_id": dist_id,
     })
 
 

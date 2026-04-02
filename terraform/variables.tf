@@ -27,3 +27,15 @@ variable "node_instance_type" {
   description = "EC2 instance type for EKS nodes"
   default     = "t3.medium"
 }
+
+variable "dashboard_trusted_principal" {
+  description = "IAM ARN allowed to assume the dashboard operator role (default: same account root)"
+  type        = string
+  default     = ""
+}
+
+variable "dashboard_external_id" {
+  description = "External ID for dashboard operator role assumption (optional, leave empty to disable)"
+  type        = string
+  default     = ""
+}

@@ -18,8 +18,10 @@ description: |-
   10. Complete
 
   ## Authentication
-  - AWS credentials passed as playbook inputs (auto-populated from dashboard settings)
-  - Lambda function invoked via SigV4-signed HTTP requests (no AWS integration required)
+  - AWS credentials (Access Key, Secret Key, Session Token) are always required as base credentials
+  - If AssumeRoleARN is provided: credentials are used to STS AssumeRole into a scoped role (least-privilege)
+  - If AssumeRoleARN is empty: credentials are used directly to invoke Lambda
+  - Same flow as the dashboard operator role pattern
   - Cluster info extracted from K8sEscape context (task #1 output)
 contentitemexportablefields:
   contentitemfields:
@@ -147,8 +149,8 @@ tasks:
       name: "Enrichment - Collect Evidence via Lambda"
       description: |-
         Invoke the K8s Containment Lambda to collect forensic evidence.
-        Uses AWS credentials from playbook inputs (auto-populated from dashboard)
-        and cluster info from K8sEscape context (task #1 output).
+        Assumes IAM Role via STS (cross-account trust) then invokes Lambda.
+        Cluster info from K8sEscape context (task #1 output).
 
         Evidence collected:
         - Pod configuration (privileged, hostPID, hostNetwork, hostPath mounts)
@@ -165,6 +167,10 @@ tasks:
       '#none#':
         - "3"
     scriptarguments:
+      assume_role_arn:
+        simple: ${inputs.AssumeRoleARN}
+      external_id:
+        simple: ${inputs.ExternalID}
       aws_access_key_id:
         simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
@@ -320,6 +326,10 @@ tasks:
       '#none#':
         - "5"
     scriptarguments:
+      assume_role_arn:
+        simple: ${inputs.AssumeRoleARN}
+      external_id:
+        simple: ${inputs.ExternalID}
       aws_access_key_id:
         simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
@@ -375,6 +385,10 @@ tasks:
       '#none#':
         - "6"
     scriptarguments:
+      assume_role_arn:
+        simple: ${inputs.AssumeRoleARN}
+      external_id:
+        simple: ${inputs.ExternalID}
       aws_access_key_id:
         simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
@@ -428,6 +442,10 @@ tasks:
       '#none#':
         - "7"
     scriptarguments:
+      assume_role_arn:
+        simple: ${inputs.AssumeRoleARN}
+      external_id:
+        simple: ${inputs.ExternalID}
       aws_access_key_id:
         simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
@@ -481,6 +499,10 @@ tasks:
       '#none#':
         - "8"
     scriptarguments:
+      assume_role_arn:
+        simple: ${inputs.AssumeRoleARN}
+      external_id:
+        simple: ${inputs.ExternalID}
       aws_access_key_id:
         simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
@@ -536,6 +558,10 @@ tasks:
       '#none#':
         - "9"
     scriptarguments:
+      assume_role_arn:
+        simple: ${inputs.AssumeRoleARN}
+      external_id:
+        simple: ${inputs.ExternalID}
       aws_access_key_id:
         simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
@@ -591,6 +617,10 @@ tasks:
       '#none#':
         - "10"
     scriptarguments:
+      assume_role_arn:
+        simple: ${inputs.AssumeRoleARN}
+      external_id:
+        simple: ${inputs.ExternalID}
       aws_access_key_id:
         simple: ${inputs.AWSAccessKeyID}
       aws_secret_access_key:
@@ -670,19 +700,31 @@ inputs:
     value:
       simple: ""
     required: true
-    description: AWS Access Key ID for Lambda invocation (auto-populated from dashboard settings)
+    description: AWS Access Key ID (base credentials for STS AssumeRole or direct Lambda invocation)
     playbookInputQuery: null
   - key: AWSSecretAccessKey
     value:
       simple: ""
     required: true
-    description: AWS Secret Access Key for Lambda invocation (auto-populated from dashboard settings)
+    description: AWS Secret Access Key (base credentials)
     playbookInputQuery: null
   - key: AWSSessionToken
     value:
       simple: ""
     required: false
-    description: AWS Session Token for temporary/STS credentials (auto-populated from dashboard settings)
+    description: AWS Session Token (if using temporary/STS credentials)
+    playbookInputQuery: null
+  - key: AssumeRoleARN
+    value:
+      simple: ""
+    required: false
+    description: "IAM Role ARN to assume for least-privilege Lambda invocation (optional - if empty, base credentials are used directly)"
+    playbookInputQuery: null
+  - key: ExternalID
+    value:
+      simple: ""
+    required: false
+    description: External ID for STS AssumeRole (optional, required if the role trust policy enforces it)
     playbookInputQuery: null
   - key: Region
     value:
@@ -701,10 +743,18 @@ inputSections:
       - AWSAccessKeyID
       - AWSSecretAccessKey
       - AWSSessionToken
+    name: AWS Credentials
+    description: Base AWS credentials (used to AssumeRole or invoke Lambda directly).
+  - inputs:
+      - AssumeRoleARN
+      - ExternalID
+    name: AssumeRole (optional, recommended)
+    description: If provided, base credentials are used to AssumeRole into this scoped role before invoking Lambda.
+  - inputs:
       - Region
       - LambdaFunction
-    name: AWS Configuration
-    description: AWS credentials and Lambda function configuration for containment actions.
+    name: Lambda Configuration
+    description: AWS region and Lambda function name.
 outputSections:
   - outputs:
       - K8sContainment.Results

@@ -26,3 +26,27 @@ output "account_id" {
   value = data.aws_caller_identity.current.account_id
 }
 
+output "dashboard_operator_role_arn" {
+  value       = aws_iam_role.dashboard_operator.arn
+  description = "IAM Role ARN for the dashboard operator (assume this role instead of using admin credentials)"
+}
+
+output "dashboard_operator_role_name" {
+  value = aws_iam_role.dashboard_operator.name
+}
+
+output "dashboard_user_name" {
+  value = aws_iam_user.dashboard.name
+}
+
+output "dashboard_user_access_key_id" {
+  value       = aws_iam_access_key.dashboard.id
+  description = "Permanent Access Key ID for the dashboard user (paste in Dashboard Settings)"
+}
+
+output "dashboard_user_secret_access_key" {
+  value       = aws_iam_access_key.dashboard.secret
+  sensitive   = true
+  description = "Secret Access Key for the dashboard user (use: terraform output -raw dashboard_user_secret_access_key)"
+}
+

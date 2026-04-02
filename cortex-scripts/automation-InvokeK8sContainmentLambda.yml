@@ -3,9 +3,11 @@ commonfields:
   version: -1
 name: InvokeK8sContainmentLambda
 comment: |-
-  Invokes the K8s Containment AWS Lambda function using provided AWS credentials.
-  Takes cluster information from K8sEscape context and AWS credentials as inputs.
-  Returns Lambda results and writes enrichment to the issue field.
+  Invokes the K8s Containment AWS Lambda function.
+  Dual-mode authentication (auto-detected):
+    1. Cross-account IAM Role (AssumeRole + External ID)
+    2. Direct AWS credentials (Access Key + Secret Key)
+  Takes cluster information from K8sEscape context.
   Supports all containment actions: collect_evidence, network_isolate, revoke_rbac,
   scale_down, cordon_node, delete_pod, full_containment.
 enabled: true
@@ -52,12 +54,14 @@ script: |-
       try:
           args = demisto.args()
 
-          demisto.info("=== InvokeK8sContainmentLambda v1.0.0 START ===")
+          demisto.info("=== InvokeK8sContainmentLambda v2.1.0 START ===")
 
           # ==================================================================
           # RETRIEVE ARGUMENTS
           # ==================================================================
 
+          assume_role_arn = args.get('assume_role_arn', '')
+          external_id = args.get('external_id', '')
           aws_access_key_id = args.get('aws_access_key_id', '')
           aws_secret_access_key = args.get('aws_secret_access_key', '')
           aws_session_token = args.get('aws_session_token', '')
@@ -69,19 +73,43 @@ script: |-
           node_hostname = args.get('node_hostname', '')
 
           if not aws_access_key_id or not aws_secret_access_key:
-              return_error("AWS credentials are required (aws_access_key_id, aws_secret_access_key)")
+              return_error("aws_access_key_id and aws_secret_access_key are required")
               return
 
           if not cluster_name:
               return_error("cluster_name is required")
               return
 
+          use_assume_role = bool(assume_role_arn)
+          auth_mode = "AssumeRole -> " + assume_role_arn if use_assume_role else "Direct Credentials"
+          demisto.info("Auth mode: " + auth_mode)
           demisto.info("Action: " + action)
           demisto.info("Cluster: " + cluster_name)
           demisto.info("Namespace: " + namespace)
           demisto.info("Lambda: " + lambda_function_name)
           demisto.info("Region: " + aws_region)
           demisto.info("Node hostname: " + (node_hostname or "N/A"))
+
+          # ==================================================================
+          # AUTHENTICATE
+          # ==================================================================
+
+          if use_assume_role:
+              demisto.info("Assuming IAM Role: " + assume_role_arn)
+              sts_creds = sts_assume_role(
+                  access_key=aws_access_key_id,
+                  secret_key=aws_secret_access_key,
+                  session_token=aws_session_token,
+                  region=aws_region,
+                  role_arn=assume_role_arn,
+                  external_id=external_id,
+              )
+              aws_access_key_id = sts_creds['AccessKeyId']
+              aws_secret_access_key = sts_creds['SecretAccessKey']
+              aws_session_token = sts_creds['SessionToken']
+              demisto.info("STS AssumeRole successful, temporary credentials obtained")
+          else:
+              demisto.info("Using direct AWS credentials")
 
           # ==================================================================
           # BUILD LAMBDA PAYLOAD
@@ -197,7 +225,7 @@ script: |-
               'EntryContext': entry_context,
           })
 
-          demisto.info("=== InvokeK8sContainmentLambda v1.0.0 END ===")
+          demisto.info("=== InvokeK8sContainmentLambda v2.1.0 END ===")
 
       except Exception as e:
           error_msg = "Error in InvokeK8sContainmentLambda: " + str(e)
@@ -210,14 +238,21 @@ script: |-
 
 args:
   - name: aws_access_key_id
-    description: "AWS Access Key ID for Lambda invocation"
+    description: "AWS Access Key ID (base credentials for AssumeRole or direct invocation)"
     required: true
   - name: aws_secret_access_key
-    description: "AWS Secret Access Key for Lambda invocation"
+    description: "AWS Secret Access Key (base credentials)"
     required: true
     secret: true
   - name: aws_session_token
-    description: "AWS Session Token (for temporary/STS credentials)"
+    description: "AWS Session Token (optional, for temporary/STS credentials)"
+    required: false
+    secret: true
+  - name: assume_role_arn
+    description: "IAM Role ARN to assume for least-privilege Lambda invocation (optional)"
+    required: false
+  - name: external_id
+    description: "External ID for STS AssumeRole (optional)"
     required: false
     secret: true
   - name: aws_region

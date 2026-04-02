@@ -118,6 +118,40 @@ function updateStepStatus(taskName, status) {
         state.stepStatuses[stepId] = status;
         renderKillChain();
     }
+
+    // Update status badges for all sidebar cards
+    const badgeMap = {
+        'Provision S3 Backend':     { id: 'backend-status',        ok: 'provisioned', run: 'provisioning...' },
+        'Destroy S3 Backend':       { id: 'backend-destroy-status', ok: 'destroyed',  run: 'destroying...' },
+        'Terraform Plan':           { id: 'infra-status',          ok: 'planned',     run: 'planning...' },
+        'Terraform Apply':          { id: 'infra-status',          ok: 'provisioned', run: 'applying...' },
+        'Build & Push Image':       { id: 'build-status',          ok: 'built',       run: 'building...' },
+        'Deploy to EKS':            { id: 'deploy-status',         ok: 'deployed',    run: 'deploying...' },
+        'Step 1: Spring4Shell RCE': { id: 'rce-status',            ok: 'exploited',   run: 'running...' },
+        'Step 2: Container Escape': { id: 'escape-status',         ok: 'escaped',     run: 'running...' },
+        'Step 3: Cluster Takeover': { id: 'takeover-status',       ok: 'pwned',       run: 'running...' },
+        'Deploy Lambda':            { id: 'lambda-deploy-status',  ok: 'deployed',    run: 'deploying...' },
+        'Terraform Destroy':        { id: 'infra-destroy-status',  ok: 'destroyed',   run: 'destroying...' },
+        'Destroy Lambda':           { id: 'lambda-destroy-status', ok: 'destroyed',   run: 'destroying...' },
+        'Reset Containment':        { id: 'reset-status',          ok: 'done',        run: 'running...' },
+        'XDR Agent: Install on K8s': { id: 'xdr-deploy-status',   ok: 'deployed',    run: 'deploying...' },
+    };
+    const badge = badgeMap[taskName];
+    if (badge) {
+        const el = document.getElementById(badge.id);
+        if (el) {
+            if (status === 'success') {
+                el.textContent = badge.ok;
+                el.style.color = '#22c55e';
+            } else if (status === 'error') {
+                el.textContent = 'error';
+                el.style.color = '#ef4444';
+            } else if (status === 'running') {
+                el.textContent = badge.run;
+                el.style.color = '#f97316';
+            }
+        }
+    }
 }
 
 function renderKillChain() {
@@ -203,13 +237,12 @@ function switchTab(tabId) {
 }
 
 function openTab(tabId) {
-    // Close current fullscreen if different tab
-    if (isFullscreen && state.activeTab !== tabId) {
-        closeFullscreen();
-    }
-
     switchTab(tabId);
-    openFullscreen(tabId);
+
+    // Init radar chart on first open (needs visible container to size correctly)
+    if (tabId === 'radar' && !radarChart) {
+        setTimeout(() => initRadarChart(), 50);
+    }
 }
 
 // ─── kubectl ─────────────────────────────────────────────────────────────────
@@ -332,8 +365,7 @@ async function connectCluster() {
         const res = await fetch('/api/kubeconfig/generate', { method: 'POST' });
         const data = await res.json();
         if (data.status === 'ok') {
-            // Switch to terminal tab to show output
-            switchTab('terminal');
+            openTab('terminal');
             termWriteHeader('Cluster Connection');
             termWrite(`Cluster:    ${data.cluster}\n`);
             termWrite(`Region:     ${data.region}\n`);
@@ -343,7 +375,7 @@ async function connectCluster() {
             setTimeout(refreshClusterStatus, 500);
         } else {
             updateClusterStatus('error');
-            switchTab('terminal');
+            openTab('terminal');
             termWriteHeader('Cluster Connection Error');
             termWrite(`ERROR: ${data.message}\n`);
         }
@@ -502,6 +534,7 @@ async function saveAwsCredentials() {
 }
 
 async function testAwsCredentials() {
+    openTab('terminal');
     termWriteHeader('Testing AWS Credentials');
     termWrite('Running: aws sts get-caller-identity...\n\n');
 
@@ -646,7 +679,7 @@ function stopPlaybookPolling() {
 }
 
 async function playbookRunStep(stepId) {
-    switchTab('playbook');
+    openTab('playbook');
     playbookWriteHeader(stepId.replace(/_/g, ' ').toUpperCase());
 
     const badge = document.getElementById('playbook-status');
@@ -669,7 +702,7 @@ async function playbookRunStep(stepId) {
 }
 
 async function playbookRunAll() {
-    switchTab('playbook');
+    openTab('playbook');
     playbookWriteHeader('FULL CONTAINMENT PLAYBOOK');
     playbookWrite('Running all containment steps...\n\n');
 
@@ -699,21 +732,21 @@ async function playbookRunAll() {
 // ─── Lambda ──────────────────────────────────────────────────────────────────
 
 function lambdaDeploy() {
-    switchTab('terminal');
+    openTab('terminal');
     termWriteHeader('Deploy Containment Lambda (Terraform)');
     termWrite('Deploying Lambda + IAM role + EKS access entry...\n\n');
     apiCall('/api/lambda/apply');
 }
 
 function lambdaDestroy() {
-    switchTab('terminal');
+    openTab('terminal');
     termWriteHeader('Destroy Containment Lambda (Terraform)');
     termWrite('Destroying Lambda + IAM role + EKS access...\n\n');
     apiCall('/api/lambda/destroy');
 }
 
 async function testLambda() {
-    switchTab('playbook');
+    openTab('playbook');
     playbookClear();
     const line = '='.repeat(50);
     playbookWrite(`${line}\n  TEST LAMBDA: collect_evidence\n${line}\n\n`);
@@ -757,6 +790,7 @@ async function testLambda() {
 }
 
 async function lambdaStatus() {
+    openTab('terminal');
     termWriteHeader('Lambda Status');
     try {
         const res = await fetch('/api/lambda/status');
@@ -837,6 +871,7 @@ async function saveCortexCredentials() {
 }
 
 async function testCortexConnection() {
+    openTab('terminal');
     termWriteHeader('Testing Cortex Connection');
     termWrite('Connecting to Cortex API...\n\n');
 
@@ -858,7 +893,7 @@ async function testCortexConnection() {
 }
 
 async function publishPlaybook() {
-    switchTab('playbook');
+    openTab('playbook');
     playbookClear();
     const line = '='.repeat(50);
     playbookWrite(`${line}\n  PUBLISH PLAYBOOK TO CORTEX\n${line}\n\n`);
@@ -890,7 +925,7 @@ async function publishPlaybook() {
 }
 
 async function cortexDeployScript(scriptName) {
-    switchTab('playbook');
+    openTab('playbook');
     playbookClear();
     const line = '='.repeat(50);
     playbookWrite(`${line}\n  DEPLOY SCRIPT: ${scriptName}\n${line}\n\n`);
@@ -926,7 +961,7 @@ async function cortexDeployScript(scriptName) {
 }
 
 async function cortexDeployAll() {
-    switchTab('playbook');
+    openTab('playbook');
     playbookClear();
     const line = '='.repeat(50);
     playbookWrite(`${line}\n  DEPLOY ALL CORTEX OBJECTS\n${line}\n\n`);
@@ -979,6 +1014,280 @@ async function cortexDeployAll() {
     }
 }
 
+// ─── Cortex Policy Import ───────────────────────────────────────────────
+
+async function cortexPolicyCheck() {
+    openTab('playbook');
+    playbookClear();
+    const line = '='.repeat(50);
+    playbookWrite(`${line}\n  CHECK CORTEX POLICY OBJECTS\n${line}\n\n`);
+
+    const badge = document.getElementById('cortex-policy-status');
+    if (badge) { badge.textContent = 'checking...'; badge.style.color = '#f97316'; }
+
+    try {
+        const res = await fetch('/api/cortex/policy-check');
+        const data = await res.json();
+
+        if (data.status === 'ok') {
+            const panel = document.getElementById('cortex-policy-panel');
+            if (panel) panel.style.display = 'block';
+
+            let allExist = true;
+            for (const r of data.results) {
+                const icon = r.exists === true ? '\u2705' : r.exists === false ? '\u274C' : '\u2753';
+                playbookWrite(`${icon} ${r.type}: ${r.name}\n`);
+                playbookWrite(`   ${r.detail || ''}\n\n`);
+
+                if (r.exists !== true) allExist = false;
+
+                // Update info panel
+                if (r.type === 'Endpoint Group') {
+                    const el = document.getElementById('cortex-policy-group');
+                    if (el) { el.textContent = r.exists ? 'exists' : 'missing'; el.style.color = r.exists ? '#22c55e' : '#ef4444'; }
+                }
+                if (r.type === 'Prevention Policy') {
+                    const el = document.getElementById('cortex-policy-name');
+                    if (el) { el.textContent = r.exists ? 'assigned' : 'not found'; el.style.color = r.exists ? '#22c55e' : r.exists === false ? '#ef4444' : '#94a3b8'; }
+                }
+                if (r.type === 'Local: Policy Rules') {
+                    const el = document.getElementById('cortex-policy-rules');
+                    if (el) { el.textContent = r.exists ? 'ready' : 'missing'; el.style.color = r.exists ? '#22c55e' : '#ef4444'; }
+                }
+                if (r.type === 'Local: Profiles') {
+                    const el = document.getElementById('cortex-policy-profiles');
+                    if (el) { el.textContent = r.exists ? 'ready' : 'missing'; el.style.color = r.exists ? '#22c55e' : '#ef4444'; }
+                }
+            }
+
+            playbookWrite(`${'─'.repeat(50)}\n`);
+            if (badge) {
+                badge.textContent = allExist ? 'exists' : 'missing';
+                badge.style.color = allExist ? '#22c55e' : '#f97316';
+            }
+        } else {
+            playbookWrite(`ERROR: ${data.message}\n`);
+            if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
+        }
+    } catch (e) {
+        playbookWrite(`Request failed: ${e.message}\n`);
+        if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
+    }
+}
+
+async function cortexPolicyImport() {
+    openTab('playbook');
+    playbookClear();
+    const line = '='.repeat(50);
+    playbookWrite(`${line}\n  IMPORT CORTEX POLICY OBJECTS\n${line}\n\n`);
+    playbookWrite('Uploading policy rules & profiles to Cortex...\n\n');
+
+    const badge = document.getElementById('cortex-policy-status');
+    if (badge) { badge.textContent = 'importing...'; badge.style.color = '#f97316'; }
+
+    try {
+        const res = await fetch('/api/cortex/policy-import', { method: 'POST' });
+        const data = await res.json();
+
+        for (const r of (data.results || [])) {
+            const icon = r.status === 'ok' ? '\u2705' : '\u274C';
+            playbookWrite(`${icon} ${r.type}: ${r.status}\n`);
+            if (r.message) playbookWrite(`   ${r.message}\n`);
+            if (r.http_code) playbookWrite(`   HTTP ${r.http_code}\n`);
+            if (r.response) playbookWrite(`   Response: ${r.response.substring(0, 200)}\n`);
+            playbookWrite('\n');
+        }
+
+        playbookWrite(`${'─'.repeat(50)}\n`);
+        if (data.status === 'ok') {
+            playbookWrite('All policy objects imported successfully.\n');
+            if (badge) { badge.textContent = 'imported'; badge.style.color = '#22c55e'; }
+        } else if (data.status === 'partial') {
+            playbookWrite('Some imports failed. Check details above.\n');
+            playbookWrite('You may need to import manually via the Cortex console:\n');
+            playbookWrite('  Settings > Policy Management > Import\n');
+            if (badge) { badge.textContent = 'partial'; badge.style.color = '#f97316'; }
+        } else {
+            playbookWrite(`Import failed. Import manually via Cortex console:\n`);
+            playbookWrite('  Settings > Policy Management > Import\n');
+            playbookWrite('  Files: cortex-policy/*.export\n');
+            if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
+        }
+    } catch (e) {
+        playbookWrite(`Request failed: ${e.message}\n`);
+        if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
+    }
+}
+
+// ─── XDR Agent for Kubernetes ─────────────────────────────────────────────
+
+async function xdrDeployK8s() {
+    openTab('playbook');
+    const distBadge = document.getElementById('xdr-dist-status');
+    const deployBadge = document.getElementById('xdr-deploy-status');
+    const infoPanel = document.getElementById('xdr-info-panel');
+    if (distBadge) { distBadge.textContent = 'building...'; distBadge.style.color = '#f97316'; }
+
+    playbookWrite('\n' + '─'.repeat(50) + '\n');
+    playbookWrite('XDR Agent for Kubernetes - Creating distribution...\n');
+
+    try {
+        const resp = await fetch('/api/cortex/xdr-k8s-deploy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        const data = await resp.json();
+
+        if (data.status === 'ok' || data.status === 'exists') {
+            const isNew = data.status === 'ok';
+            const distStatus = data.distribution_status || (isNew ? 'created' : 'exists');
+            const tagsStr = (data.tags && data.tags.length) ? data.tags.join(', ') : '-';
+
+            playbookWrite(isNew
+                ? `[OK] Distribution created: ${data.distribution_id}\n`
+                : `[OK] ${data.message}\n`);
+            playbookWrite(`  Agent version: ${data.agent_version || 'auto'}\n`);
+            playbookWrite(`  Cluster: ${data.cluster_name || '-'}\n`);
+            playbookWrite(`  Tags: ${tagsStr}\n`);
+
+            if (distBadge) {
+                distBadge.textContent = distStatus === 'completed' ? 'built' : distStatus;
+                distBadge.style.color = distStatus === 'completed' ? '#22c55e' : '#f97316';
+            }
+            if (infoPanel) {
+                infoPanel.style.display = 'block';
+                document.getElementById('xdr-info-dist-id').textContent = data.distribution_id || '-';
+                document.getElementById('xdr-info-version').textContent = data.agent_version || 'auto';
+                document.getElementById('xdr-info-cluster').textContent = data.cluster_name || '-';
+                document.getElementById('xdr-info-status').textContent = distStatus;
+                document.getElementById('xdr-info-tags').textContent = tagsStr;
+            }
+            // Check agent install status on cluster
+            xdrCheckAgentInstall();
+            if (isNew) setTimeout(() => xdrCheckStatus(), 5000);
+        } else {
+            playbookWrite(`[FAIL] ${data.message}\n`);
+            if (distBadge) { distBadge.textContent = 'error'; distBadge.style.color = '#ef4444'; }
+        }
+    } catch (e) {
+        playbookWrite(`[FAIL] Request failed: ${e.message}\n`);
+        if (distBadge) { distBadge.textContent = 'error'; distBadge.style.color = '#ef4444'; }
+    }
+}
+
+async function xdrCheckStatus() {
+    const distBadge = document.getElementById('xdr-dist-status');
+    const statusEl = document.getElementById('xdr-info-status');
+
+    try {
+        const distIdEl = document.getElementById('xdr-info-dist-id');
+        const distId = distIdEl ? distIdEl.textContent.trim() : '';
+        const statusUrl = distId && distId !== '-'
+            ? `/api/cortex/xdr-k8s-status?distribution_id=${encodeURIComponent(distId)}`
+            : '/api/cortex/xdr-k8s-status';
+        const resp = await fetch(statusUrl);
+        const data = await resp.json();
+
+        if (data.status === 'ok') {
+            const distStatus = data.distribution_status || 'unknown';
+            playbookWrite(`XDR Distribution status: ${distStatus}\n`);
+            if (statusEl) statusEl.textContent = distStatus;
+            if (distBadge) {
+                const isCompleted = distStatus.toLowerCase() === 'completed';
+                distBadge.textContent = isCompleted ? 'built' : distStatus;
+                distBadge.style.color = isCompleted ? '#22c55e' : '#f97316';
+            }
+            // Re-check if still pending
+            if (distStatus.toLowerCase() !== 'completed' && distStatus.toLowerCase() !== 'failed') {
+                setTimeout(() => xdrCheckStatus(), 5000);
+            } else {
+                // Distribution ready, check agent install status
+                xdrCheckAgentInstall();
+            }
+        } else {
+            playbookWrite(`XDR Status check: ${data.message}\n`);
+        }
+    } catch (e) {
+        playbookWrite(`XDR Status check failed: ${e.message}\n`);
+    }
+}
+
+async function xdrCheckAgentInstall() {
+    const el = document.getElementById('xdr-info-install-status');
+    const deployBadge = document.getElementById('xdr-deploy-status');
+    if (!el) return;
+    try {
+        const resp = await fetch('/api/cortex/xdr-k8s-agent-status');
+        const data = await resp.json();
+        if (data.status === 'ok') {
+            if (data.installed) {
+                el.textContent = `${data.agent_status} (${data.pods_running}/${data.pods_total} pods)`;
+                el.style.color = data.agent_status === 'Running' ? '#22c55e' : '#f97316';
+                if (deployBadge) {
+                    deployBadge.textContent = data.agent_status === 'Running' ? 'deployed' : 'deploying';
+                    deployBadge.style.color = data.agent_status === 'Running' ? '#22c55e' : '#f97316';
+                }
+            } else {
+                el.textContent = 'Not installed';
+                el.style.color = '#94a3b8';
+            }
+        } else {
+            el.textContent = data.message || 'Unknown';
+            el.style.color = '#94a3b8';
+        }
+    } catch (e) {
+        el.textContent = 'Check failed';
+        el.style.color = '#ef4444';
+    }
+}
+
+async function xdrInstallK8s() {
+    const deployBadge = document.getElementById('xdr-deploy-status');
+    if (deployBadge) { deployBadge.textContent = 'deploying...'; deployBadge.style.color = '#f97316'; }
+
+    openTab('terminal');
+    termWrite('\n' + '─'.repeat(50) + '\n');
+    termWrite('XDR Agent - Downloading YAML and deploying to cluster...\n');
+
+    // Try DOM first, then let backend use its in-memory store
+    const distIdEl = document.getElementById('xdr-info-dist-id');
+    const distId = (distIdEl && distIdEl.textContent.trim() !== '-') ? distIdEl.textContent.trim() : '';
+    if (distId) {
+        termWrite(`Distribution ID: ${distId}\n`);
+    } else {
+        termWrite('Distribution ID: (from server memory)\n');
+    }
+
+    try {
+        const payload = distId ? { distribution_id: distId } : {};
+        const resp = await fetch('/api/cortex/xdr-k8s-install', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        termWrite(`Server response: ${JSON.stringify(data)}\n`);
+
+        if (data.status === 'ok' && data.task_id) {
+            state.currentTaskId = data.task_id;
+            startPolling(data.task_id);
+            if (deployBadge) { deployBadge.textContent = 'deploying'; deployBadge.style.color = '#f97316'; }
+            // Check agent status after install completes (~30s)
+            setTimeout(() => {
+                xdrCheckAgentInstall();
+                if (deployBadge) { deployBadge.textContent = 'deployed'; deployBadge.style.color = '#22c55e'; }
+            }, 30000);
+        } else {
+            termWrite(`[FAIL] ${data.message || 'Unknown error'}\n`);
+            if (deployBadge) { deployBadge.textContent = 'error'; deployBadge.style.color = '#ef4444'; }
+        }
+    } catch (e) {
+        termWrite(`[FAIL] Request failed: ${e.message}\n`);
+        if (deployBadge) { deployBadge.textContent = 'error'; deployBadge.style.color = '#ef4444'; }
+    }
+}
+
 function updateCortexConsoleLink(apiBaseUrl) {
     const panel = document.getElementById('cortex-console-link');
     const link = document.getElementById('cortex-console-url');
@@ -1021,15 +1330,18 @@ function updateCortexStatus(status) {
 // ─── S3 Backend ───────────────────────────────────────────────────────────────
 
 function backendApply() {
+    openTab('terminal');
     termWriteHeader('Provision S3 Backend (bucket + DynamoDB)');
     apiCall('/api/backend/apply');
 }
 
 function backendDestroy() {
     if (!confirm('Destroy S3 backend? Make sure all infrastructure is destroyed first.')) return;
+    openTab('terminal');
     termWriteHeader('Destroy S3 Backend');
     apiCall('/api/backend/destroy');
 }
+
 
 function backendCheckStatus() {
     fetch('/api/backend/status')
@@ -1059,11 +1371,13 @@ function backendCheckStatus() {
 // ─── Infrastructure ───────────────────────────────────────────────────────────
 
 function infraPlan() {
+    openTab('terminal');
     termWriteHeader('Terraform Plan');
     apiCall('/api/infra/plan');
 }
 
 function infraApply() {
+    openTab('terminal');
     termWriteHeader('Terraform Apply (EKS + ECR)');
     termWrite('This will provision the full infrastructure...\n\n');
     apiCall('/api/infra/apply');
@@ -1075,6 +1389,7 @@ function infraDestroy() {
 
 function confirmDestroy() {
     document.getElementById('destroy-modal').classList.remove('visible');
+    openTab('terminal');
     termWriteHeader('Terraform Destroy');
     termWrite('Destroying all resources...\n\n');
     apiCall('/api/infra/destroy');
@@ -1087,16 +1402,19 @@ function cancelDestroy() {
 }
 
 function buildPush() {
+    openTab('terminal');
     termWriteHeader('Build & Push Vulnerable Image to ECR');
     apiCall('/api/image/build-push');
 }
 
 function deployApp() {
+    openTab('terminal');
     termWriteHeader('Deploy Vulnerable App to EKS');
     apiCall('/api/k8s/deploy');
 }
 
 async function k8sStatus() {
+    openTab('terminal');
     termWriteHeader('Kubernetes Status');
     try {
         const res = await fetch('/api/k8s/status');
@@ -1108,16 +1426,19 @@ async function k8sStatus() {
 }
 
 function attackStep1() {
+    openTab('terminal');
     termWriteHeader('STEP 1: Spring4Shell RCE (CVE-2022-22965)');
     apiCall('/api/attack/step1');
 }
 
 function attackStep2() {
+    openTab('terminal');
     termWriteHeader('STEP 2: Container Escape');
     apiCall('/api/attack/step2');
 }
 
 function attackStep3() {
+    openTab('terminal');
     termWriteHeader('STEP 3: Cluster Takeover');
     apiCall('/api/attack/step3');
 }
@@ -1135,7 +1456,7 @@ function shellExec() {
 // ─── Reset Containment ──────────────────────────────────────────────────────
 
 function resetContainment() {
-    switchTab('terminal');
+    openTab('terminal');
     termWriteHeader('RESET CONTAINMENT - Undo remediation for demo replay');
     termWrite('Removing NetworkPolicy, recreating RBAC, uncordoning nodes, scaling up...\n\n');
 
@@ -1167,68 +1488,6 @@ function resetContainment() {
     }, 2000);
 }
 
-// ─── Fullscreen Tab ──────────────────────────────────────────────────────────
-
-let isFullscreen = false;
-let fullscreenOriginalParent = null;
-let fullscreenTabElement = null;
-
-const TAB_TITLES = {
-    terminal: 'Terminal',
-    kubectl: 'kubectl',
-    playbook: 'Playbook',
-    radar: 'Security Radar',
-};
-
-function openFullscreen(tabId) {
-    const tabEl = document.getElementById(`tab-${tabId}`);
-    if (!tabEl) return;
-
-    fullscreenOriginalParent = tabEl.parentElement;
-    fullscreenTabElement = tabEl;
-
-    const body = document.getElementById('fullscreen-body');
-    body.innerHTML = '';
-    body.appendChild(tabEl);
-
-    document.getElementById('fullscreen-title').textContent =
-        TAB_TITLES[tabId] || tabId;
-
-    document.getElementById('fullscreen-overlay').classList.add('visible');
-    isFullscreen = true;
-
-    // Init or resize radar
-    if (tabId === 'radar') {
-        if (!radarChart) {
-            setTimeout(() => initRadarChart(), 50);
-        } else {
-            setTimeout(() => radarChart.resize(), 50);
-        }
-    }
-}
-
-function closeFullscreen() {
-    if (!isFullscreen) return;
-
-    if (fullscreenTabElement && fullscreenOriginalParent) {
-        fullscreenOriginalParent.appendChild(fullscreenTabElement);
-    }
-    document.getElementById('fullscreen-overlay').classList.remove('visible');
-    isFullscreen = false;
-    fullscreenOriginalParent = null;
-    fullscreenTabElement = null;
-
-    if (state.activeTab === 'radar' && radarChart) {
-        setTimeout(() => radarChart.resize(), 50);
-    }
-}
-
-// Close fullscreen on Escape key
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && isFullscreen) {
-        closeFullscreen();
-    }
-});
 
 // ─── Radar Chart ─────────────────────────────────────────────────────────────
 
@@ -1397,7 +1656,7 @@ function updateRemediationTimeline(posture) {
 }
 
 async function radarSnapshot() {
-    switchTab('radar');
+    openTab('radar');
     const tab = document.getElementById('tab-radar');
     tab.classList.add('radar-scanning');
 
@@ -1423,7 +1682,7 @@ async function radarSnapshot() {
 }
 
 async function radarScan() {
-    switchTab('radar');
+    openTab('radar');
     const tab = document.getElementById('tab-radar');
     tab.classList.add('radar-scanning');
 

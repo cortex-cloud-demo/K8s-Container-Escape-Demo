@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>K8s Escape Demo</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=8">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
@@ -98,7 +98,7 @@
                     <span class="step-status" id="backend-status"></span>
                 </div>
                 <div class="step-name">Terraform State Backend</div>
-                <div class="step-desc">S3 bucket + DynamoDB for remote TF state</div>
+                <div class="step-desc">S3 bucket for remote TF state</div>
                 <div class="step-actions">
                     <button class="btn btn-primary" onclick="backendApply()">Create / Check</button>
                     <button class="btn btn-ghost" onclick="backendCheckStatus()">Status</button>
@@ -122,7 +122,7 @@
             <div class="step-card" id="card-infra">
                 <div class="step-header">
                     <span class="step-number infra">INFRA</span>
-                    <span class="step-status"></span>
+                    <span class="step-status" id="infra-status"></span>
                 </div>
                 <div class="step-name">EKS + ECR + VPC</div>
                 <div class="step-desc">Terraform: cluster K8s 1.35, ECR registry, VPC, IAM</div>
@@ -178,7 +178,7 @@
             <div class="step-card" id="card-build">
                 <div class="step-header">
                     <span class="step-number build">BUILD</span>
-                    <span class="step-status"></span>
+                    <span class="step-status" id="build-status"></span>
                 </div>
                 <div class="step-name">Build & Push Image</div>
                 <div class="step-desc">Docker build + push vuln app to ECR</div>
@@ -190,7 +190,7 @@
             <div class="step-card" id="card-deploy">
                 <div class="step-header">
                     <span class="step-number deploy">DEPLOY</span>
-                    <span class="step-status"></span>
+                    <span class="step-status" id="deploy-status"></span>
                 </div>
                 <div class="step-name">Deploy Vulnerable App</div>
                 <div class="step-desc">Privileged pod, hostPID, hostPath, cluster-admin SA</div>
@@ -205,10 +205,15 @@
         <div class="section">
             <div class="section-title">Attack Chain</div>
 
+            <div class="warning-banner" id="gp-warning">
+                <span class="warning-icon">&#x26A0;</span>
+                <span>Disable GlobalProtect before running attacks. The VPN inspection blocks Spring4Shell exploit payloads (connection reset).</span>
+            </div>
+
             <div class="step-card" id="card-rce">
                 <div class="step-header">
                     <span class="step-number attack">STEP 1</span>
-                    <span class="step-status"></span>
+                    <span class="step-status" id="rce-status"></span>
                 </div>
                 <div class="step-name">Spring4Shell RCE</div>
                 <div class="step-desc">CVE-2022-22965 - deploy webshell on target pod</div>
@@ -220,7 +225,7 @@
             <div class="step-card" id="card-escape">
                 <div class="step-header">
                     <span class="step-number attack">STEP 2</span>
-                    <span class="step-status"></span>
+                    <span class="step-status" id="escape-status"></span>
                 </div>
                 <div class="step-name">Container Escape</div>
                 <div class="step-desc">nsenter, host fs, IMDS - break out of the container</div>
@@ -232,7 +237,7 @@
             <div class="step-card" id="card-takeover">
                 <div class="step-header">
                     <span class="step-number attack">STEP 3</span>
-                    <span class="step-status"></span>
+                    <span class="step-status" id="takeover-status"></span>
                 </div>
                 <div class="step-name">Cluster Takeover</div>
                 <div class="step-desc">SA token + cluster-admin - full K8s & AWS access</div>
@@ -296,6 +301,79 @@
                 </div>
             </div>
 
+            <div class="step-card" id="card-cortex-policy">
+                <div class="step-header">
+                    <span class="step-number cortex">POLICY</span>
+                    <span class="step-status" id="cortex-policy-status"></span>
+                </div>
+                <div class="step-name">Import Prevention Policy <span style="background:#f59e0b;color:#000;font-size:0.65rem;padding:1px 6px;border-radius:3px;margin-left:6px;font-weight:700;letter-spacing:0.5px;">BETA - WIP</span></div>
+                <div class="step-desc">Policy rules, profiles & endpoint group</div>
+                <div class="step-actions">
+                    <button class="btn btn-ghost" onclick="cortexPolicyCheck()">Check</button>
+                    <button class="btn btn-cortex" onclick="cortexPolicyImport()">Import</button>
+                </div>
+                <div class="cluster-info" id="cortex-policy-panel" style="display:none;">
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Group</span>
+                        <span class="cluster-info-value" id="cortex-policy-group">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Policy</span>
+                        <span class="cluster-info-value" id="cortex-policy-name">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Rules</span>
+                        <span class="cluster-info-value" id="cortex-policy-rules">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Profiles</span>
+                        <span class="cluster-info-value" id="cortex-policy-profiles">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-xdr-agent">
+                <div class="step-header">
+                    <span class="step-number cortex">XDR</span>
+                    <span class="step-status" id="xdr-dist-status"></span>
+                    <span class="step-status" id="xdr-deploy-status"></span>
+                </div>
+                <div class="step-name">Deploy XDR Agent for K8s</div>
+                <div class="step-desc">Create distribution installer for EKS cluster</div>
+                <div class="step-actions">
+                    <button class="btn btn-cortex" onclick="xdrDeployK8s()">Create</button>
+                    <button class="btn btn-primary" onclick="xdrInstallK8s()" id="xdr-install-btn">Install on Cluster</button>
+                    <button class="btn btn-ghost" onclick="xdrCheckStatus()">Status</button>
+                </div>
+                <!-- XDR distribution info -->
+                <div class="cluster-info" id="xdr-info-panel" style="display:none;">
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Distribution</span>
+                        <span class="cluster-info-value" id="xdr-info-dist-id">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Agent Version</span>
+                        <span class="cluster-info-value" id="xdr-info-version">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Cluster</span>
+                        <span class="cluster-info-value" id="xdr-info-cluster">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Status</span>
+                        <span class="cluster-info-value" id="xdr-info-status">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Tags</span>
+                        <span class="cluster-info-value" id="xdr-info-tags">-</span>
+                    </div>
+                    <div class="cluster-info-row">
+                        <span class="cluster-info-label">Agent Install</span>
+                        <span class="cluster-info-value" id="xdr-info-install-status">-</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="cortex-console-link" id="cortex-console-link" style="display:none;">
                 <a href="#" id="cortex-console-url" target="_blank" rel="noopener noreferrer">
                     <span class="cortex-console-icon">CORTEX</span>
@@ -308,7 +386,7 @@
                 <summary class="cortex-details-summary">Cortex Objects (3)</summary>
                 <div class="cortex-details-body">
                     <div class="cortex-info-step"><b>Script 1</b> ExtractK8sContainerEscapeIOCs - IOC extraction &amp; severity analysis</div>
-                    <div class="cortex-info-step"><b>Script 2</b> InvokeK8sContainmentLambda - Lambda invocation via SigV4</div>
+                    <div class="cortex-info-step"><b>Script 2</b> InvokeK8sContainmentLambda - AssumeRole + Lambda invocation</div>
                     <div class="cortex-info-step"><b>Playbook</b> K8s Container Escape - Spring4Shell Containment</div>
                 </div>
             </details>
@@ -337,11 +415,10 @@
             </details>
 
             <details class="cortex-details">
-                <summary class="cortex-details-summary">Playbook Flow (11 tasks)</summary>
+                <summary class="cortex-details-summary">Playbook Flow (10 tasks)</summary>
                 <div class="cortex-details-body">
                     <div class="cortex-info-step">1. Triage - Extract IOCs + severity</div>
-                    <div class="cortex-info-step">1a. AWS Credentials - Manual input</div>
-                    <div class="cortex-info-step">2. Evidence - Lambda collect_evidence</div>
+                    <div class="cortex-info-step">2. Evidence - AssumeRole + Lambda collect_evidence</div>
                     <div class="cortex-info-step">3. Severity Gate - Auto / operator approval</div>
                     <div class="cortex-info-step">4. Network Isolation - deny-all NetworkPolicy</div>
                     <div class="cortex-info-step">5. Revoke RBAC - delete cluster-admin</div>
@@ -369,11 +446,12 @@
             <details class="cortex-details">
                 <summary class="cortex-details-summary">Architecture</summary>
                 <div class="cortex-details-body">
-                    <pre class="cortex-flow-ascii">XDR Issue -> ExtractIOCs -> AWS Creds
+                    <pre class="cortex-flow-ascii">XDR Issue -> ExtractIOCs
+  -> STS AssumeRole (Cross-Account)
   -> Lambda (collect_evidence)
   -> Severity Gate (auto/manual)
   -> Lambda (contain)
-      |-> STS -> EKS API
+      |-> EKS API (STS x-k8s-aws-id)
           |-> NetPol / RBAC / Scale
           |-> Cordon / Delete
   -> Verify -> Close</pre>
@@ -419,6 +497,7 @@
             <div class="step-card">
                 <div class="step-header">
                     <span class="step-number destroy">LAMBDA</span>
+                    <span class="step-status" id="lambda-destroy-status"></span>
                 </div>
                 <div class="step-name">Destroy Lambda</div>
                 <div class="step-desc">Remove containment Lambda + IAM + EKS access</div>
@@ -430,6 +509,7 @@
             <div class="step-card">
                 <div class="step-header">
                     <span class="step-number destroy">INFRA</span>
+                    <span class="step-status" id="infra-destroy-status"></span>
                 </div>
                 <div class="step-name">Destroy Infrastructure</div>
                 <div class="step-desc">Remove EKS cluster, ECR, VPC + all AWS resources</div>
@@ -441,6 +521,7 @@
             <div class="step-card">
                 <div class="step-header">
                     <span class="step-number destroy">S3</span>
+                    <span class="step-status" id="backend-destroy-status"></span>
                 </div>
                 <div class="step-name">Destroy TF State Backend</div>
                 <div class="step-desc">Remove S3 bucket + DynamoDB (destroy infra first!)</div>
@@ -469,10 +550,127 @@
                 <span class="task-info" id="current-task-status">idle</span>
             </div>
             <div class="tab-bar">
+                <button class="tab" data-tab="overview" onclick="openTab('overview')">Overview</button>
                 <button class="tab active" data-tab="terminal" onclick="openTab('terminal')">Terminal</button>
                 <button class="tab" data-tab="kubectl" onclick="openTab('kubectl')">kubectl</button>
-                <button class="tab" data-tab="playbook" onclick="openTab('playbook')">Playbook</button>
+                <button class="tab" data-tab="playbook" onclick="openTab('playbook')">Cortex</button>
                 <button class="tab tab-radar-btn" data-tab="radar" onclick="openTab('radar')">Security Radar</button>
+            </div>
+        </div>
+
+        <!-- Overview Tab -->
+        <div class="terminal-container tab-content" id="tab-overview">
+            <div class="overview-content">
+                <div class="overview-section">
+                    <h3 class="overview-title">K8s Container Escape Demo</h3>
+                    <p class="overview-intro">This demo illustrates a full attack chain exploiting Kubernetes misconfigurations, from initial RCE to cluster takeover, and shows how Cortex XDR detects and responds to each stage.</p>
+                </div>
+
+                <div class="overview-section">
+                    <div class="overview-phase">
+                        <div class="overview-phase-header">
+                            <span class="overview-phase-num phase-infra">1</span>
+                            <span class="overview-phase-title">Infrastructure Setup</span>
+                        </div>
+                        <p>Deploy an EKS cluster on AWS with Terraform using admin credentials (one-time bootstrap). Terraform creates a dedicated <strong>dashboard IAM User</strong> with permanent Access Key credentials and a scoped <strong>dashboard operator IAM Role</strong> with least-privilege permissions (EKS, ECR, S3, Lambda, VPC, IAM). After deployment, use the dashboard user's permanent credentials &mdash; the dashboard automatically assumes the operator role via STS AssumeRole.</p>
+                        <p>Build a vulnerable Spring Boot application (CVE-2022-22965) as a Docker image and push it to ECR. Deploy it as a <strong>privileged pod</strong> with dangerous security settings:</p>
+                        <ul>
+                            <li><code>privileged: true</code> - full access to host devices</li>
+                            <li><code>hostPID: true</code> - visibility into host processes</li>
+                            <li><code>hostPath: /</code> - read/write access to host filesystem</li>
+                            <li><code>cluster-admin</code> ServiceAccount - full K8s API access</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="overview-section">
+                    <div class="overview-phase">
+                        <div class="overview-phase-header">
+                            <span class="overview-phase-num phase-attack">2</span>
+                            <span class="overview-phase-title">Attack Chain</span>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 1: Spring4Shell RCE (CVE-2022-22965)</div>
+                            <p>Exploit the Spring4Shell vulnerability to manipulate Tomcat's <code>AccessLogValve</code> via the classLoader. This writes a JSP webshell to the application directory, providing remote command execution on the container.</p>
+                            <div class="overview-technique">MITRE: T1190 (Exploit Public-Facing Application) / T1505.003 (Web Shell)</div>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 2: Container Escape</div>
+                            <p>Leverage the pod's privileged configuration to escape the container:</p>
+                            <ul>
+                                <li><strong>hostPID</strong> - access host process tree via <code>/proc</code></li>
+                                <li><strong>hostPath /</strong> - read host filesystem (kubelet creds, SSH keys, etc.)</li>
+                                <li><strong>nsenter</strong> - enter host namespaces to execute commands as root on the node</li>
+                                <li><strong>IMDS</strong> - access AWS Instance Metadata to steal IAM credentials</li>
+                            </ul>
+                            <div class="overview-technique">MITRE: T1611 (Escape to Host) / T1552 (Unsecured Credentials)</div>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 3: Cluster Takeover</div>
+                            <p>Use the pod's <code>cluster-admin</code> ServiceAccount token to gain full control of the Kubernetes cluster: list all namespaces, pods, secrets, nodes. Steal AWS credentials via IMDS for lateral movement to cloud services.</p>
+                            <div class="overview-technique">MITRE: T1078.004 (Cloud Accounts) / T1552.007 (Container API)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="overview-section">
+                    <div class="overview-phase">
+                        <div class="overview-phase-header">
+                            <span class="overview-phase-num phase-cortex">3</span>
+                            <span class="overview-phase-title">Cortex XDR Detection & Response</span>
+                        </div>
+                        <p>Cortex XDR agent deployed on the cluster detects each stage of the attack:</p>
+                        <ul>
+                            <li><strong>Anti-Webshell</strong> - detects JSP webshell creation</li>
+                            <li><strong>Container Escape Protection</strong> - detects nsenter and namespace breakout</li>
+                            <li><strong>Behavioral Threat Protection</strong> - detects suspicious process activity</li>
+                            <li><strong>Credential Gathering</strong> - detects access to sensitive files and IMDS</li>
+                        </ul>
+                        <p>A <strong>prevention policy</strong> (rules + profiles) is imported on the Cortex tenant and assigned to the EKS endpoint group for K8s-specific protection.</p>
+                        <p>An automated <strong>containment playbook</strong> triggers on XDR issues. It uses a dedicated <strong>Cortex IAM User</strong> (permanent Access Key) to assume the <strong>lambda-invoker IAM Role</strong> via STS AssumeRole (SigV4-signed), then invokes the containment Lambda, which orchestrates: evidence collection, network isolation, RBAC revocation, scale down, node cordoning, and pod termination.</p>
+                    </div>
+                </div>
+
+                <div class="overview-section overview-arch">
+                    <div class="overview-phase-header">
+                        <span class="overview-phase-num phase-arch">i</span>
+                        <span class="overview-phase-title">Architecture</span>
+                    </div>
+                    <div class="overview-arch-diagram">
+                        <div class="arch-box arch-attacker">Attacker<br><small>Spring4Shell Exploit</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-elb">AWS ELB<br><small>Load Balancer</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-pod">Privileged Pod<br><small>Tomcat + Webshell</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-node">EKS Node<br><small>nsenter / IMDS</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-cluster">K8s API<br><small>cluster-admin</small></div>
+                    </div>
+                    <div class="overview-arch-diagram" style="margin-top: 0.75rem;">
+                        <div class="arch-box arch-lambda">Dashboard User<br><small>Permanent Key</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-lambda">AssumeRole<br><small>STS</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-lambda">Operator Role<br><small>Scoped IAM</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-lambda">EKS / ECR / S3<br><small>Least Privilege</small></div>
+                    </div>
+                    <div class="overview-arch-diagram" style="margin-top: 0.75rem;">
+                        <div class="arch-box arch-cortex">Cortex XDR Agent<br><small>Detection</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-cortex">Cortex XSIAM<br><small>Alerts & Analytics</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-cortex">Cortex User<br><small>Permanent Key</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-lambda">AssumeRole<br><small>Lambda Invoker</small></div>
+                        <div class="arch-arrow">&rarr;</div>
+                        <div class="arch-box arch-lambda">AWS Lambda<br><small>Containment</small></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -683,15 +881,7 @@
     </div>
 </div>
 
-<!-- ─── Fullscreen Tab Overlay ─────────────────── -->
-<div class="fullscreen-overlay" id="fullscreen-overlay">
-    <div class="fullscreen-header">
-        <div class="fullscreen-title" id="fullscreen-title">Terminal</div>
-        <button class="fullscreen-close" onclick="closeFullscreen()" title="Close fullscreen">&#x2715;</button>
-    </div>
-    <div class="fullscreen-body" id="fullscreen-body"></div>
-</div>
 
-<script src="/static/js/app.js"></script>
+<script src="/static/js/app.js?v=15"></script>
 </body>
 </html>

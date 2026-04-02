@@ -1,14 +1,17 @@
 """
 InvokeK8sContainmentLambda
 ===========================
-Invokes the K8s Containment AWS Lambda function using provided AWS credentials.
-Takes cluster information from K8sEscape context (previous script output) and
-AWS credentials as inputs. Returns Lambda results and writes enrichment to the issue.
+Invokes the K8s Containment AWS Lambda function.
+Supports two authentication modes (auto-detected):
+  1. Cross-account IAM Role (AssumeRole) - if assume_role_arn + external_id are provided
+  2. Direct AWS credentials - if aws_access_key_id + aws_secret_access_key are provided
 
 Script arguments:
-- aws_access_key_id                     : AWS Access Key ID
-- aws_secret_access_key                 : AWS Secret Access Key
-- aws_session_token                     : AWS Session Token (optional, for temporary credentials)
+- assume_role_arn                       : IAM Role ARN to assume (cross-account, optional)
+- external_id                           : External ID for STS AssumeRole (optional)
+- aws_access_key_id                     : AWS Access Key ID (optional, fallback mode)
+- aws_secret_access_key                 : AWS Secret Access Key (optional, fallback mode)
+- aws_session_token                     : AWS Session Token (optional)
 - aws_region                            : AWS Region (e.g. eu-west-3)
 - lambda_function_name                  : Lambda function name (e.g. k8s-escape-demo-containment)
 - action                                : Lambda action (collect_evidence, network_isolate, etc.)
@@ -29,7 +32,7 @@ Output context:
 - K8sContainment.LambdaStatusCode
 - K8sContainment.RawResponse
 
-Version: 1.0.0
+Version: 2.1.0
 """
 
 import json
@@ -174,6 +177,112 @@ def aws_lambda_invoke(access_key, secret_key, session_token, region,
             'body': '',
             'error': str(e),
         }
+
+
+# ==============================================================================
+# AWS STS ASSUME ROLE
+# ==============================================================================
+
+def sts_assume_role(access_key, secret_key, session_token, region, role_arn,
+                    external_id="", session_name="CortexPlaybook"):
+    """
+    Assume an IAM Role via STS using operator credentials (SigV4 signed).
+    Same pattern as aws_lambda_invoke: raw HTTP, no boto3 required.
+    Returns dict with AccessKeyId, SecretAccessKey, SessionToken or raises.
+    """
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+
+    service = 'sts'
+    host = f'sts.{region}.amazonaws.com'
+    endpoint = f'https://{host}'
+
+    # Build POST body (form-encoded)
+    params = {
+        'Action': 'AssumeRole',
+        'Version': '2011-06-15',
+        'RoleArn': role_arn,
+        'RoleSessionName': session_name,
+        'DurationSeconds': '3600',
+    }
+    if external_id:
+        params['ExternalId'] = external_id
+
+    payload_str = urllib.parse.urlencode(params)
+    payload_bytes = payload_str.encode('utf-8')
+
+    # SigV4 signing
+    t = datetime.datetime.utcnow()
+    amz_date = t.strftime('%Y%m%dT%H%M%SZ')
+    date_stamp = t.strftime('%Y%m%d')
+
+    payload_hash = hashlib.sha256(payload_bytes).hexdigest()
+
+    headers_to_sign = {
+        'content-type': 'application/x-www-form-urlencoded',
+        'host': host,
+        'x-amz-date': amz_date,
+    }
+    if session_token:
+        headers_to_sign['x-amz-security-token'] = session_token
+
+    signed_headers_list = sorted(headers_to_sign.keys())
+    signed_headers = ';'.join(signed_headers_list)
+    canonical_headers = ''.join(f'{k}:{headers_to_sign[k]}\n' for k in signed_headers_list)
+
+    canonical_request = '\n'.join([
+        'POST', '/', '',
+        canonical_headers,
+        signed_headers,
+        payload_hash,
+    ])
+
+    algorithm = 'AWS4-HMAC-SHA256'
+    credential_scope = f'{date_stamp}/{region}/{service}/aws4_request'
+    string_to_sign = '\n'.join([
+        algorithm,
+        amz_date,
+        credential_scope,
+        hashlib.sha256(canonical_request.encode('utf-8')).hexdigest(),
+    ])
+
+    signing_key = get_signature_key(secret_key, date_stamp, region, service)
+    signature = hmac.new(signing_key, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
+
+    authorization = (
+        f'{algorithm} Credential={access_key}/{credential_scope}, '
+        f'SignedHeaders={signed_headers}, Signature={signature}'
+    )
+
+    req_headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Amz-Date': amz_date,
+        'Authorization': authorization,
+    }
+    if session_token:
+        req_headers['X-Amz-Security-Token'] = session_token
+
+    ssl_ctx = ssl.create_default_context()
+    req = urllib.request.Request(endpoint, data=payload_bytes, headers=req_headers, method='POST')
+
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
+            body = resp.read().decode('utf-8')
+            root = ET.fromstring(body)
+            ns = {'sts': 'https://sts.amazonaws.com/doc/2011-06-15/'}
+            creds = root.find('.//sts:Credentials', ns)
+            if creds is None:
+                raise RuntimeError(f"No Credentials in STS response: {body[:500]}")
+            return {
+                'AccessKeyId': creds.find('sts:AccessKeyId', ns).text,
+                'SecretAccessKey': creds.find('sts:SecretAccessKey', ns).text,
+                'SessionToken': creds.find('sts:SessionToken', ns).text,
+            }
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8', errors='replace')
+        raise RuntimeError(f"STS AssumeRole failed (HTTP {e.code}): {error_body[:500]}")
 
 
 # ==============================================================================
@@ -356,12 +465,14 @@ def main():
     try:
         args = demisto.args()
 
-        demisto.info("=== InvokeK8sContainmentLambda v1.0.0 START ===")
+        demisto.info("=== InvokeK8sContainmentLambda v2.1.0 START ===")
 
         # ==================================================================
         # RETRIEVE ARGUMENTS
         # ==================================================================
 
+        assume_role_arn = args.get('assume_role_arn', '')
+        external_id = args.get('external_id', '')
         aws_access_key_id = args.get('aws_access_key_id', '')
         aws_secret_access_key = args.get('aws_secret_access_key', '')
         aws_session_token = args.get('aws_session_token', '')
@@ -373,19 +484,44 @@ def main():
         node_hostname = args.get('node_hostname', '')
 
         if not aws_access_key_id or not aws_secret_access_key:
-            return_error("AWS credentials are required (aws_access_key_id, aws_secret_access_key)")
+            return_error("aws_access_key_id and aws_secret_access_key are required")
             return
 
         if not cluster_name:
             return_error("cluster_name is required")
             return
 
+        use_assume_role = bool(assume_role_arn)
+        auth_mode = "AssumeRole -> " + assume_role_arn if use_assume_role else "Direct Credentials"
+        demisto.info("Auth mode: " + auth_mode)
         demisto.info("Action: " + action)
         demisto.info("Cluster: " + cluster_name)
         demisto.info("Namespace: " + namespace)
         demisto.info("Lambda: " + lambda_function_name)
         demisto.info("Region: " + aws_region)
         demisto.info("Node hostname: " + (node_hostname or "N/A"))
+
+        # ==================================================================
+        # AUTHENTICATE
+        # ==================================================================
+
+        if use_assume_role:
+            # Use operator credentials to AssumeRole into scoped role
+            demisto.info("Assuming IAM Role: " + assume_role_arn)
+            sts_creds = sts_assume_role(
+                access_key=aws_access_key_id,
+                secret_key=aws_secret_access_key,
+                session_token=aws_session_token,
+                region=aws_region,
+                role_arn=assume_role_arn,
+                external_id=external_id,
+            )
+            aws_access_key_id = sts_creds['AccessKeyId']
+            aws_secret_access_key = sts_creds['SecretAccessKey']
+            aws_session_token = sts_creds['SessionToken']
+            demisto.info("STS AssumeRole successful, temporary credentials obtained")
+        else:
+            demisto.info("Using direct AWS credentials")
 
         # ==================================================================
         # BUILD LAMBDA PAYLOAD
@@ -501,7 +637,7 @@ def main():
             'EntryContext': entry_context,
         })
 
-        demisto.info("=== InvokeK8sContainmentLambda v1.0.0 END ===")
+        demisto.info("=== InvokeK8sContainmentLambda v2.1.0 END ===")
 
     except Exception as e:
         error_msg = "Error in InvokeK8sContainmentLambda: " + str(e)

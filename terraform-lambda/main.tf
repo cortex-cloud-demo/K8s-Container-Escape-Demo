@@ -62,6 +62,112 @@ resource "aws_iam_role_policy" "lambda_eks" {
 }
 
 #######################
+# IAM - LAMBDA INVOKER ROLE
+#######################
+#
+# Scoped role for invoking the containment Lambda (least-privilege).
+# Trust policy:
+#   - Always: same AWS account (dashboard operator / playbook with operator credentials)
+#   - Optionally: cross-account (Cortex XSIAM) if cortex_aws_account_id is set
+#
+
+data "aws_caller_identity" "current" {}
+
+locals {
+  # Same-account trust (always present)
+  same_account_statement = {
+    Sid    = "SameAccountAssumeRole"
+    Effect = "Allow"
+    Principal = {
+      AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+    }
+    Action = "sts:AssumeRole"
+  }
+
+  # Cross-account trust (only if cortex_aws_account_id is provided)
+  cross_account_statement = var.cortex_aws_account_id != "" ? [{
+    Sid    = "CortexCrossAccountAssumeRole"
+    Effect = "Allow"
+    Principal = {
+      AWS = "arn:aws:iam::${var.cortex_aws_account_id}:root"
+    }
+    Action = "sts:AssumeRole"
+    Condition = var.cortex_external_id != "" ? {
+      StringEquals = {
+        "sts:ExternalId" = var.cortex_external_id
+      }
+    } : {}
+  }] : []
+}
+
+resource "aws_iam_role" "lambda_invoker" {
+  name = "${var.project_name}-lambda-invoker"
+
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = concat([local.same_account_statement], local.cross_account_statement)
+  })
+
+  max_session_duration = 3600
+
+  tags = {
+    Name = "${var.project_name}-lambda-invoker"
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_invoker_policy" {
+  name = "${var.project_name}-lambda-invoker-policy"
+  role = aws_iam_role.lambda_invoker.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "lambda:InvokeFunction"
+      Resource = aws_lambda_function.containment.arn
+    }]
+  })
+}
+
+#######################
+# IAM USER - CORTEX PLAYBOOK
+#######################
+#
+# Dedicated IAM User with permanent credentials for Cortex playbook.
+# Only permission: sts:AssumeRole on the lambda-invoker role.
+#
+# Flow:
+#   Cortex playbook (permanent Access Key) → AssumeRole → lambda-invoker role → Lambda
+#
+
+resource "aws_iam_user" "cortex_playbook" {
+  name = "${var.project_name}-cortex-playbook-user"
+
+  tags = {
+    Name    = "${var.project_name}-cortex-playbook-user"
+    Purpose = "Cortex playbook - permanent credentials for Lambda invocation via AssumeRole"
+  }
+}
+
+resource "aws_iam_access_key" "cortex_playbook" {
+  user = aws_iam_user.cortex_playbook.name
+}
+
+resource "aws_iam_user_policy" "cortex_assume_role" {
+  name = "${var.project_name}-cortex-assume-lambda-invoker"
+  user = aws_iam_user.cortex_playbook.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "sts:AssumeRole"
+      Resource = aws_iam_role.lambda_invoker.arn
+    }]
+  })
+}
+
+#######################
 # EKS ACCESS FOR LAMBDA
 #######################
 
