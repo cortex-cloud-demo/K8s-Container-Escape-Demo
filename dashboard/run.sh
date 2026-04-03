@@ -17,5 +17,5 @@ echo "==> Installing dependencies..."
 pip install -q -r requirements.txt
 
 # Run the app
-echo "==> Starting dashboard on http://localhost:5000"
+echo "==> Starting dashboard on http://localhost:5555"
 python app.py

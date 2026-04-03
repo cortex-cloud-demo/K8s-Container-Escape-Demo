@@ -36,7 +36,7 @@ cd K8s-Container-Escape-Demo/dashboard
 
 This creates a Python virtual environment, installs dependencies, and starts the dashboard.
 
-Open **http://localhost:5000**
+Open **http://localhost:5555**
 
 ### 2. Configure AWS Credentials
 
@@ -54,7 +54,7 @@ Click **Test** to verify connectivity.
 
 Click **INFRA > Apply** — Terraform provisions:
 - VPC (2 public subnets, Internet Gateway, route tables)
-- EKS cluster (v1.35, AL2023 nodes, GP3 volumes)
+- EKS cluster (AL2023 nodes, GP3 volumes)
 - ECR repository
 - Dashboard IAM User + Operator Role
 - EKS access entries
@@ -100,7 +100,7 @@ Click **Destroy Lambda** then **Destroy All** in the Cleanup section. The dashbo
 | Component | Description |
 |-----------|-------------|
 | **Dashboard** | Web UI to orchestrate the full demo (infra, attack, response, security radar) |
-| **EKS Cluster** | AWS managed Kubernetes (v1.35) on AL2023 with GP3 volumes |
+| **EKS Cluster** | AWS managed Kubernetes on AL2023 with GP3 volumes |
 | **ECR** | Container registry for the vulnerable image |
 | **Vulnerable App** | Spring Boot app with CVE-2022-22965 (Spring4Shell) on Tomcat 9 |
 | **Pod Misconfigs** | `privileged`, `hostPID`, `hostNetwork`, `hostPath: /`, SA `cluster-admin` |

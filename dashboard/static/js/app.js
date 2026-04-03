@@ -1778,7 +1778,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   Kubernetes Container Escape Demo Dashboard
   -------------------------------------------
-  Target: AWS EKS 1.35 | AL2023 | GP3 volumes
+  Target: AWS EKS | AL2023 | GP3 volumes
   Vuln:   CVE-2022-22965 (Spring4Shell)
 
   Attack chain:
