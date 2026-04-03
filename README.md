@@ -29,7 +29,7 @@ Everything is orchestrated from a **web dashboard**: infrastructure provisioning
 ### 1. Clone & Launch Dashboard
 
 ```bash
-git clone https://github.com/cleypanw/K8s-Container-Escape-Demo.git
+git clone https://github.com/cortex-cloud-demo/K8s-Container-Escape-Demo.git
 cd K8s-Container-Escape-Demo/dashboard
 ./run.sh
 ```
