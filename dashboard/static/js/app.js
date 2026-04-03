@@ -958,6 +958,49 @@ async function cortexDeployScript(scriptName) {
     }
 }
 
+async function cortexDeployScriptsOnly() {
+    openTab('playbook');
+    playbookClear();
+    const line = '='.repeat(50);
+    playbookWrite(`${line}\n  DEPLOY CORTEX SCRIPTS ONLY\n${line}\n\n`);
+
+    const badge = document.getElementById('cortex-deploy-status');
+    if (badge) { badge.textContent = 'deploying...'; badge.style.color = '#f97316'; }
+
+    const scripts = ['ExtractK8sContainerEscapeIOCs', 'InvokeK8sContainmentLambda'];
+    let allOk = true;
+
+    for (const scriptName of scripts) {
+        playbookWrite(`Uploading ${scriptName}...\n`);
+        try {
+            const res = await fetch('/api/cortex/deploy-script', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ script_name: scriptName })
+            });
+            const data = await res.json();
+            if (data.status === 'ok') {
+                playbookWrite(`  ✅ ${scriptName} deployed\n\n`);
+            } else {
+                playbookWrite(`  ❌ ${scriptName}: ${data.message}\n\n`);
+                allOk = false;
+            }
+        } catch (e) {
+            playbookWrite(`  ❌ ${scriptName}: ${e.message}\n\n`);
+            allOk = false;
+        }
+    }
+
+    playbookWrite(`${line}\n`);
+    if (allOk) {
+        playbookWrite('All scripts deployed successfully.\n');
+        if (badge) { badge.textContent = 'scripts deployed'; badge.style.color = '#22c55e'; }
+    } else {
+        playbookWrite('Some scripts failed to deploy.\n');
+        if (badge) { badge.textContent = 'partial failure'; badge.style.color = '#ef4444'; }
+    }
+}
+
 async function cortexDeployAll() {
     openTab('playbook');
     playbookClear();

@@ -459,11 +459,91 @@ def infra_apply():
 
 @app.route("/api/infra/destroy", methods=["POST"])
 def infra_destroy():
-    cmd = (
-        "kubectl delete namespace vuln-app --ignore-not-found=true 2>/dev/null; "
-        "kubectl delete clusterrolebinding vuln-app-cluster-admin --ignore-not-found=true 2>/dev/null; "
-        f"{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()}"
-    )
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+    cmd = f"""set -e
+
+echo '=================================================='
+echo '  CLEANUP K8S RESOURCES'
+echo '=================================================='
+kubectl delete svc vuln-app-service -n vuln-app --ignore-not-found=true 2>/dev/null || true
+kubectl delete namespace vuln-app --ignore-not-found=true --wait=false 2>/dev/null || true
+kubectl delete clusterrolebinding vuln-app-cluster-admin --ignore-not-found=true 2>/dev/null || true
+
+VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo '')
+if [ -n "$VPC_ID" ]; then
+  echo ''
+  echo '=================================================='
+  echo "  CLEANUP AWS RESOURCES IN VPC $VPC_ID"
+  echo '=================================================='
+
+  # Delete Classic ELBs in the VPC
+  echo '==> Checking Classic Load Balancers...'
+  ELBS=$(aws elb describe-load-balancers --region {region} \
+    --query "LoadBalancerDescriptions[?VPCId==\`$VPC_ID\`].LoadBalancerName" --output text 2>/dev/null || echo '')
+  for ELB in $ELBS; do
+    echo "    Deleting Classic ELB: $ELB"
+    aws elb delete-load-balancer --load-balancer-name "$ELB" --region {region} 2>/dev/null || true
+  done
+
+  # Delete ALB/NLBs in the VPC
+  echo '==> Checking ALB/NLB Load Balancers...'
+  LB_ARNS=$(aws elbv2 describe-load-balancers --region {region} \
+    --query "LoadBalancers[?VpcId==\`$VPC_ID\`].LoadBalancerArn" --output text 2>/dev/null || echo '')
+  for LB_ARN in $LB_ARNS; do
+    echo "    Deleting ALB/NLB: $LB_ARN"
+    aws elbv2 delete-load-balancer --load-balancer-arn "$LB_ARN" --region {region} 2>/dev/null || true
+  done
+
+  # Release Elastic IPs associated with the VPC
+  echo '==> Checking Elastic IPs...'
+  EIPS=$(aws ec2 describe-addresses --region {region} \
+    --filters Name=domain,Values=vpc \
+    --query "Addresses[?NetworkInterfaceId!=null].AllocationId" --output text 2>/dev/null || echo '')
+  for EIP in $EIPS; do
+    echo "    Releasing EIP: $EIP"
+    aws ec2 release-address --allocation-id "$EIP" --region {region} 2>/dev/null || true
+  done
+
+  # Detach and delete orphaned ENIs (non-primary, non-Lambda)
+  echo '==> Checking orphaned ENIs...'
+  ENI_IDS=$(aws ec2 describe-network-interfaces --region {region} \
+    --filters Name=vpc-id,Values=$VPC_ID \
+    --query "NetworkInterfaces[?Attachment.DeviceIndex!=\`0\` || Attachment.InstanceId==null].NetworkInterfaceId" \
+    --output text 2>/dev/null || echo '')
+  for ENI in $ENI_IDS; do
+    ATTACH_ID=$(aws ec2 describe-network-interfaces --region {region} \
+      --network-interface-ids "$ENI" \
+      --query 'NetworkInterfaces[0].Attachment.AttachmentId' --output text 2>/dev/null || echo 'None')
+    if [ "$ATTACH_ID" != "None" ] && [ -n "$ATTACH_ID" ]; then
+      echo "    Detaching ENI: $ENI (attachment: $ATTACH_ID)"
+      aws ec2 detach-network-interface --attachment-id "$ATTACH_ID" --force --region {region} 2>/dev/null || true
+      sleep 5
+    fi
+    echo "    Deleting ENI: $ENI"
+    aws ec2 delete-network-interface --network-interface-id "$ENI" --region {region} 2>/dev/null || true
+  done
+
+  # Wait for all ENIs to clear
+  echo '==> Waiting for ENI cleanup...'
+  for i in $(seq 1 30); do
+    ENI_COUNT=$(aws ec2 describe-network-interfaces --region {region} \
+      --filters Name=vpc-id,Values=$VPC_ID Name=status,Values=in-use \
+      --query 'length(NetworkInterfaces)' --output text 2>/dev/null || echo '0')
+    if [ "$ENI_COUNT" = "0" ] || [ "$ENI_COUNT" = "None" ]; then
+      echo '==> VPC clean, no active ENIs remaining.'
+      break
+    fi
+    echo "    Waiting... $ENI_COUNT ENI(s) still in use (attempt $i/30)"
+    sleep 10
+  done
+fi
+
+echo ''
+echo '=================================================='
+echo '  TERRAFORM DESTROY'
+echo '=================================================='
+{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()}
+"""
     task_id = create_task("Terraform Destroy", cmd, cwd=TERRAFORM_DIR)
     return jsonify({"task_id": task_id})
 

@@ -258,7 +258,7 @@
                 <div class="step-desc">Push scripts + playbook to Cortex XSOAR/XSIAM</div>
                 <div class="step-actions">
                     <button class="btn btn-cortex" onclick="cortexDeployAll()">Deploy All</button>
-                    <button class="btn btn-ghost" onclick="cortexDeployScript('ExtractK8sContainerEscapeIOCs')">Script Only</button>
+                    <button class="btn btn-ghost" onclick="cortexDeployScriptsOnly()">Scripts Only</button>
                     <button class="btn btn-ghost" onclick="publishPlaybook()">Playbook Only</button>
                 </div>
                 <!-- Deploy details -->
@@ -596,6 +596,38 @@
                     </div>
                 </div>
 
+                <div class="overview-section">
+                    <div class="overview-phase">
+                        <div class="overview-phase-header">
+                            <span class="overview-phase-num phase-arch">4</span>
+                            <span class="overview-phase-title">Playbook Authentication Flow</span>
+                        </div>
+                        <p>Cortex XSIAM runs on GCP &mdash; no AWS SDK or implicit credentials available. The containment script (<code>InvokeK8sContainmentLambda</code>) uses <strong>pure SigV4 signing</strong> with <code>hmac</code>/<code>hashlib</code> for all AWS API calls.</p>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 1: Operator Credentials</div>
+                            <p>The playbook passes the <strong>cortex-playbook-user</strong> permanent Access Key (created by Terraform) to the script. These credentials never expire and have a single permission: <code>sts:AssumeRole</code> on the lambda-invoker role.</p>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 2: STS AssumeRole (SigV4-signed)</div>
+                            <p>The script signs a POST request to <code>sts.&lt;region&gt;.amazonaws.com</code> using the operator credentials. AWS STS returns temporary credentials (AccessKeyId, SecretAccessKey, SessionToken) scoped to the <strong>lambda-invoker</strong> role.</p>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 3: Lambda Invoke (SigV4-signed)</div>
+                            <p>The script signs a second request to <code>lambda.&lt;region&gt;.amazonaws.com</code> using the temporary credentials from Step 2. The Lambda is invoked with the containment action payload (action, cluster, namespace).</p>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 4: Lambda &rarr; EKS API</div>
+                            <p>The Lambda function authenticates to EKS using an STS presigned URL with the <code>x-k8s-aws-id</code> header, then executes Kubernetes API calls for containment actions (NetworkPolicy, RBAC, scale down, cordon, etc.).</p>
+                        </div>
+
+                        <p style="margin-top: 0.75rem; font-size: 0.85rem; opacity: 0.7;"><strong>Dual-mode:</strong> if <code>assume_role_arn</code> is not provided, Step 2 is skipped and the Lambda is invoked directly with the operator credentials (direct mode).</p>
+                    </div>
+                </div>
+
                 <div class="overview-section overview-arch">
                     <div class="overview-phase-header">
                         <span class="overview-phase-num phase-arch">i</span>
@@ -844,6 +876,6 @@
 </div>
 
 
-<script src="/static/js/app.js?v=16"></script>
+<script src="/static/js/app.js?v=17"></script>
 </body>
 </html>
