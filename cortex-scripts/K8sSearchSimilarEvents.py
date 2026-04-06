@@ -63,7 +63,7 @@ def to_list(value):
 
 def build_similar_by_process_query(process_name, node_fqdn, time_range):
     """Search for the same suspicious process on OTHER nodes (lateral movement detection)."""
-    exclude_node = f'AND agent_hostname != "{node_fqdn}"' if node_fqdn else ""
+    exclude_node = f'AND agent_hostname not contains "{node_fqdn}"' if node_fqdn else ""
 
     return {
         "name": "Same Process on Other Nodes",
@@ -84,7 +84,7 @@ def build_similar_by_process_query(process_name, node_fqdn, time_range):
 
 def build_similar_by_sha256_query(process_sha256, node_fqdn, time_range):
     """Search for the same binary (by SHA256) across all endpoints."""
-    exclude_node = f'AND agent_hostname != "{node_fqdn}"' if node_fqdn else ""
+    exclude_node = f'AND agent_hostname not contains "{node_fqdn}"' if node_fqdn else ""
 
     return {
         "name": "Same Binary SHA256 Across Endpoints",
@@ -105,7 +105,7 @@ def build_similar_by_sha256_query(process_sha256, node_fqdn, time_range):
 
 def build_similar_by_container_image_query(image_id, node_fqdn, time_range):
     """Search for the same container image running on other nodes."""
-    exclude_node = f'AND agent_hostname != "{node_fqdn}"' if node_fqdn else ""
+    exclude_node = f'AND agent_hostname not contains "{node_fqdn}"' if node_fqdn else ""
 
     return {
         "name": "Same Container Image on Other Nodes",

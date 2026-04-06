@@ -184,7 +184,7 @@ script: |-
 
   def build_causality_chain_query(node_fqdn, process_name, time_range):
       """XQL query to reconstruct the full causality chain on the compromised node."""
-      host_filter = f'agent_hostname = "{node_fqdn}"' if node_fqdn else ""
+      host_filter = f'agent_hostname contains "{node_fqdn}"' if node_fqdn else ""
       process_filter = f'AND action_process_image_name = "{process_name}"' if process_name else ""
 
       return {
@@ -206,7 +206,7 @@ script: |-
 
   def build_file_operations_query(node_fqdn, time_range):
       """XQL query to find suspicious file operations (webshell drops, config reads)."""
-      host_filter = f'agent_hostname = "{node_fqdn}"' if node_fqdn else ""
+      host_filter = f'agent_hostname contains "{node_fqdn}"' if node_fqdn else ""
 
       return {
           "name": "Suspicious File Operations",
@@ -220,7 +220,7 @@ script: |-
            or action_file_path contains "/proc/1/root"
   | fields _time, action_file_path, action_file_name, action_file_md5, action_file_sha256,
            action_process_image_name, action_process_image_command_line,
-           actor_process_image_name, action_file_action
+           actor_process_image_name, event_sub_type
   | sort asc _time
   | limit 50""",
           "time_range": time_range,
@@ -229,7 +229,7 @@ script: |-
 
   def build_network_connections_query(node_fqdn, time_range):
       """XQL query to find suspicious network connections (IMDS, C2, lateral movement)."""
-      host_filter = f'agent_hostname = "{node_fqdn}"' if node_fqdn else ""
+      host_filter = f'agent_hostname contains "{node_fqdn}"' if node_fqdn else ""
 
       return {
           "name": "Suspicious Network Connections",
@@ -253,7 +253,7 @@ script: |-
 
   def build_container_escape_query(node_fqdn, time_range):
       """XQL query to detect container escape patterns (nsenter, mount, chroot)."""
-      host_filter = f'agent_hostname = "{node_fqdn}"' if node_fqdn else ""
+      host_filter = f'agent_hostname contains "{node_fqdn}"' if node_fqdn else ""
 
       return {
           "name": "Container Escape Detection",
@@ -279,7 +279,7 @@ script: |-
 
   def build_credential_access_query(node_fqdn, time_range):
       """XQL query to detect credential theft (SA tokens, AWS IMDS, kubeconfig)."""
-      host_filter = f'agent_hostname = "{node_fqdn}"' if node_fqdn else ""
+      host_filter = f'agent_hostname contains "{node_fqdn}"' if node_fqdn else ""
 
       return {
           "name": "Credential Access Detection",

@@ -1206,7 +1206,7 @@ def cortex_upload_playbook_zip(api_path, yaml_path):
         return {"status": "error", "message": str(e)}, 500
 
 
-def cortex_json_request(api_path, json_data):
+def cortex_json_request(api_path, json_data, method="POST"):
     """Send a JSON request to Cortex API."""
     base_url = cortex_settings["base_url"]
     api_key = cortex_settings["api_key"]
@@ -1229,20 +1229,20 @@ def cortex_json_request(api_path, json_data):
     }
 
     try:
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
         with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
             resp_body = resp.read().decode("utf-8", errors="replace")
             return {
                 "status": "ok",
-                "message": f"Request to {api_path} succeeded",
+                "message": f"{method} {api_path} succeeded",
                 "http_status": resp.status,
                 "response": resp_body,
             }, 200
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")[:500]
-        return {"status": "error", "message": f"HTTP {e.code} on {api_path}: {err_body}"}, e.code
+        return {"status": "error", "message": f"HTTP {e.code} on {method} {api_path}: {err_body}"}, e.code
     except Exception as e:
-        return {"status": "error", "message": f"{api_path}: {e}"}, 500
+        return {"status": "error", "message": f"{method} {api_path}: {e}"}, 500
 
 
 def load_automation_as_json(yaml_path):
@@ -1337,20 +1337,29 @@ def deploy_script_to_cortex():
         # Handle 409 Conflict: script already exists, retry as update with existing ID
         if status_code == 409:
             import re
-            err_msg = result.get("message", "")
+            err_msg = result.get("message", "") + " " + result.get("response", "")
             id_match = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', err_msg)
             if id_match:
                 existing_id = id_match.group(1)
                 payload["script"]["id"] = existing_id
-                result2, status_code2 = cortex_json_request(api_path, payload)
+                # Try POST with ID (update mode)
+                result2, status_code2 = cortex_json_request(api_path, payload, method="POST")
                 if result2["status"] == "ok":
                     result2["script_name"] = script_name
                     result2["api_path"] = api_path
-                    result2["method"] = "json-update"
+                    result2["method"] = "json-update-post"
                     return jsonify(result2)
-                errors.append(f"JSON update (id={existing_id}): {result2.get('message', 'unknown')}")
+                errors.append(f"JSON POST update (id={existing_id}): HTTP {status_code2} {result2.get('message', 'unknown')}")
+                # Try PUT with ID
+                result3, status_code3 = cortex_json_request(api_path, payload, method="PUT")
+                if result3["status"] == "ok":
+                    result3["script_name"] = script_name
+                    result3["api_path"] = api_path
+                    result3["method"] = "json-update-put"
+                    return jsonify(result3)
+                errors.append(f"JSON PUT update (id={existing_id}): HTTP {status_code3} {result3.get('message', 'unknown')}")
             else:
-                errors.append(f"JSON {api_path}: 409 conflict but could not extract existing ID")
+                errors.append(f"JSON {api_path}: 409 conflict but could not extract existing ID from: {err_msg[:200]}")
         else:
             errors.append(f"JSON {api_path}: {result.get('message', 'unknown')}")
     except Exception as e:
@@ -1441,16 +1450,25 @@ def deploy_all_to_cortex():
             elif status_code == 409:
                 # Script already exists — retry as update with existing ID
                 import re
-                err_msg = result.get("message", "")
+                err_msg = result.get("message", "") + " " + result.get("response", "")
                 id_match = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', err_msg)
                 if id_match:
-                    payload["script"]["id"] = id_match.group(1)
-                    result2, status_code2 = cortex_json_request(api_path, payload)
+                    existing_id = id_match.group(1)
+                    payload["script"]["id"] = existing_id
+                    # Try POST with ID
+                    result2, status_code2 = cortex_json_request(api_path, payload, method="POST")
                     if result2["status"] == "ok":
-                        results.append({"type": "script", "name": script_name, "status": "ok", "api_path": api_path, "method": "json-update"})
+                        results.append({"type": "script", "name": script_name, "status": "ok", "api_path": api_path, "method": "json-update-post"})
                         deployed = True
                     else:
-                        script_errors.append(f"JSON update (id={id_match.group(1)}): HTTP {status_code2}")
+                        script_errors.append(f"JSON POST update (id={existing_id}): HTTP {status_code2}")
+                        # Try PUT with ID
+                        result3, status_code3 = cortex_json_request(api_path, payload, method="PUT")
+                        if result3["status"] == "ok":
+                            results.append({"type": "script", "name": script_name, "status": "ok", "api_path": api_path, "method": "json-update-put"})
+                            deployed = True
+                        else:
+                            script_errors.append(f"JSON PUT update (id={existing_id}): HTTP {status_code3}")
                 else:
                     script_errors.append(f"JSON {api_path}: 409 conflict, could not extract ID")
             else:
