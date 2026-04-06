@@ -1630,3 +1630,128 @@ body {
     color: var(--text-dim);
     font-size: 1rem;
 }
+
+/* ─── Cortex Deploy Objects List ────────────────── */
+
+.cortex-object-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.35rem 0.5rem;
+    margin-bottom: 0.2rem;
+    border-radius: 4px;
+    background: rgba(129, 140, 248, 0.04);
+    border: 1px solid rgba(129, 140, 248, 0.08);
+}
+.cortex-object-item:hover {
+    background: rgba(129, 140, 248, 0.08);
+}
+.cortex-object-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+    flex: 1;
+}
+.cortex-object-name {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+}
+.cortex-object-desc {
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    line-height: 1.3;
+}
+.cortex-object-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+    margin-left: 0.5rem;
+}
+.cortex-object-status {
+    font-size: 0.6rem;
+    font-weight: 600;
+}
+.btn-xs {
+    font-size: 0.6rem;
+    padding: 0.15rem 0.45rem;
+    min-width: unset;
+}
+
+/* Cortex detail modal */
+.modal-detail {
+    max-width: 620px;
+    text-align: left;
+}
+.modal-detail h3 {
+    color: #e2e8f0;
+    margin-bottom: 0;
+    font-size: 1rem;
+}
+.modal-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 1.2rem;
+}
+.modal-detail-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    background: #818cf8;
+    color: #0f172a;
+    white-space: nowrap;
+}
+.modal-detail-section {
+    margin-bottom: 1rem;
+}
+.modal-detail-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #818cf8;
+    margin-bottom: 0.3rem;
+}
+.modal-detail p {
+    font-size: 0.82rem;
+    color: #cbd5e1;
+    margin-bottom: 0;
+    line-height: 1.5;
+}
+.modal-detail-code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: #94a3b8;
+    background: #0f172a;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.7rem;
+    line-height: 1.6;
+}
+.modal-detail-usedby-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0;
+    font-size: 0.8rem;
+    color: #e2e8f0;
+}
+.modal-detail-usedby-badge {
+    font-size: 0.6rem;
+    font-weight: 600;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: #1e293b;
+    border: 1px solid var(--border);
+    color: #94a3b8;
+}
+.cortex-object-info:hover .cortex-object-name {
+    color: #818cf8;
+    text-decoration: underline;
+}

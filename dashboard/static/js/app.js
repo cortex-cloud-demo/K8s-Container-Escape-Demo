@@ -894,32 +894,182 @@ async function publishPlaybook() {
     openTab('playbook');
     playbookClear();
     const line = '='.repeat(50);
-    playbookWrite(`${line}\n  PUBLISH PLAYBOOK TO CORTEX\n${line}\n\n`);
-    playbookWrite('Uploading K8s_Container_Escape_Spring4Shell_Containment.yml...\n\n');
+    playbookWrite(`${line}\n  PUBLISH ALL PLAYBOOKS TO CORTEX\n${line}\n\n`);
 
     const badge = document.getElementById('cortex-deploy-status');
     if (badge) { badge.textContent = 'publishing...'; badge.style.color = '#f97316'; }
 
-    try {
-        const res = await fetch('/api/cortex/publish-playbook', { method: 'POST' });
-        const data = await res.json();
-        if (data.status === 'ok') {
-            playbookWrite(`${data.message}\n`);
-            playbookWrite(`HTTP Status: ${data.http_status}\n`);
-            if (data.response) playbookWrite(`\nResponse:\n${data.response}\n`);
-            playbookWrite(`\n${'─'.repeat(50)}\n`);
-            playbookWrite('Playbook published successfully.\n');
-            if (badge) { badge.textContent = 'published'; badge.style.color = '#22c55e'; }
-            const ps = document.getElementById('cortex-playbook-status');
-            if (ps) ps.textContent = 'deployed';
-        } else {
-            playbookWrite(`ERROR: ${data.message}\n`);
-            if (badge) { badge.textContent = 'failed'; badge.style.color = '#ef4444'; }
+    const playbooks = [
+        { name: 'containment', label: 'K8s Container Escape Containment' },
+        { name: 'forensic', label: 'K8s Container Escape Forensic Analysis' },
+        { name: 'search', label: 'K8s Container Escape Search Similar Events' },
+    ];
+    let allOk = true;
+
+    for (const pb of playbooks) {
+        const statusId = PLAYBOOK_STATUS_MAP[pb.name];
+        if (statusId) setItemStatus(statusId, 'deploying...', '#f97316');
+
+        playbookWrite(`Uploading ${pb.label}...\n`);
+        try {
+            const res = await fetch('/api/cortex/publish-playbook', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ playbook_name: pb.name })
+            });
+            const data = await res.json();
+            if (data.status === 'ok') {
+                playbookWrite(`  \u2705 ${pb.label} published\n\n`);
+                if (statusId) setItemStatus(statusId, '\u2705', '#22c55e');
+            } else {
+                playbookWrite(`  \u274C ${pb.label}: ${data.message}\n\n`);
+                if (statusId) setItemStatus(statusId, '\u274C', '#ef4444');
+                allOk = false;
+            }
+        } catch (e) {
+            playbookWrite(`  \u274C ${pb.label}: ${e.message}\n\n`);
+            if (statusId) setItemStatus(statusId, '\u274C', '#ef4444');
+            allOk = false;
         }
-    } catch (e) {
-        playbookWrite(`Request failed: ${e.message}\n`);
-        if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
     }
+
+    playbookWrite(`${'─'.repeat(50)}\n`);
+    if (allOk) {
+        playbookWrite('All playbooks published successfully.\n');
+        if (badge) { badge.textContent = 'published'; badge.style.color = '#22c55e'; }
+    } else {
+        playbookWrite('Some playbooks failed to publish.\n');
+        if (badge) { badge.textContent = 'partial failure'; badge.style.color = '#ef4444'; }
+    }
+}
+
+// Status badge mapping for individual deploy buttons
+const SCRIPT_STATUS_MAP = {
+    'ExtractK8sContainerEscapeIOCs': 'deploy-status-script-extract',
+    'InvokeK8sContainmentLambda': 'deploy-status-script-invoke',
+    'K8sForensicAnalysis': 'deploy-status-script-forensic',
+    'K8sSearchSimilarEvents': 'deploy-status-script-search',
+};
+const PLAYBOOK_STATUS_MAP = {
+    'containment': 'deploy-status-pb-containment',
+    'forensic': 'deploy-status-pb-forensic',
+    'search': 'deploy-status-pb-search',
+};
+
+function setItemStatus(id, text, color) {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = text; el.style.color = color; }
+}
+
+// ─── Cortex Detail Modal ────────────────────────────────────────────────────
+
+const CORTEX_DETAILS = {
+    'ExtractK8sContainerEscapeIOCs': {
+        type: 'SCRIPT',
+        title: 'ExtractK8sContainerEscapeIOCs',
+        desc: 'Analyzes XDR issue fields to extract Indicators of Compromise (container ID, namespace, node FQDN, process name/SHA256, container image). Determines incident severity (Critical/High/Medium/Low) based on attack indicators: Spring4Shell exploitation, webshell deployment, container escape techniques, and credential theft. Detects Spring4Shell patterns (ClassLoader manipulation, class.module parameters) and webshell indicators (.jsp file drops, Runtime.getRuntime, ProcessBuilder).',
+        usedBy: [
+            { type: 'Playbook', name: 'Containment', task: 'Task #1 — Triage' },
+            { type: 'Playbook', name: 'Forensic Analysis', task: 'Task #1 — Triage' },
+            { type: 'Playbook', name: 'Search Similar Events', task: 'Task #1 — Triage' },
+        ],
+        inputs: 'details, container_id, namespace, cluster_name,\nxdmsourcehostfqdn, xdmsourcehostipv4addresses,\nxdmsourceusername, xdmsourceprocessname,\ncausality_actor_process_*, image_id, agent_os_type',
+        outputs: 'K8sEscape.ContainerID, K8sEscape.Namespace,\nK8sEscape.ClusterName, K8sEscape.NodeFQDN,\nK8sEscape.ProcessName, K8sEscape.ProcessImageSHA256,\nK8sEscape.Severity, K8sEscape.Details\n\nIssue field: k8scontainerescapeiocs',
+    },
+    'InvokeK8sContainmentLambda': {
+        type: 'SCRIPT',
+        title: 'InvokeK8sContainmentLambda',
+        desc: 'Invokes the AWS Lambda containment function from Cortex XSIAM (GCP-hosted, no boto3). Uses pure SigV4 signing (hmac/hashlib) for all AWS API calls: STS AssumeRole to obtain temporary credentials scoped to the lambda-invoker IAM role, then Lambda Invoke with the containment action payload. Supports 7 actions: collect_evidence, network_isolate, revoke_rbac, scale_down, cordon_node, delete_pod, full_containment. Dual-mode: direct invocation if no assume_role_arn.',
+        usedBy: [
+            { type: 'Playbook', name: 'Containment', task: 'Tasks #2, #4-#9 — Evidence & Containment actions' },
+            { type: 'Playbook', name: 'Forensic Analysis', task: 'Task #8 — Collect Live Evidence' },
+        ],
+        inputs: 'action, cluster_name, namespace, region,\nlambda_function_name, aws_access_key_id,\naws_secret_access_key, assume_role_arn',
+        outputs: 'K8sContainment.Action, K8sContainment.Status,\nK8sContainment.LambdaResponse\n\nIssue field: k8scontainmentenrichment',
+    },
+    'K8sForensicAnalysis': {
+        type: 'SCRIPT',
+        title: 'K8sForensicAnalysis',
+        desc: 'Performs deep forensic analysis: CVE enrichment (Spring4Shell CVE-2022-22965 CVSS 9.8, Spring Cloud CVE-2022-22963), MITRE ATT&CK kill chain mapping (9 techniques from T1190 to T1530), and container escape indicator detection (nsenter, mount, chroot, /proc/1/root, IMDS, docker.sock). Generates 5 XQL forensic queries stored in K8sForensic.XQLQueries array for automatic execution by the Forensic Analysis playbook via xdr-xql-generic-query.',
+        usedBy: [
+            { type: 'Playbook', name: 'Forensic Analysis', task: 'Task #2 — Forensic Analysis' },
+        ],
+        inputs: 'container_id, namespace, cluster_name,\nnode_fqdn, node_ips, process_name,\nprocess_sha256, details, time_range (30 days)',
+        outputs: 'K8sForensic.DetectedCVEs, K8sForensic.AttackPhases,\nK8sForensic.EscapeIndicators, K8sForensic.XQLQueries[],\nK8sForensic.Summary\n\nIssue field: k8sforensicanalysis',
+    },
+    'K8sSearchSimilarEvents': {
+        type: 'SCRIPT',
+        title: 'K8sSearchSimilarEvents',
+        desc: 'Generates cross-tenant XQL threat hunting queries to determine blast radius and detect lateral movement. Targeted searches: same process on other nodes, same binary SHA256, same container image, namespace alert correlation. Broad hunts: webshell drops (.jsp) across all K8s nodes, container escape patterns (nsenter, chroot, /proc/1/root), IMDS credential theft (169.254.169.254). Targeted queries are stored in the issue field for manual Query Center execution; broad hunts are auto-executed by the playbook.',
+        usedBy: [
+            { type: 'Playbook', name: 'Search Similar Events', task: 'Task #2 — Generate Search Queries' },
+        ],
+        inputs: 'container_id, namespace, cluster_name,\nnode_fqdn, process_name, process_sha256,\nimage_id, details, time_range (30 days)',
+        outputs: 'K8sSimilar.QueriesGenerated, K8sSimilar.SearchCriteria,\nK8sSimilar.Queries[], K8sSimilar.Summary\n\nIssue field: k8ssearchsimilarevents',
+    },
+    'pb-containment': {
+        type: 'PLAYBOOK',
+        title: 'K8s Container Escape — Containment',
+        desc: 'Automated incident response for K8s container escape. Triages the XDR issue to extract IOCs, collects forensic evidence via Lambda, then gates on severity: Critical/High with Spring4Shell indicators proceeds automatically, otherwise requests operator approval. Executes full containment: deny-all NetworkPolicy, cluster-admin ClusterRoleBinding deletion, deployment scale-down to 0, node cordoning, force pod deletion. Final verification re-collects evidence.',
+        usedBy: [
+            { type: 'Script', name: 'ExtractK8sContainerEscapeIOCs', task: 'Task #1 — Triage' },
+            { type: 'Script', name: 'InvokeK8sContainmentLambda', task: 'Tasks #2, #4-#9 — Lambda actions' },
+        ],
+        inputs: 'Triggered on XDR issue with container escape indicators.\nAll inputs from incident fields (details, container_id,\nnamespace, cluster_name, node FQDN, process info).',
+        outputs: 'Task #1: K8sEscape.* context (IOCs, severity)\nTask #2: Evidence collection (pods, logs, RBAC, events)\nTasks #4-#8: Containment actions (NetPol, RBAC, scale, cordon, delete)\nTask #9: Verification evidence\n\n10 tasks total',
+    },
+    'pb-forensic': {
+        type: 'PLAYBOOK',
+        title: 'K8s Container Escape — Forensic Analysis',
+        desc: 'Deep investigation playbook. Runs CVE enrichment and MITRE ATT&CK mapping, then automatically executes 5 XQL queries via xdr-xql-generic-query: causality chain reconstruction, suspicious file operations (webshell drops, config reads), network connections (IMDS, C2, K8s API), container escape patterns (nsenter, chroot, mount), and credential access attempts (SA tokens, AWS keys). Concludes with live evidence collection via Lambda.',
+        usedBy: [
+            { type: 'Script', name: 'ExtractK8sContainerEscapeIOCs', task: 'Task #1 — Triage' },
+            { type: 'Script', name: 'K8sForensicAnalysis', task: 'Task #2 — Forensic Analysis' },
+            { type: 'Script', name: 'InvokeK8sContainmentLambda', task: 'Task #8 — Evidence' },
+            { type: 'Built-in', name: 'xdr-xql-generic-query', task: 'Tasks #3-#7 — XQL queries' },
+        ],
+        inputs: 'Triggered on XDR issue with container escape indicators.\nAll inputs from incident fields + K8sEscape.* context.',
+        outputs: 'Task #2: K8sForensic.* (CVEs, MITRE, XQL queries)\nTasks #3-#7: XQL results (causality, files, network,\n  escape patterns, credentials)\nTask #8: Live evidence from Lambda\n\n9 tasks total',
+    },
+    'pb-search': {
+        type: 'PLAYBOOK',
+        title: 'K8s Container Escape — Search Similar Events',
+        desc: 'Threat hunting playbook to determine attack spread. Generates targeted and broad XQL queries, then auto-executes 3 broad hunts via xdr-xql-generic-query: webshell drops across all K8s nodes, container escape patterns on all endpoints, and IMDS credential theft from containers. Targeted IOC queries (lateral movement, binary hash, blast radius, alert correlation) stored in issue field for manual Query Center execution. Analyst reviews and decides: escalate or close.',
+        usedBy: [
+            { type: 'Script', name: 'ExtractK8sContainerEscapeIOCs', task: 'Task #1 — Triage' },
+            { type: 'Script', name: 'K8sSearchSimilarEvents', task: 'Task #2 — Generate Queries' },
+            { type: 'Built-in', name: 'xdr-xql-generic-query', task: 'Tasks #3-#5 — XQL hunts' },
+        ],
+        inputs: 'Triggered on XDR issue with container escape indicators.\nAll inputs from incident fields + K8sEscape.* context.',
+        outputs: 'Task #2: K8sSimilar.* (queries, search criteria)\nTasks #3-#5: XQL hunt results (webshell, escape, IMDS)\nTask #6: Analyst review decision\n\n8 tasks total',
+    },
+};
+
+function showCortexDetail(key) {
+    const data = CORTEX_DETAILS[key];
+    if (!data) return;
+
+    document.getElementById('cortex-detail-badge').textContent = data.type;
+    document.getElementById('cortex-detail-title').textContent = data.title;
+    document.getElementById('cortex-detail-desc').textContent = data.desc;
+    document.getElementById('cortex-detail-inputs').textContent = data.inputs;
+    document.getElementById('cortex-detail-outputs').textContent = data.outputs;
+
+    // Build "used by" section
+    const usedByEl = document.getElementById('cortex-detail-usedby');
+    usedByEl.innerHTML = '';
+    for (const u of data.usedBy) {
+        const div = document.createElement('div');
+        div.className = 'modal-detail-usedby-item';
+        div.innerHTML = `<span class="modal-detail-usedby-badge">${u.type}</span> <strong>${u.name}</strong> <span style="color:#64748b;">&mdash; ${u.task}</span>`;
+        usedByEl.appendChild(div);
+    }
+
+    document.getElementById('cortex-detail-modal').classList.add('visible');
+}
+
+function closeCortexDetail() {
+    document.getElementById('cortex-detail-modal').classList.remove('visible');
 }
 
 async function cortexDeployScript(scriptName) {
@@ -927,10 +1077,9 @@ async function cortexDeployScript(scriptName) {
     playbookClear();
     const line = '='.repeat(50);
     playbookWrite(`${line}\n  DEPLOY SCRIPT: ${scriptName}\n${line}\n\n`);
-    playbookWrite(`Uploading automation-${scriptName}.yml to Cortex...\n\n`);
 
-    const badge = document.getElementById('cortex-deploy-status');
-    if (badge) { badge.textContent = 'deploying...'; badge.style.color = '#f97316'; }
+    const statusId = SCRIPT_STATUS_MAP[scriptName];
+    if (statusId) setItemStatus(statusId, 'deploying...', '#f97316');
 
     try {
         const res = await fetch('/api/cortex/deploy-script', {
@@ -940,64 +1089,46 @@ async function cortexDeployScript(scriptName) {
         });
         const data = await res.json();
         if (data.status === 'ok') {
-            playbookWrite(`Script '${scriptName}' deployed to Cortex\n`);
-            playbookWrite(`API path: ${data.api_path}\n`);
-            if (data.response) playbookWrite(`\nResponse:\n${data.response}\n`);
-            playbookWrite(`\n${'─'.repeat(50)}\n`);
-            playbookWrite('Script deployed successfully.\n');
-            if (badge) { badge.textContent = 'deployed'; badge.style.color = '#22c55e'; }
-            const ss = document.getElementById('cortex-script-status');
-            if (ss) ss.textContent = 'deployed';
+            playbookWrite(`\u2705 ${scriptName} deployed\n`);
+            if (data.api_path) playbookWrite(`API: ${data.api_path}\n`);
+            if (statusId) setItemStatus(statusId, '\u2705', '#22c55e');
         } else {
-            playbookWrite(`ERROR: ${data.message}\n`);
-            if (badge) { badge.textContent = 'failed'; badge.style.color = '#ef4444'; }
+            playbookWrite(`\u274C ${scriptName}: ${data.message}\n`);
+            if (statusId) setItemStatus(statusId, '\u274C', '#ef4444');
         }
     } catch (e) {
-        playbookWrite(`Request failed: ${e.message}\n`);
-        if (badge) { badge.textContent = 'error'; badge.style.color = '#ef4444'; }
+        playbookWrite(`\u274C ${scriptName}: ${e.message}\n`);
+        if (statusId) setItemStatus(statusId, '\u274C', '#ef4444');
     }
 }
 
-async function cortexDeployScriptsOnly() {
+async function cortexDeployPlaybook(playbookName) {
     openTab('playbook');
     playbookClear();
     const line = '='.repeat(50);
-    playbookWrite(`${line}\n  DEPLOY CORTEX SCRIPTS ONLY\n${line}\n\n`);
+    playbookWrite(`${line}\n  DEPLOY PLAYBOOK: ${playbookName}\n${line}\n\n`);
 
-    const badge = document.getElementById('cortex-deploy-status');
-    if (badge) { badge.textContent = 'deploying...'; badge.style.color = '#f97316'; }
+    const statusId = PLAYBOOK_STATUS_MAP[playbookName];
+    if (statusId) setItemStatus(statusId, 'deploying...', '#f97316');
 
-    const scripts = ['ExtractK8sContainerEscapeIOCs', 'InvokeK8sContainmentLambda'];
-    let allOk = true;
-
-    for (const scriptName of scripts) {
-        playbookWrite(`Uploading ${scriptName}...\n`);
-        try {
-            const res = await fetch('/api/cortex/deploy-script', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ script_name: scriptName })
-            });
-            const data = await res.json();
-            if (data.status === 'ok') {
-                playbookWrite(`  ✅ ${scriptName} deployed\n\n`);
-            } else {
-                playbookWrite(`  ❌ ${scriptName}: ${data.message}\n\n`);
-                allOk = false;
-            }
-        } catch (e) {
-            playbookWrite(`  ❌ ${scriptName}: ${e.message}\n\n`);
-            allOk = false;
+    try {
+        const res = await fetch('/api/cortex/publish-playbook', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ playbook_name: playbookName })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            playbookWrite(`\u2705 Playbook '${playbookName}' published\n`);
+            if (data.api_path) playbookWrite(`API: ${data.api_path}\n`);
+            if (statusId) setItemStatus(statusId, '\u2705', '#22c55e');
+        } else {
+            playbookWrite(`\u274C Playbook '${playbookName}': ${data.message}\n`);
+            if (statusId) setItemStatus(statusId, '\u274C', '#ef4444');
         }
-    }
-
-    playbookWrite(`${line}\n`);
-    if (allOk) {
-        playbookWrite('All scripts deployed successfully.\n');
-        if (badge) { badge.textContent = 'scripts deployed'; badge.style.color = '#22c55e'; }
-    } else {
-        playbookWrite('Some scripts failed to deploy.\n');
-        if (badge) { badge.textContent = 'partial failure'; badge.style.color = '#ef4444'; }
+    } catch (e) {
+        playbookWrite(`\u274C Playbook '${playbookName}': ${e.message}\n`);
+        if (statusId) setItemStatus(statusId, '\u274C', '#ef4444');
     }
 }
 
@@ -1006,18 +1137,14 @@ async function cortexDeployAll() {
     playbookClear();
     const line = '='.repeat(50);
     playbookWrite(`${line}\n  DEPLOY ALL CORTEX OBJECTS\n${line}\n\n`);
-    playbookWrite('Deploying scripts + playbook to Cortex...\n\n');
+    playbookWrite('Deploying scripts + playbooks to Cortex...\n\n');
 
     const badge = document.getElementById('cortex-deploy-status');
     if (badge) { badge.textContent = 'deploying...'; badge.style.color = '#f97316'; }
 
-    const detailsPanel = document.getElementById('cortex-deploy-details');
-    if (detailsPanel) detailsPanel.style.display = 'block';
-
-    const scriptStatus = document.getElementById('cortex-script-status');
-    const playbookStatus = document.getElementById('cortex-playbook-status');
-    if (scriptStatus) scriptStatus.textContent = 'deploying...';
-    if (playbookStatus) playbookStatus.textContent = 'pending...';
+    // Set all items to deploying
+    for (const id of Object.values(SCRIPT_STATUS_MAP)) setItemStatus(id, 'deploying...', '#f97316');
+    for (const id of Object.values(PLAYBOOK_STATUS_MAP)) setItemStatus(id, 'pending...', '#94a3b8');
 
     try {
         const res = await fetch('/api/cortex/deploy-all', { method: 'POST' });
@@ -1030,14 +1157,20 @@ async function cortexDeployAll() {
             if (r.message) playbookWrite(`   Error: ${r.message}\n`);
             playbookWrite('\n');
 
-            // Update detail panel
-            if (r.type === 'script' && scriptStatus) {
-                scriptStatus.textContent = r.status === 'ok' ? 'deployed' : 'failed';
-                scriptStatus.style.color = r.status === 'ok' ? '#22c55e' : '#ef4444';
+            // Update per-item status badges
+            const statusColor = r.status === 'ok' ? '#22c55e' : '#ef4444';
+            const statusText = r.status === 'ok' ? '\u2705' : '\u274C';
+            if (r.type === 'script') {
+                const id = SCRIPT_STATUS_MAP[r.name];
+                if (id) setItemStatus(id, statusText, statusColor);
             }
-            if (r.type === 'playbook' && playbookStatus) {
-                playbookStatus.textContent = r.status === 'ok' ? 'deployed' : 'failed';
-                playbookStatus.style.color = r.status === 'ok' ? '#22c55e' : '#ef4444';
+            if (r.type === 'playbook') {
+                // Map full playbook names from backend to short keys
+                const pbKey = r.name.includes('Containment') ? 'containment'
+                    : r.name.includes('Forensic') ? 'forensic'
+                    : r.name.includes('Search') ? 'search' : null;
+                const id = pbKey ? PLAYBOOK_STATUS_MAP[pbKey] : null;
+                if (id) setItemStatus(id, statusText, statusColor);
             }
         }
 

@@ -1,0 +1,638 @@
+id: f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c
+version: -1
+name: K8s Container Escape - Forensic Analysis
+description: |-
+  Forensic analysis playbook for K8s container escape incidents on AWS EKS.
+  Triggered by Cortex XDR issues. Performs deep forensic investigation with
+  automated XQL query execution.
+
+  ## Playbook Flow
+  1. Triage - ExtractK8sContainerEscapeIOCs analyzes XDR issue fields
+  2. Forensic Analysis - K8sForensicAnalysis: CVE enrichment, MITRE mapping, XQL generation
+  3-7. XQL Execution - 5 queries executed automatically via xdr-xql-generic-query:
+       3. Causality Chain Analysis
+       4. Suspicious File Operations
+       5. Network Connections (IMDS, C2, K8s API)
+       6. Container Escape Patterns
+       7. Credential Access Attempts
+  8. Collect Live Evidence - Lambda collect_evidence (pods, logs, RBAC, events)
+  9. Complete - All results in issue fields + context
+
+  ## XQL Integration
+  The K8sForensicAnalysis script generates XQL queries stored in K8sForensic.XQLQueries.
+  Each query is then executed via xdr-xql-generic-query (built-in XDR integration)
+  and results are stored in the context for analyst review.
+
+  ## Usage
+  - Can be triggered manually on any container escape XDR issue
+  - Can be used as a sub-playbook before containment
+  - Does NOT perform containment — investigation only
+contentitemexportablefields:
+  contentitemfields:
+    packID: K8sContainerEscape
+    packName: K8s Container Escape Response
+    itemVersion: 1.1.0
+    fromServerVersion: 6.10.0
+    toServerVersion: ""
+    definitionid: ""
+    prevname: ""
+    isoverridable: false
+    supportedModules: []
+vcShouldKeepItemLegacyProdMachine: false
+starttaskid: "0"
+tasks:
+  "0":
+    id: "0"
+    taskid: a1b1c1d1-e1f1-4a1b-8c1d-0e1f1a1b1c1d
+    type: start
+    task:
+      id: a1b1c1d1-e1f1-4a1b-8c1d-0e1f1a1b1c1d
+      version: -1
+      name: ""
+      description: ""
+      iscommand: false
+      brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "1"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 50
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "1":
+    id: "1"
+    taskid: a2b2c2d2-e2f2-4a2b-8c2d-0e2f2a2b2c2d
+    type: regular
+    task:
+      id: a2b2c2d2-e2f2-4a2b-8c2d-0e2f2a2b2c2d
+      version: -1
+      name: "Triage - Extract IOCs"
+      description: |-
+        Execute ExtractK8sContainerEscapeIOCs to analyze XDR issue fields
+        and extract IOCs, severity, and attack indicators.
+        Populates K8sEscape context used by subsequent forensic tasks.
+      iscommand: true
+      brand: ""
+      script: ExtractK8sContainerEscapeIOCs
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "2"
+    scriptarguments:
+      details:
+        simple: ${incident.details}
+      container_id:
+        simple: ${incident.container_id}
+      namespace:
+        simple: ${incident.namespace}
+      xdmsourcehostfqdn:
+        simple: ${incident.xdmsourcehostfqdn}
+      xdmsourcehostipv4addresses:
+        simple: ${incident.xdmsourcehostipv4addresses}
+      xdmsourceusername:
+        simple: ${incident.xdmsourceusername}
+      xdmsourceprocessname:
+        simple: ${incident.xdmsourceprocessname}
+      causality_actor_process_command_line:
+        simple: ${incident.causality_actor_process_command_line}
+      causality_actor_process_image_path:
+        simple: ${incident.causality_actor_process_image_path}
+      causality_actor_process_image_sha256:
+        simple: ${incident.causality_actor_process_image_sha256}
+      image_id:
+        simple: ${incident.image_id}
+      agent_os_type:
+        simple: ${incident.agent_os_type}
+      agent_os_sub_type:
+        simple: ${incident.agent_os_sub_type}
+      cluster_name:
+        simple: ${incident.cluster_name}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 200
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "2":
+    id: "2"
+    taskid: a3b3c3d3-e3f3-4a3b-8c3d-0e3f3a3b3c3d
+    type: regular
+    task:
+      id: a3b3c3d3-e3f3-4a3b-8c3d-0e3f3a3b3c3d
+      version: -1
+      name: "Forensic Analysis - CVE / MITRE / XQL Generation"
+      description: |-
+        Execute K8sForensicAnalysis for deep forensic investigation:
+        - CVE enrichment (Spring4Shell detection, CVSS score, affected versions)
+        - MITRE ATT&CK kill chain mapping (Initial Access -> Credential Access)
+        - Container escape indicator detection
+        - Generate 5 XQL queries for automated execution in subsequent tasks
+
+        The generated XQL queries are stored in K8sForensic.XQLQueries (array of strings)
+        and will be executed via xdr-xql-generic-query in the next tasks.
+      iscommand: true
+      brand: ""
+      script: K8sForensicAnalysis
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "3"
+    scriptarguments:
+      container_id:
+        simple: ${K8sEscape.ContainerID}
+      namespace:
+        simple: ${K8sEscape.Namespace}
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      node_fqdn:
+        simple: ${K8sEscape.NodeFQDN}
+      node_ips:
+        simple: ${K8sEscape.NodeIPs}
+      process_name:
+        simple: ${K8sEscape.ProcessName}
+      process_sha256:
+        simple: ${K8sEscape.ProcessImageSHA256}
+      details:
+        simple: ${K8sEscape.Details}
+      time_range:
+        simple: "30 days"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 400
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "3":
+    id: "3"
+    taskid: a4b4c4d4-e4f4-4a4b-8c4d-0e4f4a4b4c4d
+    type: regular
+    task:
+      id: a4b4c4d4-e4f4-4a4b-8c4d-0e4f4a4b4c4d
+      version: -1
+      name: "XQL: Causality Chain Analysis"
+      description: |-
+        Execute the causality chain XQL query to reconstruct the full process
+        tree on the compromised node. Shows parent-child relationships between
+        processes involved in the attack chain.
+
+        Query executed via xdr-xql-generic-query (built-in XDR integration).
+        Results stored in K8sForensicXQL.CausalityChain context.
+      iscommand: true
+      brand: ""
+      script: xdr-xql-generic-query
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "4"
+    scriptarguments:
+      query_name:
+        simple: "K8s Forensic - Causality Chain"
+      query:
+        simple: ${K8sForensic.XQLQueries.[0]}
+      time_frame:
+        simple: "30 days"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 600
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: true
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "4":
+    id: "4"
+    taskid: a5b5c5d5-e5f5-4a5b-8c5d-0e5f5a5b5c5d
+    type: regular
+    task:
+      id: a5b5c5d5-e5f5-4a5b-8c5d-0e5f5a5b5c5d
+      version: -1
+      name: "XQL: Suspicious File Operations"
+      description: |-
+        Search for suspicious file operations on the compromised node:
+        webshell drops (.jsp), config reads (/etc/shadow, /etc/kubernetes),
+        ServiceAccount token access, host filesystem traversal via /proc/1/root.
+      iscommand: true
+      brand: ""
+      script: xdr-xql-generic-query
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "5"
+    scriptarguments:
+      query_name:
+        simple: "K8s Forensic - File Operations"
+      query:
+        simple: ${K8sForensic.XQLQueries.[1]}
+      time_frame:
+        simple: "30 days"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 780
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: true
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "5":
+    id: "5"
+    taskid: a6b6c6d6-e6f6-4a6b-8c6d-0e6f6a6b6c6d
+    type: regular
+    task:
+      id: a6b6c6d6-e6f6-4a6b-8c6d-0e6f6a6b6c6d
+      version: -1
+      name: "XQL: Network Connections"
+      description: |-
+        Search for suspicious network connections from the compromised node:
+        IMDS metadata access (169.254.169.254), K8s API (6443, 10250),
+        etcd (2379), and external HTTPS connections.
+      iscommand: true
+      brand: ""
+      script: xdr-xql-generic-query
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "6"
+    scriptarguments:
+      query_name:
+        simple: "K8s Forensic - Network Connections"
+      query:
+        simple: ${K8sForensic.XQLQueries.[2]}
+      time_frame:
+        simple: "30 days"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 960
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: true
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "6":
+    id: "6"
+    taskid: a7b7c7d7-e7f7-4a7b-8c7d-0e7f7a7b7c7d
+    type: regular
+    task:
+      id: a7b7c7d7-e7f7-4a7b-8c7d-0e7f7a7b7c7d
+      version: -1
+      name: "XQL: Container Escape Patterns"
+      description: |-
+        Search for container escape patterns on the compromised node:
+        nsenter execution, chroot, /proc/1/root access, mount operations,
+        docker.sock and containerd.sock access.
+      iscommand: true
+      brand: ""
+      script: xdr-xql-generic-query
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "7"
+    scriptarguments:
+      query_name:
+        simple: "K8s Forensic - Container Escape Patterns"
+      query:
+        simple: ${K8sForensic.XQLQueries.[3]}
+      time_frame:
+        simple: "30 days"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1140
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: true
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "7":
+    id: "7"
+    taskid: a8b8c8d8-e8f8-4a8b-8c8d-0e8f8a8b8c8d
+    type: regular
+    task:
+      id: a8b8c8d8-e8f8-4a8b-8c8d-0e8f8a8b8c8d
+      version: -1
+      name: "XQL: Credential Access Attempts"
+      description: |-
+        Search for credential theft attempts:
+        ServiceAccount token reads, IMDS credential access,
+        AWS CLI usage, kubectl execution, kubeconfig access.
+      iscommand: true
+      brand: ""
+      script: xdr-xql-generic-query
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "8"
+    scriptarguments:
+      query_name:
+        simple: "K8s Forensic - Credential Access"
+      query:
+        simple: ${K8sForensic.XQLQueries.[4]}
+      time_frame:
+        simple: "30 days"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1320
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: true
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "8":
+    id: "8"
+    taskid: a9b9c9d9-e9f9-4a9b-8c9d-0e9f9a9b9c9d
+    type: regular
+    task:
+      id: a9b9c9d9-e9f9-4a9b-8c9d-0e9f9a9b9c9d
+      version: -1
+      name: "Collect Live Evidence via Lambda"
+      description: |-
+        Invoke the K8s Containment Lambda to collect live forensic evidence from EKS.
+        Complements the XQL-based analysis with real-time K8s API data:
+        - Pod configuration (privileged, hostPID, hostNetwork, hostPath mounts)
+        - Pod logs (last 50 lines per pod)
+        - Kubernetes events in the namespace
+        - RBAC bindings (cluster-admin associations)
+        - Node status for the compromised host
+      iscommand: true
+      brand: ""
+      script: InvokeK8sContainmentLambda
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "9"
+    scriptarguments:
+      assume_role_arn:
+        simple: ${inputs.AssumeRoleARN}
+      external_id:
+        simple: ${inputs.ExternalID}
+      aws_access_key_id:
+        simple: ${inputs.AWSAccessKeyID}
+      aws_secret_access_key:
+        simple: ${inputs.AWSSecretAccessKey}
+      aws_session_token:
+        simple: ${inputs.AWSSessionToken}
+      aws_region:
+        simple: ${inputs.Region}
+      lambda_function_name:
+        simple: ${inputs.LambdaFunction}
+      action:
+        simple: collect_evidence
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      namespace:
+        simple: ${K8sEscape.Namespace}
+      node_hostname:
+        simple: ${K8sEscape.NodeFQDN}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1500
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "9":
+    id: "9"
+    taskid: b1c1d1e1-f1a1-4b1c-9d1e-0f1a1b1c1d1e
+    type: title
+    task:
+      id: b1c1d1e1-f1a1-4b1c-9d1e-0f1a1b1c1d1e
+      version: -1
+      name: Forensic Analysis Complete
+      description: |-
+        Forensic analysis complete. All XQL queries executed and results available.
+
+        Issue fields populated:
+        - k8scontainerescapeiocs: IOC extraction report
+        - k8sforensicanalysis: CVE enrichment, MITRE mapping, XQL queries
+        - k8scontainmentenrichment: Live evidence from EKS
+
+        XQL results available in context:
+        - Tasks 3-7: xdr-xql-generic-query results (causality, files, network, escape, credentials)
+
+        Next steps:
+        - Review XQL results in the War Room for detailed findings
+        - Check MITRE ATT&CK mapping to understand full attack path
+        - If containment needed: run the K8s Container Escape Containment playbook
+        - If lateral movement suspected: run the K8s Similar Event Search playbook
+      type: title
+      iscommand: false
+      brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks: {}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1700
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+inputs:
+  - key: AWSAccessKeyID
+    value:
+      simple: ""
+    required: true
+    description: AWS Access Key ID (for Lambda evidence collection)
+    playbookInputQuery: null
+  - key: AWSSecretAccessKey
+    value:
+      simple: ""
+    required: true
+    description: AWS Secret Access Key
+    playbookInputQuery: null
+  - key: AWSSessionToken
+    value:
+      simple: ""
+    required: false
+    description: AWS Session Token (optional, for temporary credentials)
+    playbookInputQuery: null
+  - key: AssumeRoleARN
+    value:
+      simple: ""
+    required: false
+    description: "IAM Role ARN to assume for Lambda invocation (optional)"
+    playbookInputQuery: null
+  - key: ExternalID
+    value:
+      simple: ""
+    required: false
+    description: External ID for STS AssumeRole (optional)
+    playbookInputQuery: null
+  - key: Region
+    value:
+      simple: eu-west-3
+    required: true
+    description: AWS region
+    playbookInputQuery: null
+  - key: LambdaFunction
+    value:
+      simple: k8s-escape-demo-containment
+    required: true
+    description: Lambda function name
+    playbookInputQuery: null
+inputSections:
+  - inputs:
+      - AWSAccessKeyID
+      - AWSSecretAccessKey
+      - AWSSessionToken
+    name: AWS Credentials
+    description: Base AWS credentials for Lambda evidence collection.
+  - inputs:
+      - AssumeRoleARN
+      - ExternalID
+    name: AssumeRole (optional)
+    description: If provided, base credentials are used to AssumeRole before invoking Lambda.
+  - inputs:
+      - Region
+      - LambdaFunction
+    name: Lambda Configuration
+    description: AWS region and Lambda function name.
+outputSections:
+  - outputs:
+      - K8sForensic.DetectedCVEs
+      - K8sForensic.AttackPhases
+      - K8sForensic.EscapeIndicators
+      - K8sForensic.XQLQueries
+      - K8sContainment.Evidence
+    name: Forensic Outputs
+    description: CVE enrichment, MITRE mapping, XQL results, and live evidence.
+outputs:
+  - contextPath: K8sForensic.DetectedCVEs
+    description: Detected CVEs with enrichment data
+  - contextPath: K8sForensic.AttackPhases
+    description: MITRE ATT&CK kill chain phases
+  - contextPath: K8sForensic.EscapeIndicators
+    description: Container escape technique indicators
+  - contextPath: K8sForensic.XQLQueries
+    description: XQL forensic queries (also executed in tasks 3-7)
+  - contextPath: K8sContainment.Evidence
+    description: Live forensic evidence from EKS
+view: |-
+  {
+    "linkLabelsPosition": {},
+    "paper": {
+      "dimensions": {
+        "height": 1865,
+        "width": 630,
+        "x": 450,
+        "y": 50
+      }
+    }
+  }
+fromversion: "6.10.0"
+toversion: ""
+tags:
+  - Kubernetes
+  - Container Security
+  - Forensics
+  - CVE
+  - MITRE ATT&CK
+  - Spring4Shell
+  - EKS
+  - Cortex XDR
+  - XQL

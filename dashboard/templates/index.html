@@ -255,21 +255,91 @@
                     <span class="step-status" id="cortex-deploy-status"></span>
                 </div>
                 <div class="step-name">Deploy Cortex Objects</div>
-                <div class="step-desc">Push scripts + playbook to Cortex XSOAR/XSIAM</div>
+                <div class="step-desc">Push automation scripts + playbooks to Cortex XSIAM/XSOAR</div>
                 <div class="step-actions">
                     <button class="btn btn-cortex" onclick="cortexDeployAll()">Deploy All</button>
-                    <button class="btn btn-ghost" onclick="cortexDeployScriptsOnly()">Scripts Only</button>
-                    <button class="btn btn-ghost" onclick="publishPlaybook()">Playbook Only</button>
                 </div>
-                <!-- Deploy details -->
-                <div class="cortex-deploy-details" id="cortex-deploy-details" style="display:none; margin-top: 0.5rem;">
-                    <div class="cluster-info-row">
-                        <span class="cluster-info-label">Script</span>
-                        <span class="cluster-info-value" id="cortex-script-status">-</span>
+
+                <div class="cortex-objects-list" style="margin-top: 0.75rem;">
+                    <div class="cortex-object-title" style="font-size: 0.7rem; color: #818cf8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem; font-weight: 600;">Scripts</div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('ExtractK8sContainerEscapeIOCs')" style="cursor:pointer;">
+                            <span class="cortex-object-name">ExtractK8sContainerEscapeIOCs</span>
+                            <span class="cortex-object-desc">Triage: IOC extraction, severity, Spring4Shell/webshell detection</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-script-extract"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployScript('ExtractK8sContainerEscapeIOCs')">Deploy</button>
+                        </div>
                     </div>
-                    <div class="cluster-info-row">
-                        <span class="cluster-info-label">Playbook</span>
-                        <span class="cluster-info-value" id="cortex-playbook-status">-</span>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('InvokeK8sContainmentLambda')" style="cursor:pointer;">
+                            <span class="cortex-object-name">InvokeK8sContainmentLambda</span>
+                            <span class="cortex-object-desc">Containment: STS AssumeRole + Lambda invocation (SigV4)</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-script-invoke"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployScript('InvokeK8sContainmentLambda')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('K8sForensicAnalysis')" style="cursor:pointer;">
+                            <span class="cortex-object-name">K8sForensicAnalysis</span>
+                            <span class="cortex-object-desc">Forensic: CVE enrichment, MITRE ATT&amp;CK mapping, XQL queries</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-script-forensic"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployScript('K8sForensicAnalysis')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('K8sSearchSimilarEvents')" style="cursor:pointer;">
+                            <span class="cortex-object-name">K8sSearchSimilarEvents</span>
+                            <span class="cortex-object-desc">Threat Hunt: cross-tenant search, lateral movement, blast radius</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-script-search"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployScript('K8sSearchSimilarEvents')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-title" style="font-size: 0.7rem; color: #818cf8; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.6rem; margin-bottom: 0.4rem; font-weight: 600;">Playbooks</div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('pb-containment')" style="cursor:pointer;">
+                            <span class="cortex-object-name">Containment</span>
+                            <span class="cortex-object-desc">10 tasks: Triage &rarr; Evidence &rarr; Severity Gate &rarr; Contain &rarr; Verify</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-pb-containment"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployPlaybook('containment')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('pb-forensic')" style="cursor:pointer;">
+                            <span class="cortex-object-name">Forensic Analysis</span>
+                            <span class="cortex-object-desc">9 tasks: Triage &rarr; CVE/MITRE &rarr; 5 XQL queries (auto-exec) &rarr; Evidence</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-pb-forensic"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployPlaybook('forensic')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('pb-search')" style="cursor:pointer;">
+                            <span class="cortex-object-name">Search Similar Events</span>
+                            <span class="cortex-object-desc">8 tasks: Triage &rarr; 3 XQL threat hunts (auto-exec) &rarr; Analyst Review</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-pb-search"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployPlaybook('search')">Deploy</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -356,11 +426,21 @@
             </div>
 
             <details class="cortex-details">
-                <summary class="cortex-details-summary">Cortex Objects (3)</summary>
+                <summary class="cortex-details-summary">Cortex Scripts (4)</summary>
                 <div class="cortex-details-body">
-                    <div class="cortex-info-step"><b>Script 1</b> ExtractK8sContainerEscapeIOCs - IOC extraction &amp; severity analysis</div>
-                    <div class="cortex-info-step"><b>Script 2</b> InvokeK8sContainmentLambda - AssumeRole + Lambda invocation</div>
-                    <div class="cortex-info-step"><b>Playbook</b> K8s Container Escape - Spring4Shell Containment</div>
+                    <div class="cortex-info-step"><b>ExtractK8sContainerEscapeIOCs</b><br>Analyzes XDR issue fields to extract IOCs (container ID, namespace, node FQDN, process name/SHA256, container image). Determines incident severity (Critical/High/Medium/Low) based on attack indicators (Spring4Shell, webshell, container escape, credential theft). Detects Spring4Shell patterns and webshell deployment. Outputs <code>K8sEscape.*</code> context used by all downstream scripts and playbooks. Writes triage report to <code>k8scontainerescapeiocs</code> issue field.</div>
+                    <div class="cortex-info-step"><b>InvokeK8sContainmentLambda</b><br>Invokes the AWS Lambda containment function from Cortex XSIAM (GCP-hosted, no boto3). Uses pure SigV4 signing (hmac/hashlib) to authenticate: first STS AssumeRole to get temporary credentials scoped to the lambda-invoker role, then Lambda Invoke with the containment action payload. Supports 7 actions: collect_evidence, network_isolate, revoke_rbac, scale_down, cordon_node, delete_pod, full_containment. Dual-mode: direct invocation if no assume_role_arn. Outputs <code>K8sContainment.*</code> context and writes to <code>k8scontainmentenrichment</code> issue field.</div>
+                    <div class="cortex-info-step"><b>K8sForensicAnalysis</b><br>Performs deep forensic analysis: CVE enrichment (Spring4Shell CVE-2022-22965, Spring Cloud CVE-2022-22963 with CVSS scores), MITRE ATT&amp;CK kill chain mapping (9 techniques from T1190 Initial Access to T1530 Collection), and container escape indicator detection (nsenter, mount, chroot, /proc/1/root, IMDS, docker.sock, etc.). Generates 5 XQL forensic queries: causality chain, file operations, network connections, container escape patterns, and credential access. Outputs <code>K8sForensic.*</code> context (including <code>XQLQueries</code> array) and writes to <code>k8sforensicanalysis</code> issue field.</div>
+                    <div class="cortex-info-step"><b>K8sSearchSimilarEvents</b><br>Generates cross-tenant threat hunting XQL queries to determine blast radius and detect lateral movement. Produces targeted searches (same process on other nodes, same binary SHA256 across endpoints, same container image, alerts in same namespace) and broad threat hunts (webshell drops on all K8s nodes, container escape patterns, IMDS credential theft). Targeted queries require specific IOCs from K8sEscape context; broad hunts always run. Outputs <code>K8sSimilar.*</code> context and writes to <code>k8ssearchsimilarevents</code> issue field.</div>
+                </div>
+            </details>
+
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">Cortex Playbooks (3)</summary>
+                <div class="cortex-details-body">
+                    <div class="cortex-info-step"><b>Containment Playbook</b> (10 tasks)<br>Automated incident response for K8s container escape. Triages the XDR issue to extract IOCs, collects forensic evidence via Lambda (pod details, logs, events, RBAC audit, node status), then gates on severity: Critical/High with Spring4Shell indicators proceeds automatically, otherwise requests operator approval. Executes full containment sequence: deny-all NetworkPolicy, cluster-admin ClusterRoleBinding deletion, deployment scale-down to 0, node cordoning, force pod deletion. Final verification step re-collects evidence to confirm containment.</div>
+                    <div class="cortex-info-step"><b>Forensic Analysis Playbook</b> (9 tasks)<br>Deep investigation of a container escape incident. Triages the issue, then runs K8sForensicAnalysis for CVE enrichment (Spring4Shell, CVSS 9.8), MITRE ATT&amp;CK mapping, and XQL query generation. Automatically executes 5 XQL queries via <code>xdr-xql-generic-query</code>: causality chain reconstruction, suspicious file operations (webshell drops, config reads), network connections (IMDS, C2, K8s API), container escape patterns (nsenter, chroot, mount), and credential access attempts (SA tokens, AWS IMDS, kubeconfig). Concludes with live evidence collection via Lambda.</div>
+                    <div class="cortex-info-step"><b>Search Similar Events Playbook</b> (8 tasks)<br>Threat hunting to determine if the attack has spread beyond the initially compromised node. Generates targeted and broad XQL search queries. Automatically executes 3 broad threat hunts via <code>xdr-xql-generic-query</code>: webshell file drops (.jsp) across all K8s nodes, container escape patterns (nsenter, /proc/1/root, chroot) on all endpoints, and IMDS credential theft (169.254.169.254) from containers. Targeted IOC queries (lateral movement by process name, binary hash hunt, container image blast radius, namespace alert correlation) are stored in the issue field for manual Query Center execution. Analyst reviews results and decides: escalate (similar events found) or close (no spread detected).</div>
                 </div>
             </details>
 
@@ -380,15 +460,17 @@
             </details>
 
             <details class="cortex-details">
-                <summary class="cortex-details-summary">Issue Output Fields (2)</summary>
+                <summary class="cortex-details-summary">Issue Output Fields (4)</summary>
                 <div class="cortex-details-body">
-                    <div class="cortex-info-step"><b>k8scontainerescapeiocs</b> - IOC report markdown</div>
-                    <div class="cortex-info-step"><b>k8scontainmentenrichment</b> - Lambda evidence report</div>
+                    <div class="cortex-info-step"><b>k8scontainerescapeiocs</b> - IOC extraction report (triage)</div>
+                    <div class="cortex-info-step"><b>k8scontainmentenrichment</b> - Lambda evidence report (containment)</div>
+                    <div class="cortex-info-step"><b>k8sforensicanalysis</b> - CVE/MITRE/XQL forensic report</div>
+                    <div class="cortex-info-step"><b>k8ssearchsimilarevents</b> - Cross-tenant search results + XQL queries</div>
                 </div>
             </details>
 
             <details class="cortex-details">
-                <summary class="cortex-details-summary">Playbook Flow (10 tasks)</summary>
+                <summary class="cortex-details-summary">Containment Playbook (10 tasks)</summary>
                 <div class="cortex-details-body">
                     <div class="cortex-info-step">1. Triage - Extract IOCs + severity</div>
                     <div class="cortex-info-step">2. Evidence - AssumeRole + Lambda collect_evidence</div>
@@ -400,6 +482,35 @@
                     <div class="cortex-info-step">8. Kill Pods - force delete</div>
                     <div class="cortex-info-step">9. Verify - re-collect evidence</div>
                     <div class="cortex-info-step">10. Complete</div>
+                </div>
+            </details>
+
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">Forensic Analysis Playbook (9 tasks)</summary>
+                <div class="cortex-details-body">
+                    <div class="cortex-info-step">1. Triage - Extract IOCs + severity</div>
+                    <div class="cortex-info-step">2. Forensic Analysis - CVE enrichment, MITRE ATT&amp;CK mapping, XQL query generation</div>
+                    <div class="cortex-info-step">3. <b>XQL</b> Causality Chain Analysis (xdr-xql-generic-query)</div>
+                    <div class="cortex-info-step">4. <b>XQL</b> Suspicious File Operations (xdr-xql-generic-query)</div>
+                    <div class="cortex-info-step">5. <b>XQL</b> Network Connections - IMDS, C2, K8s API (xdr-xql-generic-query)</div>
+                    <div class="cortex-info-step">6. <b>XQL</b> Container Escape Patterns (xdr-xql-generic-query)</div>
+                    <div class="cortex-info-step">7. <b>XQL</b> Credential Access Attempts (xdr-xql-generic-query)</div>
+                    <div class="cortex-info-step">8. Collect Live Evidence - Lambda (pods, logs, RBAC, events, node status)</div>
+                    <div class="cortex-info-step">9. Complete - All XQL results + evidence in context</div>
+                </div>
+            </details>
+
+            <details class="cortex-details">
+                <summary class="cortex-details-summary">Search Similar Events Playbook (8 tasks)</summary>
+                <div class="cortex-details-body">
+                    <div class="cortex-info-step">1. Triage - Extract IOCs + severity</div>
+                    <div class="cortex-info-step">2. Generate Search Queries - Targeted (lateral movement, IOC, blast radius) + broad hunts</div>
+                    <div class="cortex-info-step">3. <b>XQL</b> Webshell Hunt - all K8s nodes (xdr-xql-generic-query)</div>
+                    <div class="cortex-info-step">4. <b>XQL</b> Container Escape Hunt - all nodes (xdr-xql-generic-query)</div>
+                    <div class="cortex-info-step">5. <b>XQL</b> IMDS Credential Theft Hunt - all nodes (xdr-xql-generic-query)</div>
+                    <div class="cortex-info-step">6. Analyst Review - Run targeted IOC queries manually + review automated results</div>
+                    <div class="cortex-info-step">7. Escalate (similar events found on other nodes)</div>
+                    <div class="cortex-info-step">8. Close (no spread detected)</div>
                 </div>
             </details>
 
@@ -419,15 +530,31 @@
             <details class="cortex-details">
                 <summary class="cortex-details-summary">Architecture</summary>
                 <div class="cortex-details-body">
-                    <pre class="cortex-flow-ascii">XDR Issue -> ExtractIOCs
-  -> STS AssumeRole (Cross-Account)
-  -> Lambda (collect_evidence)
-  -> Severity Gate (auto/manual)
-  -> Lambda (contain)
-      |-> EKS API (STS x-k8s-aws-id)
-          |-> NetPol / RBAC / Scale
-          |-> Cordon / Delete
-  -> Verify -> Close</pre>
+                    <pre class="cortex-flow-ascii">XDR Issue
+  |
+  |-- Containment Playbook:
+  |     ExtractIOCs -> Lambda(evidence)
+  |     -> Severity Gate -> Lambda(contain)
+  |        |-> EKS API (NetPol/RBAC/Scale/Cordon/Delete)
+  |     -> Lambda(verify) -> Close
+  |
+  |-- Forensic Playbook:
+  |     ExtractIOCs -> ForensicAnalysis (CVE/MITRE)
+  |     -> xdr-xql-generic-query x5:
+  |        |-> Causality chain
+  |        |-> File operations (webshell drops)
+  |        |-> Network (IMDS, C2, K8s API)
+  |        |-> Container escape patterns
+  |        |-> Credential access
+  |     -> Lambda(evidence) -> Complete
+  |
+  |-- Search Similar Events Playbook:
+        ExtractIOCs -> SearchSimilarEvents
+        -> xdr-xql-generic-query x3:
+           |-> Webshell hunt (all nodes)
+           |-> Container escape hunt (all nodes)
+           |-> IMDS credential theft (all nodes)
+        -> Analyst Review -> Escalate/Close</pre>
                 </div>
             </details>
         </div>
@@ -592,7 +719,19 @@
                             <li><strong>Credential Gathering</strong> - detects access to sensitive files and IMDS</li>
                         </ul>
                         <p>A <strong>prevention policy</strong> (rules + profiles) is imported on the Cortex tenant and assigned to the EKS endpoint group for K8s-specific protection.</p>
-                        <p>An automated <strong>containment playbook</strong> triggers on XDR issues. It uses a dedicated <strong>Cortex IAM User</strong> (permanent Access Key) to assume the <strong>lambda-invoker IAM Role</strong> via STS AssumeRole (SigV4-signed), then invokes the containment Lambda, which orchestrates: evidence collection, network isolation, RBAC revocation, scale down, node cordoning, and pod termination.</p>
+                        <p><strong>4 automation scripts</strong> are deployed to Cortex:</p>
+                        <ul>
+                            <li><strong>ExtractK8sContainerEscapeIOCs</strong> &mdash; Triage script that analyzes XDR issue fields to extract IOCs (container ID, namespace, node FQDN, process name/SHA256, container image). Determines incident severity based on attack indicators (Spring4Shell, webshell, container escape, credential theft). Populates <code>K8sEscape.*</code> context used by all downstream scripts and playbooks.</li>
+                            <li><strong>InvokeK8sContainmentLambda</strong> &mdash; Containment script that invokes the AWS Lambda function from Cortex XSIAM using pure SigV4 signing (no boto3). Authenticates via STS AssumeRole for temporary scoped credentials, then invokes Lambda with the containment action payload. Supports 7 actions (collect_evidence, network_isolate, revoke_rbac, scale_down, cordon_node, delete_pod, full_containment).</li>
+                            <li><strong>K8sForensicAnalysis</strong> &mdash; Forensic script that performs CVE enrichment (Spring4Shell CVE-2022-22965 CVSS 9.8, Spring Cloud CVE-2022-22963), MITRE ATT&amp;CK kill chain mapping (9 techniques: T1190 Initial Access &rarr; T1611 Escape to Host &rarr; T1530 Collection), and container escape indicator detection. Generates 5 XQL forensic queries (causality chain, file operations, network connections, escape patterns, credential access) stored in <code>K8sForensic.XQLQueries</code> for automatic execution by the Forensic playbook.</li>
+                            <li><strong>K8sSearchSimilarEvents</strong> &mdash; Threat hunting script that generates cross-tenant XQL queries to determine blast radius. Produces targeted searches (same process on other nodes, same binary SHA256, same container image, namespace alert correlation) and broad hunts (webshell drops, container escapes, IMDS credential theft across all K8s nodes). Targeted queries are written to the issue field for manual Query Center execution; broad hunts are executed automatically by the Search playbook.</li>
+                        </ul>
+                        <p><strong>3 automated playbooks</strong> are deployed to Cortex, each triggered on XDR issues:</p>
+                        <ul>
+                            <li><strong>Containment Playbook</strong> (10 tasks) &mdash; Automated incident response: triages the XDR issue, collects forensic evidence via Lambda, gates on severity (Critical/High + Spring4Shell = auto, otherwise operator approval), then executes full containment: deny-all NetworkPolicy, cluster-admin deletion, deployment scale-down, node cordon, force pod deletion. Final verification re-collects evidence to confirm containment. Uses a dedicated <strong>Cortex IAM User</strong> with STS AssumeRole (SigV4-signed) to invoke the Lambda.</li>
+                            <li><strong>Forensic Analysis Playbook</strong> (9 tasks) &mdash; Deep investigation: triages the issue, runs K8sForensicAnalysis for CVE enrichment and MITRE mapping, then <strong>automatically executes 5 XQL queries</strong> via <code>xdr-xql-generic-query</code>: causality chain reconstruction, suspicious file operations (webshell drops, config reads), network connections (IMDS 169.254.169.254, C2, K8s API 6443/10250), container escape patterns (nsenter, chroot, mount, docker.sock), and credential access attempts (SA tokens, AWS keys, kubeconfig). Concludes with live evidence collection via Lambda.</li>
+                            <li><strong>Search Similar Events Playbook</strong> (8 tasks) &mdash; Threat hunting to determine attack spread: generates targeted and broad XQL queries, then <strong>automatically executes 3 broad threat hunts</strong> via <code>xdr-xql-generic-query</code>: webshell file drops (.jsp) across all K8s nodes, container escape patterns (nsenter, /proc/1/root, chroot) on all endpoints, and IMDS credential theft from containers. Targeted IOC queries (lateral movement, binary hash, container image blast radius, namespace correlation) are stored in the issue field for manual Query Center execution. Analyst reviews all results and decides to escalate or close.</li>
+                        </ul>
                     </div>
                 </div>
 
@@ -843,7 +982,7 @@
 <div class="modal-overlay" id="cortex-modal">
     <div class="modal modal-wide">
         <h3 style="color: #818cf8;">Cortex API</h3>
-        <p>Configure your Cortex API credentials to publish the containment playbook. These are stored in-memory only.</p>
+        <p>Configure your Cortex API credentials to deploy scripts and playbooks (containment, forensic, threat hunt). Stored in-memory only.</p>
         <div class="form-group">
             <label for="cortex-base-url">API Base URL</label>
             <input type="text" id="cortex-base-url" placeholder="https://api-myinstance.xdr.eu.paloaltonetworks.com" autocomplete="off" />
@@ -876,6 +1015,35 @@
 </div>
 
 
-<script src="/static/js/app.js?v=17"></script>
+<!-- ─── Cortex Detail Modal ────────────────────── -->
+<div class="modal-overlay" id="cortex-detail-modal">
+    <div class="modal modal-detail">
+        <div class="modal-detail-header">
+            <span class="modal-detail-badge" id="cortex-detail-badge">SCRIPT</span>
+            <h3 id="cortex-detail-title"></h3>
+        </div>
+        <div class="modal-detail-section">
+            <div class="modal-detail-label">Description</div>
+            <p id="cortex-detail-desc"></p>
+        </div>
+        <div class="modal-detail-section">
+            <div class="modal-detail-label">Used by</div>
+            <div id="cortex-detail-usedby"></div>
+        </div>
+        <div class="modal-detail-section">
+            <div class="modal-detail-label">Inputs</div>
+            <div id="cortex-detail-inputs" class="modal-detail-code"></div>
+        </div>
+        <div class="modal-detail-section">
+            <div class="modal-detail-label">Outputs</div>
+            <div id="cortex-detail-outputs" class="modal-detail-code"></div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="closeCortexDetail()">Close</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/app.js?v=22"></script>
 </body>
 </html>

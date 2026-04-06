@@ -1,0 +1,542 @@
+id: b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e
+version: -1
+name: K8s Container Escape - Search Similar Events
+description: |-
+  Threat hunting playbook for K8s container escape incidents on AWS EKS.
+  Searches for similar events across the Cortex XDR tenant to determine
+  blast radius and detect lateral movement.
+
+  ## Playbook Flow
+  1. Triage - ExtractK8sContainerEscapeIOCs analyzes XDR issue fields
+  2. Search Similar Events - K8sSearchSimilarEvents generates cross-search XQL queries
+  3-5. XQL Execution - Broad threat hunts executed via xdr-xql-generic-query:
+       3. Webshell Hunt (all K8s nodes)
+       4. Container Escape Hunt (all nodes)
+       5. IMDS Credential Theft Hunt (all nodes)
+  6. Analyst Review - Review results + run targeted IOC queries manually
+  7. Escalate / 8. Close
+
+  ## XQL Integration
+  - Targeted searches (lateral movement, IOC hunt, blast radius) are generated
+    and stored in issue field for manual Query Center execution
+  - Broad threat hunts (webshell, escape, IMDS) are executed automatically
+    via xdr-xql-generic-query to provide immediate visibility
+
+  ## Usage
+  - Run after initial triage to determine if the attack has spread
+  - Can be triggered manually on any container escape XDR issue
+  - Does NOT perform containment — investigation only
+contentitemexportablefields:
+  contentitemfields:
+    packID: K8sContainerEscape
+    packName: K8s Container Escape Response
+    itemVersion: 1.1.0
+    fromServerVersion: 6.10.0
+    toServerVersion: ""
+    definitionid: ""
+    prevname: ""
+    isoverridable: false
+    supportedModules: []
+vcShouldKeepItemLegacyProdMachine: false
+starttaskid: "0"
+tasks:
+  "0":
+    id: "0"
+    taskid: b1c1d1e1-f1a1-4b1c-8d1e-0f1a1b1c1d1e
+    type: start
+    task:
+      id: b1c1d1e1-f1a1-4b1c-8d1e-0f1a1b1c1d1e
+      version: -1
+      name: ""
+      description: ""
+      iscommand: false
+      brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "1"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 50
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "1":
+    id: "1"
+    taskid: b2c2d2e2-f2a2-4b2c-8d2e-0f2a2b2c2d2e
+    type: regular
+    task:
+      id: b2c2d2e2-f2a2-4b2c-8d2e-0f2a2b2c2d2e
+      version: -1
+      name: "Triage - Extract IOCs"
+      description: |-
+        Execute ExtractK8sContainerEscapeIOCs to analyze XDR issue fields.
+        Populates K8sEscape context with IOCs used as search criteria
+        for cross-tenant threat hunting.
+      iscommand: true
+      brand: ""
+      script: ExtractK8sContainerEscapeIOCs
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "2"
+    scriptarguments:
+      details:
+        simple: ${incident.details}
+      container_id:
+        simple: ${incident.container_id}
+      namespace:
+        simple: ${incident.namespace}
+      xdmsourcehostfqdn:
+        simple: ${incident.xdmsourcehostfqdn}
+      xdmsourcehostipv4addresses:
+        simple: ${incident.xdmsourcehostipv4addresses}
+      xdmsourceusername:
+        simple: ${incident.xdmsourceusername}
+      xdmsourceprocessname:
+        simple: ${incident.xdmsourceprocessname}
+      causality_actor_process_command_line:
+        simple: ${incident.causality_actor_process_command_line}
+      causality_actor_process_image_path:
+        simple: ${incident.causality_actor_process_image_path}
+      causality_actor_process_image_sha256:
+        simple: ${incident.causality_actor_process_image_sha256}
+      image_id:
+        simple: ${incident.image_id}
+      agent_os_type:
+        simple: ${incident.agent_os_type}
+      agent_os_sub_type:
+        simple: ${incident.agent_os_sub_type}
+      cluster_name:
+        simple: ${incident.cluster_name}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 200
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "2":
+    id: "2"
+    taskid: b3c3d3e3-f3a3-4b3c-8d3e-0f3a3b3c3d3e
+    type: regular
+    task:
+      id: b3c3d3e3-f3a3-4b3c-8d3e-0f3a3b3c3d3e
+      version: -1
+      name: "Generate Search Queries"
+      description: |-
+        Execute K8sSearchSimilarEvents to generate XQL threat hunting queries.
+        Generates targeted searches (lateral movement, IOC hunt, blast radius,
+        alert correlation) and broad threat hunts (webshell, escape, IMDS).
+
+        All queries are written to the k8ssearchsimilarevents issue field.
+        Broad hunts (last 3 queries) will be executed automatically in the next tasks.
+        Targeted searches are available in the issue field for manual execution.
+      iscommand: true
+      brand: ""
+      script: K8sSearchSimilarEvents
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "3"
+    scriptarguments:
+      container_id:
+        simple: ${K8sEscape.ContainerID}
+      namespace:
+        simple: ${K8sEscape.Namespace}
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      node_fqdn:
+        simple: ${K8sEscape.NodeFQDN}
+      process_name:
+        simple: ${K8sEscape.ProcessName}
+      process_sha256:
+        simple: ${K8sEscape.ProcessImageSHA256}
+      image_id:
+        simple: ${K8sEscape.ContainerImageID}
+      details:
+        simple: ${K8sEscape.Details}
+      time_range:
+        simple: "30 days"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 400
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "3":
+    id: "3"
+    taskid: b4c4d4e4-f4a4-4b4c-8d4e-0f4a4b4c4d4e
+    type: regular
+    task:
+      id: b4c4d4e4-f4a4-4b4c-8d4e-0f4a4b4c4d4e
+      version: -1
+      name: "XQL: Webshell Hunt (All K8s Nodes)"
+      description: |-
+        Search for webshell file drops (.jsp, .php) across ALL monitored K8s nodes.
+        Detects if the attacker has deployed webshells on other nodes beyond the
+        initially compromised one.
+
+        Executed automatically via xdr-xql-generic-query.
+      iscommand: true
+      brand: ""
+      script: xdr-xql-generic-query
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "4"
+    scriptarguments:
+      query_name:
+        simple: "K8s Webshell Hunt"
+      query:
+        simple: |-
+          dataset = xdr_data
+          | filter event_type = ENUM.FILE
+          | filter action_file_path contains ".jsp" or action_file_path contains "webshell"
+                   or action_file_path contains "cmd.jsp" or action_file_path contains "shell.jsp"
+          | filter agent_hostname contains "compute.internal"
+          | fields _time, agent_hostname, action_file_path, action_file_name,
+                   action_file_sha256, action_process_image_name,
+                   action_process_image_command_line
+          | sort desc _time
+          | limit 50
+      time_frame:
+        simple: "30 days"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 600
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: true
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "4":
+    id: "4"
+    taskid: b5c5d5e5-f5a5-4b5c-8d5e-0f5a5b5c5d5e
+    type: regular
+    task:
+      id: b5c5d5e5-f5a5-4b5c-8d5e-0f5a5b5c5d5e
+      version: -1
+      name: "XQL: Container Escape Hunt (All Nodes)"
+      description: |-
+        Search for container escape patterns across ALL monitored endpoints:
+        nsenter execution, chroot, /proc/1/root access, suspicious mount operations.
+
+        Detects if container escape techniques are being used on other nodes.
+      iscommand: true
+      brand: ""
+      script: xdr-xql-generic-query
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "5"
+    scriptarguments:
+      query_name:
+        simple: "K8s Container Escape Hunt"
+      query:
+        simple: |-
+          dataset = xdr_data
+          | filter event_type = ENUM.PROCESS
+          | filter action_process_image_command_line contains "nsenter"
+                   or action_process_image_command_line contains "/proc/1/root"
+                   or action_process_image_command_line contains "chroot"
+                   or (action_process_image_name = "mount" AND action_process_image_command_line contains "/host")
+          | filter agent_hostname contains "compute.internal"
+          | fields _time, agent_hostname, action_process_image_name,
+                   action_process_image_command_line, action_process_username,
+                   actor_process_image_name, causality_actor_process_image_name
+          | sort desc _time
+          | limit 50
+      time_frame:
+        simple: "30 days"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 780
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: true
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "5":
+    id: "5"
+    taskid: b6c6d6e6-f6a6-4b6c-8d6e-0f6a6b6c6d6e
+    type: regular
+    task:
+      id: b6c6d6e6-f6a6-4b6c-8d6e-0f6a6b6c6d6e
+      version: -1
+      name: "XQL: IMDS Credential Theft Hunt (All Nodes)"
+      description: |-
+        Search for EC2 metadata service access (169.254.169.254) from K8s containers.
+        IMDS access from containers indicates credential theft attempt
+        (AWS temporary credentials via instance role).
+
+        Detects if IMDS credential theft is happening on other nodes.
+      iscommand: true
+      brand: ""
+      script: xdr-xql-generic-query
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+        - "6"
+    scriptarguments:
+      query_name:
+        simple: "K8s IMDS Credential Theft Hunt"
+      query:
+        simple: |-
+          dataset = xdr_data
+          | filter event_type = ENUM.NETWORK
+          | filter action_remote_ip = "169.254.169.254"
+                   or dst_action_external_hostname contains "169.254.169.254"
+          | filter agent_hostname contains "compute.internal"
+          | fields _time, agent_hostname, action_process_image_name,
+                   action_process_image_command_line,
+                   action_local_ip, action_remote_ip, action_remote_port,
+                   actor_process_image_name
+          | sort desc _time
+          | limit 50
+      time_frame:
+        simple: "30 days"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 960
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: true
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "6":
+    id: "6"
+    taskid: b7c7d7e7-f7a7-4b7c-8d7e-0f7a7b7c7d7e
+    type: condition
+    task:
+      id: b7c7d7e7-f7a7-4b7c-8d7e-0f7a7b7c7d7e
+      version: -1
+      name: "Analyst Review"
+      description: |-
+        Review the XQL query results from tasks 3-5 and the generated queries
+        in the k8ssearchsimilarevents issue field.
+
+        Automated hunt results (tasks 3-5):
+        - Webshell drops across K8s nodes
+        - Container escape patterns across nodes
+        - IMDS credential theft across nodes
+
+        Additional targeted queries (run manually in Query Center):
+        - Same process on other nodes (lateral movement)
+        - Same binary SHA256 across endpoints (IOC hunt)
+        - Same container image on other nodes (blast radius)
+        - Other alerts in same namespace (correlation)
+
+        Decision:
+        - Escalate: if similar events found on other nodes
+        - Close: if no spread detected
+      iscommand: false
+      brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      "Escalate - Similar Events Found":
+        - "7"
+      "Close - No Spread Detected":
+        - "8"
+    conditions: []
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 450,
+          "y": 1140
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "7":
+    id: "7"
+    taskid: b8c8d8e8-f8a8-4b8c-8d8e-0f8a8b8c8d8e
+    type: title
+    task:
+      id: b8c8d8e8-f8a8-4b8c-8d8e-0f8a8b8c8d8e
+      version: -1
+      name: "Escalation Required"
+      description: |-
+        Similar events detected on other nodes/clusters.
+        The attack may have spread beyond the initially compromised container.
+
+        Recommended next steps:
+        - Extend containment to affected nodes (run Containment playbook per node)
+        - Cordon all nodes running the vulnerable container image
+        - Rotate AWS credentials exposed via IMDS on all affected nodes
+        - Notify SOC and escalate incident severity
+        - Consider cluster-wide remediation
+      type: title
+      iscommand: false
+      brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks: {}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 200,
+          "y": 1340
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "8":
+    id: "8"
+    taskid: b9c9d9e9-f9a9-4b9c-8d9e-0f9a9b9c9d9e
+    type: title
+    task:
+      id: b9c9d9e9-f9a9-4b9c-8d9e-0f9a9b9c9d9e
+      version: -1
+      name: "Investigation Complete - No Spread"
+      description: |-
+        No similar events detected across the tenant.
+        The attack appears contained to the initially compromised node/container.
+
+        Automated hunts verified (tasks 3-5):
+        - No webshell drops on other K8s nodes
+        - No container escape patterns on other nodes
+        - No IMDS credential theft on other nodes
+
+        Proceed with standard containment if not already done.
+      type: title
+      iscommand: false
+      brand: ""
+      script: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks: {}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 700,
+          "y": 1340
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+inputs: []
+inputSections: []
+outputSections:
+  - outputs:
+      - K8sSimilar.QueriesGenerated
+      - K8sSimilar.SearchCriteria
+      - K8sSimilar.Queries
+    name: Search Outputs
+    description: Generated XQL queries and search criteria.
+outputs:
+  - contextPath: K8sSimilar.QueriesGenerated
+    description: Number of XQL queries generated
+  - contextPath: K8sSimilar.SearchCriteria
+    description: Search criteria used (IOCs, scope)
+  - contextPath: K8sSimilar.Queries
+    description: Generated XQL queries with names and types
+view: |-
+  {
+    "linkLabelsPosition": {},
+    "paper": {
+      "dimensions": {
+        "height": 1505,
+        "width": 830,
+        "x": 200,
+        "y": 50
+      }
+    }
+  }
+fromversion: "6.10.0"
+toversion: ""
+tags:
+  - Kubernetes
+  - Container Security
+  - Threat Hunting
+  - Lateral Movement
+  - EKS
+  - Cortex XDR
+  - XQL

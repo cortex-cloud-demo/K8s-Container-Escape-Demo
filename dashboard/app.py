@@ -1310,6 +1310,12 @@ def deploy_script_to_cortex():
         "InvokeK8sContainmentLambda": os.path.join(
             PROJECT_ROOT, "cortex-scripts", "automation-InvokeK8sContainmentLambda.yml"
         ),
+        "K8sForensicAnalysis": os.path.join(
+            PROJECT_ROOT, "cortex-scripts", "automation-K8sForensicAnalysis.yml"
+        ),
+        "K8sSearchSimilarEvents": os.path.join(
+            PROJECT_ROOT, "cortex-scripts", "automation-K8sSearchSimilarEvents.yml"
+        ),
     }
 
     if script_name not in scripts_map:
@@ -1370,8 +1376,19 @@ def deploy_script_to_cortex():
 
 @app.route("/api/cortex/publish-playbook", methods=["POST"])
 def publish_playbook_to_cortex():
-    """Publish the YAML playbook to Cortex via API (ZIP format required)."""
-    playbook_path = os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Spring4Shell_Containment.yml")
+    """Publish YAML playbook(s) to Cortex via API (ZIP format required).
+    Accepts optional playbook_name parameter to deploy a specific playbook."""
+    playbook_name = request.json.get("playbook_name", "containment") if request.is_json else "containment"
+
+    playbooks_map = {
+        "containment": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Spring4Shell_Containment.yml"),
+        "forensic": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Forensic_Analysis.yml"),
+        "search": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Search_Similar_Events.yml"),
+    }
+
+    playbook_path = playbooks_map.get(playbook_name)
+    if not playbook_path:
+        return jsonify({"status": "error", "message": f"Unknown playbook: {playbook_name}"}), 400
 
     # Cortex Cloud API: POST /public_api/v1/playbooks/insert with YAML in ZIP
     api_paths = [
@@ -1384,6 +1401,7 @@ def publish_playbook_to_cortex():
         result, status_code = cortex_upload_playbook_zip(api_path, playbook_path)
         if result["status"] == "ok":
             result["api_path"] = api_path
+            result["playbook_name"] = playbook_name
             return jsonify(result)
         errors.append(f"{api_path}: HTTP {status_code} - {result.get('message', 'Unknown')[:200]}")
 
@@ -1402,6 +1420,10 @@ def deploy_all_to_cortex():
          os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-ExtractK8sContainerEscapeIOCs.yml")),
         ("InvokeK8sContainmentLambda",
          os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-InvokeK8sContainmentLambda.yml")),
+        ("K8sForensicAnalysis",
+         os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-K8sForensicAnalysis.yml")),
+        ("K8sSearchSimilarEvents",
+         os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-K8sSearchSimilarEvents.yml")),
     ]
 
     for script_name, yaml_path in scripts:
@@ -1450,26 +1472,35 @@ def deploy_all_to_cortex():
             results.append({"type": "script", "name": script_name, "status": "error",
                            "message": " | ".join(script_errors)})
 
-    # 2. Deploy playbook (ZIP format required by Cortex Cloud API)
-    playbook_path = os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Spring4Shell_Containment.yml")
+    # 2. Deploy playbooks (ZIP format required by Cortex Cloud API)
+    playbooks = [
+        ("K8s Container Escape Containment",
+         os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Spring4Shell_Containment.yml")),
+        ("K8s Container Escape Forensic Analysis",
+         os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Forensic_Analysis.yml")),
+        ("K8s Container Escape Search Similar Events",
+         os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Search_Similar_Events.yml")),
+    ]
+
     playbook_api_paths = [
         "/public_api/v1/playbooks/insert",
         "/xsoar/public/v1/playbooks/import",
     ]
 
-    deployed = False
-    playbook_errors = []
-    for api_path in playbook_api_paths:
-        result, status_code = cortex_upload_playbook_zip(api_path, playbook_path)
-        if result["status"] == "ok":
-            results.append({"type": "playbook", "name": "K8s Container Escape Containment", "status": "ok", "api_path": api_path})
-            deployed = True
-            break
-        playbook_errors.append(f"{api_path}: HTTP {status_code}")
+    for pb_name, playbook_path in playbooks:
+        deployed = False
+        playbook_errors = []
+        for api_path in playbook_api_paths:
+            result, status_code = cortex_upload_playbook_zip(api_path, playbook_path)
+            if result["status"] == "ok":
+                results.append({"type": "playbook", "name": pb_name, "status": "ok", "api_path": api_path})
+                deployed = True
+                break
+            playbook_errors.append(f"{api_path}: HTTP {status_code}")
 
-    if not deployed:
-        results.append({"type": "playbook", "name": "K8s Container Escape Containment", "status": "error",
-                        "message": " | ".join(playbook_errors)})
+        if not deployed:
+            results.append({"type": "playbook", "name": pb_name, "status": "error",
+                            "message": " | ".join(playbook_errors)})
 
     all_ok = all(r["status"] == "ok" for r in results)
     return jsonify({

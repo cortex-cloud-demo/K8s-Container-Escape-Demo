@@ -87,8 +87,9 @@ Paste these in **AWS > Configure** (Access Key + Secret Key, no Session Token ne
 | Step | Card | Action |
 |------|------|--------|
 | Lambda | **LAMBDA > Apply** | Terraform: Lambda function, IAM, EKS access entry, Cortex IAM user |
-| Scripts | **CORTEX > Scripts Only** | Push automation scripts to Cortex |
-| Playbook | **CORTEX > Playbook Only** | Push playbook to Cortex |
+| Scripts | **CORTEX > Deploy** (per script) | Push individual automation scripts to Cortex (triage, containment, forensic, threat hunt) |
+| Playbooks | **CORTEX > Deploy** (per playbook) | Push individual playbooks to Cortex (containment, forensic, search similar events) |
+| All | **CORTEX > Deploy All** | Push all 4 scripts + 3 playbooks at once |
 | Policy | **POLICY > Import** | Import prevention policy rules + profiles (BETA) |
 
 ### 7. Cleanup
@@ -105,8 +106,8 @@ Click **Destroy Lambda** then **Destroy All** in the Cleanup section. The dashbo
 | **Vulnerable App** | Spring Boot app with CVE-2022-22965 (Spring4Shell) on Tomcat 9 |
 | **Pod Misconfigs** | `privileged`, `hostPID`, `hostNetwork`, `hostPath: /`, SA `cluster-admin` |
 | **Lambda** | Containment function authenticating to EKS via STS (x-k8s-aws-id) |
-| **Cortex Scripts** | `ExtractK8sContainerEscapeIOCs` (triage) + `InvokeK8sContainmentLambda` (containment) |
-| **Cortex Playbook** | Automated incident response orchestration |
+| **Cortex Scripts** | `ExtractK8sContainerEscapeIOCs` (triage) + `InvokeK8sContainmentLambda` (containment) + `K8sForensicAnalysis` (CVE/MITRE/XQL) + `K8sSearchSimilarEvents` (threat hunt) |
+| **Cortex Playbooks** | 3 playbooks: Containment (10 tasks), Forensic Analysis (9 tasks, 5 XQL auto-exec), Search Similar Events (8 tasks, 3 XQL auto-exec) |
 | **Prevention Policy** | Prevention rules, profiles & endpoint group for K8s nodes (BETA) |
 
 ## IAM Architecture
@@ -174,7 +175,7 @@ terraform output lambda_invoker_role_arn
 | **Overview** | Architecture overview, attack chain, MITRE techniques, auth flow |
 | **Terminal** | Main output for all operations + webshell command execution |
 | **kubectl** | Interactive kubectl with shortcut buttons |
-| **Cortex** | Cortex playbook flow visualization + containment output |
+| **Cortex** | Cortex playbook flow visualization + deployment output (scripts, playbooks) |
 | **Security Radar** | Before/after security posture comparison |
 
 ### Security Radar
@@ -193,6 +194,37 @@ Visual security posture assessment — 6 axes scored 0-100:
 **Usage:** Snapshot Before (red) → Run containment → Scan Current (green overlay)
 
 ## Cortex Integration
+
+### Automation Scripts
+
+#### `ExtractK8sContainerEscapeIOCs` — Triage & IOC Extraction
+
+Analyzes XDR issue fields to extract Indicators of Compromise: container ID, namespace, node FQDN, process name/SHA256, container image ID. Determines incident severity (Critical/High/Medium/Low) based on attack indicators — Spring4Shell exploitation, webshell deployment, container escape techniques, and credential theft. Detects Spring4Shell patterns (ClassLoader manipulation, `class.module` parameters) and webshell indicators (`.jsp` file drops, `Runtime.getRuntime`, `ProcessBuilder`). Populates `K8sEscape.*` context keys used by all downstream scripts and playbooks. Writes a formatted triage report to the `k8scontainerescapeiocs` issue field.
+
+**Outputs:** `K8sEscape.ContainerID`, `K8sEscape.Namespace`, `K8sEscape.ClusterName`, `K8sEscape.NodeFQDN`, `K8sEscape.ProcessName`, `K8sEscape.ProcessImageSHA256`, `K8sEscape.ContainerImageID`, `K8sEscape.Severity`, `K8sEscape.Details`
+
+#### `InvokeK8sContainmentLambda` — Lambda Containment (SigV4)
+
+Invokes the AWS Lambda containment function from Cortex XSIAM (GCP-hosted — no boto3/AWS SDK available). Uses pure SigV4 signing (`hmac`/`hashlib`) for all AWS API calls: first STS AssumeRole to obtain temporary credentials scoped to the `lambda-invoker` IAM role, then Lambda Invoke with the containment action payload. Supports 7 containment actions: `collect_evidence`, `network_isolate`, `revoke_rbac`, `scale_down`, `cordon_node`, `delete_pod`, `full_containment`. Dual-mode: if `assume_role_arn` is omitted, STS AssumeRole is skipped and Lambda is invoked directly with the operator credentials.
+
+**Outputs:** `K8sContainment.Action`, `K8sContainment.Status`, `K8sContainment.LambdaResponse`, `k8scontainmentenrichment` issue field
+
+#### `K8sForensicAnalysis` — CVE Enrichment, MITRE Mapping & XQL
+
+Performs deep forensic analysis on a container escape incident. CVE enrichment covers Spring4Shell (CVE-2022-22965, CVSS 9.8) and Spring Cloud Function SpEL Injection (CVE-2022-22963, CVSS 9.8) with severity, description, and affected versions. MITRE ATT&CK kill chain mapping covers 9 techniques: T1190 (Exploit Public-Facing Application), T1059.004 (Unix Shell), T1505.003 (Web Shell), T1611 (Escape to Host), T1610 (Deploy Container), T1552.007 (Container API), T1613 (Container and Resource Discovery), T1550.001 (Application Access Token), T1530 (Data from Cloud Storage). Detects container escape indicators (nsenter, mount, chroot, `/proc/1/root`, IMDS, `docker.sock`, `/var/run/secrets`, etc.). Generates 5 XQL forensic queries stored in `K8sForensic.XQLQueries` array for automatic execution by the Forensic Analysis playbook.
+
+**Outputs:** `K8sForensic.DetectedCVEs`, `K8sForensic.AttackPhases`, `K8sForensic.EscapeIndicators`, `K8sForensic.XQLQueries[]`, `k8sforensicanalysis` issue field
+
+#### `K8sSearchSimilarEvents` — Cross-Tenant Threat Hunting
+
+Generates XQL threat hunting queries to determine blast radius and detect lateral movement across the Cortex XDR tenant. Produces two categories of queries:
+
+- **Targeted searches** (require specific IOCs from `K8sEscape` context): same process executing on other nodes (lateral movement detection), same binary SHA256 across all endpoints (shared tooling/supply chain), same container image on other K8s nodes (blast radius), other XDR alerts in the same namespace (correlation).
+- **Broad threat hunts** (always generated): webshell file drops (`.jsp`, `.php`) across all K8s nodes, container escape patterns (`nsenter`, `chroot`, `/proc/1/root`, suspicious mounts) on all endpoints, IMDS credential theft (`169.254.169.254`) from containers.
+
+Targeted queries are written to the `k8ssearchsimilarevents` issue field for manual execution in Query Center. Broad hunts are executed automatically by the Search Similar Events playbook via `xdr-xql-generic-query`.
+
+**Outputs:** `K8sSimilar.QueriesGenerated`, `K8sSimilar.SearchCriteria`, `K8sSimilar.Queries[]`, `k8ssearchsimilarevents` issue field
 
 ### Playbook Authentication Flow
 
@@ -216,20 +248,57 @@ cortex-playbook-user (permanent Access Key)
 
 **Dual-mode:** if `assume_role_arn` is omitted, STS AssumeRole is skipped and Lambda is invoked directly.
 
-### Playbook Flow
+### Playbooks
+
+**3 playbooks** are available, deployable from the dashboard:
+
+#### Containment Playbook (10 tasks)
+
+Automated incident response for K8s container escape. Triages the XDR issue to extract IOCs, collects forensic evidence via Lambda (pod details, logs, events, RBAC audit, node status), then gates on severity: Critical/High with Spring4Shell indicators proceeds automatically to containment, otherwise requests operator approval. Executes full containment sequence via Lambda: deny-all NetworkPolicy, cluster-admin ClusterRoleBinding deletion, deployment scale-down to 0, node cordoning, force pod deletion. Final verification step re-collects evidence to confirm all containment actions succeeded.
 
 ```
 Start → #1 Triage (ExtractK8sContainerEscapeIOCs)
       → #2 Collect Evidence (Lambda)
       → #3 Severity Check (Critical + SpringShell?)
       → #31 Operator Approval
-      → #4 Network Isolation
-      → #5 Revoke RBAC
-      → #6 Scale Down
-      → #7 Cordon Node
-      → #8 Kill Pods
-      → #9 Verify Containment
+      → #4 Network Isolation (Lambda: deny-all NetworkPolicy)
+      → #5 Revoke RBAC (Lambda: delete cluster-admin ClusterRoleBinding)
+      → #6 Scale Down (Lambda: replicas → 0)
+      → #7 Cordon Node (Lambda: mark unschedulable)
+      → #8 Kill Pods (Lambda: force delete all pods)
+      → #9 Verify Containment (Lambda: re-collect evidence)
       → #10 Complete
+```
+
+#### Forensic Analysis Playbook (9 tasks)
+
+Deep investigation of a container escape incident. Triages the issue, then runs K8sForensicAnalysis for CVE enrichment (Spring4Shell CVSS 9.8), MITRE ATT&CK kill chain mapping (T1190 → T1611 → T1530), and XQL query generation. Automatically executes 5 XQL queries via `xdr-xql-generic-query` to collect forensic evidence directly from the XDR data lake: process causality chain reconstruction, suspicious file operations (webshell drops, config reads), network connections (IMDS access, C2 channels, K8s API calls), container escape patterns (nsenter, chroot, mount, docker.sock), and credential access attempts (SA tokens, AWS IMDS, kubeconfig). Concludes with live evidence collection via Lambda. All XQL results are available in the playbook context for analyst review.
+
+```
+Start → #1 Triage (ExtractK8sContainerEscapeIOCs)
+      → #2 Forensic Analysis (K8sForensicAnalysis)
+           CVE enrichment, MITRE ATT&CK mapping, XQL query generation
+      → #3 XQL: Causality Chain (xdr-xql-generic-query)
+      → #4 XQL: File Operations (xdr-xql-generic-query)
+      → #5 XQL: Network Connections (xdr-xql-generic-query)
+      → #6 XQL: Container Escape Patterns (xdr-xql-generic-query)
+      → #7 XQL: Credential Access (xdr-xql-generic-query)
+      → #8 Collect Live Evidence (Lambda)
+      → #9 Complete
+```
+
+#### Search Similar Events Playbook (8 tasks)
+
+Threat hunting playbook to determine if the attack has spread beyond the initially compromised node/container. Generates targeted and broad XQL search queries via K8sSearchSimilarEvents. Automatically executes 3 broad threat hunts via `xdr-xql-generic-query` for immediate visibility: webshell file drops (`.jsp`, `.php`) across all monitored K8s nodes, container escape patterns (`nsenter`, `/proc/1/root`, `chroot`, suspicious mounts) on all endpoints, and IMDS credential theft (`169.254.169.254`) from containers. Targeted IOC queries (same process on other nodes for lateral movement detection, same binary SHA256 across endpoints, same container image for blast radius assessment, namespace alert correlation) are stored in the issue field for manual execution in Query Center. Analyst reviews all automated and manual results, then decides: escalate if similar events found on other nodes, or close if no spread detected.
+
+```
+Start → #1 Triage (ExtractK8sContainerEscapeIOCs)
+      → #2 Generate Search Queries (K8sSearchSimilarEvents)
+      → #3 XQL: Webshell Hunt - all K8s nodes (xdr-xql-generic-query)
+      → #4 XQL: Container Escape Hunt - all nodes (xdr-xql-generic-query)
+      → #5 XQL: IMDS Credential Theft Hunt - all nodes (xdr-xql-generic-query)
+      → #6 Analyst Review
+      → #7 Escalate / #8 Close
 ```
 
 ### Lambda Actions
@@ -293,16 +362,22 @@ Local state in each module directory (excluded from git):
 │   ├── handler.py                # Lambda: EKS auth + K8s API containment
 │   └── requirements.txt
 ├── cortex-scripts/
-│   ├── ExtractK8sContainerEscapeIOCs.py
+│   ├── ExtractK8sContainerEscapeIOCs.py      # Triage: IOC extraction + severity
 │   ├── automation-ExtractK8sContainerEscapeIOCs.yml
-│   ├── InvokeK8sContainmentLambda.py
-│   └── automation-InvokeK8sContainmentLambda.yml
+│   ├── InvokeK8sContainmentLambda.py         # Containment: Lambda invocation
+│   ├── automation-InvokeK8sContainmentLambda.yml
+│   ├── K8sForensicAnalysis.py                # Forensic: CVE/MITRE/XQL analysis
+│   ├── automation-K8sForensicAnalysis.yml
+│   ├── K8sSearchSimilarEvents.py             # Threat hunt: cross-search
+│   └── automation-K8sSearchSimilarEvents.yml
 ├── cortex-policy/
 │   ├── policy_rules_*.export     # Prevention policy rules
 │   ├── profiles_*.export         # Prevention profiles
 │   └── XDR_Group_*.tsv           # Endpoint group definition
 ├── playbook/
-│   └── K8s_Container_Escape_Spring4Shell_Containment.yml
+│   ├── K8s_Container_Escape_Spring4Shell_Containment.yml  # Containment
+│   ├── K8s_Container_Escape_Forensic_Analysis.yml         # Forensic
+│   └── K8s_Container_Escape_Search_Similar_Events.yml     # Threat hunt
 ├── app/                          # Spring4Shell vulnerable app (Java/Maven)
 ├── k8s/
 │   ├── namespace.yaml

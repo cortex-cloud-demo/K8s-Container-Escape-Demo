@@ -1,0 +1,450 @@
+"""
+K8sSearchSimilarEvents
+=======================
+Searches for similar container escape events across the Cortex XDR tenant.
+Cross-references by node, container image, process, CVE, and namespace
+to identify whether the attack has spread to other nodes/clusters.
+
+Uses data from K8sEscape context (populated by ExtractK8sContainerEscapeIOCs).
+
+Script arguments (playbook inputs):
+- container_id                          : Container ID (from K8sEscape.ContainerID)
+- namespace                             : K8s namespace (from K8sEscape.Namespace)
+- cluster_name                          : EKS cluster name (from K8sEscape.ClusterName)
+- node_fqdn                             : Node FQDN (from K8sEscape.NodeFQDN)
+- process_name                          : Causality actor process (from K8sEscape.ProcessName)
+- process_sha256                        : Process image SHA256 (from K8sEscape.ProcessImageSHA256)
+- image_id                              : Container image ID (from K8sEscape.ContainerImageID)
+- details                               : Issue details (from K8sEscape.Details)
+- time_range                            : Search time range (default: 30 days)
+
+Output issue field:
+- k8ssearchsimilarevents  (markdown)
+
+Output context:
+- K8sSimilar.QueriesGenerated
+- K8sSimilar.SearchCriteria
+- K8sSimilar.Summary
+
+Version: 1.0.0
+"""
+
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+
+ISSUE_FIELD_NAME = "k8ssearchsimilarevents"
+
+
+# ==============================================================================
+# UTILITY FUNCTIONS
+# ==============================================================================
+
+def normalize_value(value):
+    if value is None:
+        return ""
+    return str(value).lower().strip()
+
+
+def to_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if v is not None and str(v).strip()]
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(',') if v.strip()]
+    return [str(value)] if value else []
+
+
+# ==============================================================================
+# XQL SEARCH QUERY BUILDERS
+# ==============================================================================
+
+def build_similar_by_process_query(process_name, node_fqdn, time_range):
+    """Search for the same suspicious process on OTHER nodes (lateral movement detection)."""
+    exclude_node = f'AND agent_hostname != "{node_fqdn}"' if node_fqdn else ""
+
+    return {
+        "name": "Same Process on Other Nodes",
+        "description": f"Detect '{process_name}' execution on nodes OTHER than the compromised one — indicates lateral movement",
+        "query": f"""dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| filter action_process_image_name = "{process_name}" {exclude_node}
+| fields _time, agent_hostname, action_process_image_name,
+         action_process_image_path, action_process_image_command_line,
+         action_process_username, causality_actor_process_image_name
+| dedup agent_hostname
+| sort asc _time
+| limit 50""",
+        "time_range": time_range,
+        "search_type": "lateral_movement",
+    }
+
+
+def build_similar_by_sha256_query(process_sha256, node_fqdn, time_range):
+    """Search for the same binary (by SHA256) across all endpoints."""
+    exclude_node = f'AND agent_hostname != "{node_fqdn}"' if node_fqdn else ""
+
+    return {
+        "name": "Same Binary SHA256 Across Endpoints",
+        "description": f"Detect the same binary hash on other endpoints — indicates shared tooling or supply chain compromise",
+        "query": f"""dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| filter action_process_image_sha256 = "{process_sha256}" {exclude_node}
+| fields _time, agent_hostname, action_process_image_name,
+         action_process_image_path, action_process_image_command_line,
+         action_process_username
+| dedup agent_hostname
+| sort asc _time
+| limit 50""",
+        "time_range": time_range,
+        "search_type": "ioc_hunt",
+    }
+
+
+def build_similar_by_container_image_query(image_id, node_fqdn, time_range):
+    """Search for the same container image running on other nodes."""
+    exclude_node = f'AND agent_hostname != "{node_fqdn}"' if node_fqdn else ""
+
+    return {
+        "name": "Same Container Image on Other Nodes",
+        "description": f"Detect the same vulnerable container image on other K8s nodes — scope the blast radius",
+        "query": f"""dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| filter container_image_id contains "{image_id}" {exclude_node}
+| fields _time, agent_hostname, container_id, container_image_id,
+         action_process_image_name, action_process_image_command_line
+| dedup agent_hostname, container_id
+| sort asc _time
+| limit 50""",
+        "time_range": time_range,
+        "search_type": "blast_radius",
+    }
+
+
+def build_similar_alerts_query(namespace, time_range):
+    """Search for other XDR alerts in the same namespace."""
+    return {
+        "name": "Other Alerts in Same Namespace",
+        "description": f"Find all XDR alerts related to namespace '{namespace}' — correlate with the current incident",
+        "query": f"""dataset = xdr_data
+| filter event_type = ENUM.ALERT
+| filter namespace = "{namespace}" or action_process_image_command_line contains "{namespace}"
+| fields _time, agent_hostname, alert_name, alert_category, alert_severity,
+         action_process_image_name, namespace, container_id
+| sort desc _time
+| limit 50""",
+        "time_range": time_range,
+        "search_type": "correlation",
+    }
+
+
+def build_webshell_hunt_query(time_range):
+    """Hunt for webshell indicators across all K8s nodes."""
+    return {
+        "name": "Webshell Hunt (All K8s Nodes)",
+        "description": "Search for webshell file drops (.jsp, .php, .aspx) across all monitored K8s nodes",
+        "query": f"""dataset = xdr_data
+| filter event_type = ENUM.FILE
+| filter action_file_path contains ".jsp" or action_file_path contains "webshell"
+         or action_file_path contains "cmd.jsp" or action_file_path contains "shell.jsp"
+| filter agent_hostname contains "compute.internal"
+| fields _time, agent_hostname, action_file_path, action_file_name,
+         action_file_sha256, action_process_image_name,
+         action_process_image_command_line
+| sort desc _time
+| limit 50""",
+        "time_range": time_range,
+        "search_type": "threat_hunt",
+    }
+
+
+def build_container_escape_hunt_query(time_range):
+    """Hunt for container escape patterns across all nodes."""
+    return {
+        "name": "Container Escape Hunt (All Nodes)",
+        "description": "Search for nsenter, chroot, /proc/1/root access across all monitored endpoints",
+        "query": f"""dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| filter action_process_image_command_line contains "nsenter"
+         or action_process_image_command_line contains "/proc/1/root"
+         or action_process_image_command_line contains "chroot"
+         or (action_process_image_name = "mount" AND action_process_image_command_line contains "/host")
+| filter agent_hostname contains "compute.internal"
+| fields _time, agent_hostname, action_process_image_name,
+         action_process_image_command_line, action_process_username,
+         actor_process_image_name, causality_actor_process_image_name
+| sort desc _time
+| limit 50""",
+        "time_range": time_range,
+        "search_type": "threat_hunt",
+    }
+
+
+def build_imds_access_hunt_query(time_range):
+    """Hunt for IMDS metadata access from K8s nodes (credential theft)."""
+    return {
+        "name": "IMDS Credential Theft Hunt (All Nodes)",
+        "description": "Search for EC2 metadata service access (169.254.169.254) from K8s containers",
+        "query": f"""dataset = xdr_data
+| filter event_type = ENUM.NETWORK
+| filter action_remote_ip = "169.254.169.254"
+         or dst_action_external_hostname contains "169.254.169.254"
+| filter agent_hostname contains "compute.internal"
+| fields _time, agent_hostname, action_process_image_name,
+         action_process_image_command_line,
+         action_local_ip, action_remote_ip, action_remote_port,
+         actor_process_image_name
+| sort desc _time
+| limit 50""",
+        "time_range": time_range,
+        "search_type": "threat_hunt",
+    }
+
+
+# ==============================================================================
+# MARKDOWN REPORT BUILDER
+# ==============================================================================
+
+EMOJI_SEARCH = "\U0001F50D"
+EMOJI_SHIELD = "\U0001F6E1"
+EMOJI_WARN = "\u26A0\uFE0F"
+EMOJI_CHECK = "\u2705"
+EMOJI_TARGET = "\U0001F3AF"
+EMOJI_GLOBE = "\U0001F310"
+EMOJI_CHAIN = "\U0001F517"
+
+
+SEARCH_TYPE_LABELS = {
+    "lateral_movement": EMOJI_WARN + " Lateral Movement",
+    "ioc_hunt": EMOJI_SEARCH + " IOC Hunt",
+    "blast_radius": EMOJI_TARGET + " Blast Radius",
+    "correlation": EMOJI_CHAIN + " Alert Correlation",
+    "threat_hunt": EMOJI_GLOBE + " Threat Hunt",
+}
+
+
+def build_search_report(container_ids, namespace, cluster_name, node_fqdn,
+                         process_name, process_sha256, image_id, details,
+                         xql_queries, time_range):
+    """Build the similar events search markdown report."""
+    md = []
+
+    md.append("# " + EMOJI_SEARCH + " K8s Container Escape - Similar Event Search")
+    md.append("")
+
+    # ======================== SEARCH CONTEXT ========================
+    md.append("## " + EMOJI_TARGET + " Search Context")
+    md.append("")
+    md.append("| Parameter | Value | Used In |")
+    md.append("|---|---|---|")
+    if cluster_name:
+        md.append("| Cluster | `" + cluster_name + "` | Scope filter |")
+    if namespace:
+        md.append("| Namespace | `" + namespace + "` | Alert correlation |")
+    if node_fqdn:
+        md.append("| Source Node | `" + node_fqdn + "` | Excluded from cross-search |")
+    if process_name:
+        md.append("| Process | `" + process_name + "` | Lateral movement detection |")
+    if process_sha256:
+        md.append("| SHA256 | `" + process_sha256[:32] + "...` | Binary hunt |")
+    if image_id:
+        md.append("| Container Image | `" + (image_id[:32] + "..." if len(str(image_id)) > 32 else str(image_id)) + "` | Blast radius |")
+    md.append("| Time Range | " + time_range + " | All queries |")
+    md.append("")
+
+    # ======================== SEARCH CATEGORIES ========================
+    md.append("## " + EMOJI_SEARCH + " Search Queries (" + str(len(xql_queries)) + ")")
+    md.append("")
+    md.append("> Copy-paste these XQL queries into **Investigation > Query Center** to hunt for related activity")
+    md.append("")
+
+    # Group queries by type
+    categories = {}
+    for q in xql_queries:
+        stype = q.get("search_type", "other")
+        if stype not in categories:
+            categories[stype] = []
+        categories[stype].append(q)
+
+    query_num = 1
+    for stype, queries in categories.items():
+        label = SEARCH_TYPE_LABELS.get(stype, stype)
+        md.append("### " + label)
+        md.append("")
+
+        for q in queries:
+            md.append("#### " + str(query_num) + ". " + q["name"])
+            md.append("")
+            md.append("*" + q["description"] + "*")
+            md.append("")
+            md.append("```sql")
+            md.append(q["query"].strip())
+            md.append("```")
+            md.append("")
+            query_num += 1
+
+    # ======================== INVESTIGATION CHECKLIST ========================
+    md.append("---")
+    md.append("")
+    md.append("## " + EMOJI_SHIELD + " Investigation Checklist")
+    md.append("")
+    md.append("- [ ] Run **lateral movement** queries — is the same process on other nodes?")
+    md.append("- [ ] Run **IOC hunt** — is the same binary hash present elsewhere?")
+    md.append("- [ ] Run **blast radius** — are other pods using the vulnerable image?")
+    md.append("- [ ] Run **alert correlation** — any other alerts in the same namespace?")
+    md.append("- [ ] Run **threat hunts** — webshells, container escapes, IMDS access on other nodes?")
+    md.append("- [ ] If results found: escalate scope and extend containment")
+    md.append("")
+
+    return "\n".join(md)
+
+
+# ==============================================================================
+# WRITE TO ISSUE FIELD
+# ==============================================================================
+
+def write_results_to_issue(markdown_content):
+    try:
+        demisto.info("Writing to issue field '" + ISSUE_FIELD_NAME + "' (" + str(len(markdown_content)) + " chars)")
+        result = demisto.executeCommand("setIncident", {
+            "customFields": {ISSUE_FIELD_NAME: markdown_content}
+        })
+        if is_error(result):
+            error_msg = get_error(result)
+            demisto.error("setIncident failed: " + str(error_msg))
+            return False, str(error_msg)
+        demisto.info("setIncident success")
+        return True, ""
+    except Exception as e:
+        demisto.error("setIncident exception: " + str(e))
+        return False, str(e)
+
+
+# ==============================================================================
+# MAIN FUNCTION
+# ==============================================================================
+
+def main():
+    try:
+        args = demisto.args()
+
+        demisto.info("=== K8sSearchSimilarEvents v1.0.0 START ===")
+
+        # ==================================================================
+        # RETRIEVE FIELDS
+        # ==================================================================
+
+        container_ids = to_list(args.get('container_id'))
+        namespace = str(args.get('namespace', '')).strip()
+        cluster_name = str(args.get('cluster_name', '')).strip()
+        node_fqdn = str(args.get('node_fqdn', '')).strip()
+        process_name = str(args.get('process_name', '')).strip()
+        process_sha256 = str(args.get('process_sha256', '')).strip()
+        image_id = str(args.get('image_id', '')).strip()
+        details = str(args.get('details', '')).strip()
+        time_range = str(args.get('time_range', '30 days')).strip()
+
+        demisto.info("Cluster: " + cluster_name)
+        demisto.info("Namespace: " + namespace)
+        demisto.info("Node: " + node_fqdn)
+        demisto.info("Process: " + process_name)
+        demisto.info("Time range: " + time_range)
+
+        # ==================================================================
+        # BUILD SEARCH QUERIES
+        # ==================================================================
+
+        xql_queries = []
+
+        # Targeted searches (require specific IOCs)
+        if process_name:
+            xql_queries.append(build_similar_by_process_query(process_name, node_fqdn, time_range))
+
+        if process_sha256:
+            xql_queries.append(build_similar_by_sha256_query(process_sha256, node_fqdn, time_range))
+
+        if image_id:
+            xql_queries.append(build_similar_by_container_image_query(image_id, node_fqdn, time_range))
+
+        if namespace:
+            xql_queries.append(build_similar_alerts_query(namespace, time_range))
+
+        # Broad threat hunts (always included)
+        xql_queries.append(build_webshell_hunt_query(time_range))
+        xql_queries.append(build_container_escape_hunt_query(time_range))
+        xql_queries.append(build_imds_access_hunt_query(time_range))
+
+        demisto.info("Generated " + str(len(xql_queries)) + " search queries")
+
+        # ==================================================================
+        # MARKDOWN REPORT
+        # ==================================================================
+
+        human_readable = build_search_report(
+            container_ids, namespace, cluster_name, node_fqdn,
+            process_name, process_sha256, image_id, details,
+            xql_queries, time_range
+        )
+
+        # ==================================================================
+        # WRITE TO ISSUE
+        # ==================================================================
+
+        write_success, write_error = write_results_to_issue(human_readable)
+        if not write_success:
+            demisto.error("setIncident failed: " + write_error)
+            human_readable += "\n> **WARNING**: Failed to write to '" + ISSUE_FIELD_NAME + "': " + write_error + "\n"
+
+        # ==================================================================
+        # ENTRY CONTEXT
+        # ==================================================================
+
+        search_criteria = {
+            "cluster_name": cluster_name,
+            "namespace": namespace,
+            "node_fqdn": node_fqdn,
+            "process_name": process_name,
+            "process_sha256": process_sha256,
+            "image_id": image_id,
+            "time_range": time_range,
+        }
+
+        entry_context = {
+            'K8sSimilar.QueriesGenerated': len(xql_queries),
+            'K8sSimilar.SearchCriteria': search_criteria,
+            'K8sSimilar.Queries': [{"name": q["name"], "type": q.get("search_type", ""), "query": q["query"]} for q in xql_queries],
+            'K8sSimilar.Summary': {
+                "queries_generated": len(xql_queries),
+                "targeted_searches": len([q for q in xql_queries if q.get("search_type") != "threat_hunt"]),
+                "broad_hunts": len([q for q in xql_queries if q.get("search_type") == "threat_hunt"]),
+            },
+        }
+
+        # ==================================================================
+        # RETURN
+        # ==================================================================
+
+        return_results({
+            'Type': entryTypes['note'],
+            'ContentsFormat': formats['json'],
+            'Contents': {
+                "QueriesGenerated": len(xql_queries),
+                "SearchCriteria": search_criteria,
+                "Queries": [{"name": q["name"], "type": q.get("search_type", ""), "query": q["query"]} for q in xql_queries],
+            },
+            'HumanReadable': human_readable,
+            'EntryContext': entry_context,
+        })
+
+        demisto.info("=== K8sSearchSimilarEvents v1.0.0 END ===")
+
+    except Exception as e:
+        error_msg = "Error in K8sSearchSimilarEvents: " + str(e)
+        demisto.error(error_msg)
+        return_error(error_msg)
+
+
+if __name__ in ('__main__', '__builtin__', 'builtins'):
+    main()
