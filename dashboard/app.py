@@ -18,7 +18,7 @@ app = Flask(__name__)
 
 # Project root (parent of dashboard/)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TERRAFORM_DIR = os.path.join(PROJECT_ROOT, "terraform")
+TERRAFORM_DIR = os.path.join(PROJECT_ROOT, "terraform-infra")
 TERRAFORM_LAMBDA_DIR = os.path.join(PROJECT_ROOT, "terraform-lambda")
 K8S_DIR = os.path.join(PROJECT_ROOT, "k8s")
 ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")

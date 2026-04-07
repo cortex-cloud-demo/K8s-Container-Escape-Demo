@@ -64,7 +64,7 @@ Click **INFRA > Apply** — Terraform provisions:
 After infra is deployed, retrieve the dedicated dashboard user credentials:
 
 ```bash
-cd terraform
+cd terraform-infra
 terraform output dashboard_user_access_key_id
 terraform output -raw dashboard_user_secret_access_key
 ```
@@ -120,7 +120,7 @@ The project uses **dedicated IAM Users with permanent Access Keys** and **scoped
 ┌─────────────────────────────────────────────────────────────────────┐
 │  BOOTSTRAP (one-time, admin credentials)                            │
 │                                                                     │
-│  Admin credentials ──► terraform apply (terraform/ + terraform-lambda/)
+│  Admin credentials ──► terraform apply (terraform-infra/ + terraform-lambda/)
 │                          ├── VPC, EKS, ECR, Lambda                  │
 │                          ├── Dashboard IAM User + Operator Role     │
 │                          └── Cortex IAM User + Lambda Invoker Role  │
@@ -148,8 +148,8 @@ The project uses **dedicated IAM Users with permanent Access Keys** and **scoped
 
 | Resource | Module | Purpose |
 |----------|--------|---------|
-| `k8s-escape-demo-dashboard-user` | `terraform/` | Permanent Access Key → AssumeRole on operator role |
-| `k8s-escape-demo-dashboard-operator` | `terraform/` | Scoped permissions (EKS, ECR, Lambda, IAM, VPC, Logs, ELB) |
+| `k8s-escape-demo-dashboard-user` | `terraform-infra/` | Permanent Access Key → AssumeRole on operator role |
+| `k8s-escape-demo-dashboard-operator` | `terraform-infra/` | Scoped permissions (EKS, ECR, Lambda, IAM, VPC, Logs, ELB) |
 | `k8s-escape-demo-cortex-playbook-user` | `terraform-lambda/` | Permanent Access Key → AssumeRole on invoker role |
 | `k8s-escape-demo-lambda-invoker` | `terraform-lambda/` | `lambda:InvokeFunction` on containment Lambda only |
 
@@ -157,7 +157,7 @@ The project uses **dedicated IAM Users with permanent Access Keys** and **scoped
 
 ```bash
 # Dashboard user
-cd terraform
+cd terraform-infra
 terraform output dashboard_user_access_key_id
 terraform output -raw dashboard_user_secret_access_key
 
@@ -332,7 +332,7 @@ Local state in each module directory (excluded from git):
 
 | Module | Resources |
 |--------|-----------|
-| `terraform/` | VPC, EKS, ECR, IAM, Dashboard user + operator role |
+| `terraform-infra/` | VPC, EKS, ECR, IAM, Dashboard user + operator role |
 | `terraform-lambda/` | Lambda, IAM, EKS access entry, Cortex user + lambda invoker role |
 
 ## Project Structure
@@ -347,7 +347,7 @@ Local state in each module directory (excluded from git):
 │   └── static/
 │       ├── css/style.css
 │       └── js/app.js
-├── terraform/
+├── terraform-infra/
 │   ├── main.tf                   # VPC, EKS, ECR, IAM, node group
 │   ├── iam-dashboard.tf          # Dashboard IAM User + Operator Role
 │   ├── backend.tf                # Provider config
@@ -405,5 +405,5 @@ Local state in each module directory (excluded from git):
 kubectl delete namespace vuln-app
 kubectl delete clusterrolebinding vuln-app-cluster-admin
 cd terraform-lambda && terraform destroy -auto-approve
-cd terraform && terraform destroy -auto-approve
+cd terraform-infra && terraform destroy -auto-approve
 ```
