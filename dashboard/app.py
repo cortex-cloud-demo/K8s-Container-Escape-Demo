@@ -575,9 +575,9 @@ def infra_outputs():
 def image_build_push():
     cmd = f"""
 set -e
-REGION=$(cd terraform && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
+REGION=$(cd terraform-infra && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-ECR_URL=$(cd terraform && terraform output -raw ecr_repository_url 2>/dev/null)
+ECR_URL=$(cd terraform-infra && terraform output -raw ecr_repository_url 2>/dev/null)
 
 echo "==> Logging in to ECR..."
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${{ACCOUNT_ID}}.dkr.ecr.${{REGION}}.amazonaws.com
@@ -611,8 +611,8 @@ def k8s_deploy():
 
     cmd = f"""
 set -e
-REGION=$(cd terraform && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
-ECR_URL=$(cd terraform && terraform output -raw ecr_repository_url 2>/dev/null)
+REGION=$(cd terraform-infra && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
+ECR_URL=$(cd terraform-infra && terraform output -raw ecr_repository_url 2>/dev/null)
 
 echo "==> Kubeconfig generated with embedded AWS credentials"
 echo "==> Testing cluster access..."
