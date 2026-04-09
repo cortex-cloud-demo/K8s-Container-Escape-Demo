@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>K8s Escape Demo</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=8">
+    <link rel="stylesheet" href="/static/css/style.css?v=9">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
@@ -19,11 +19,52 @@
             <div class="subtitle">K8s &bull; Spring4Shell &bull; CVE-2022-22965</div>
         </div>
     </div>
+    <div class="header-kill-chain">
+        <div class="header-chain-steps">
+            <div class="header-chain-stage" id="hc-infra" title="Infrastructure">
+                <div class="header-chain-dot"></div>
+                <span>Infra</span>
+            </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage" id="hc-build" title="Build Image">
+                <div class="header-chain-dot"></div>
+                <span>Build</span>
+            </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage" id="hc-deploy" title="Deploy App">
+                <div class="header-chain-dot"></div>
+                <span>Deploy</span>
+            </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage attack" id="hc-rce" title="Spring4Shell RCE">
+                <div class="header-chain-dot"></div>
+                <span>RCE</span>
+            </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage attack" id="hc-escape" title="Container Escape">
+                <div class="header-chain-dot"></div>
+                <span>Escape</span>
+            </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage attack" id="hc-takeover" title="Cluster Takeover">
+                <div class="header-chain-dot"></div>
+                <span>Takeover</span>
+            </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage attack" id="hc-scan" title="K8s Scanning">
+                <div class="header-chain-dot"></div>
+                <span>Scan</span>
+            </div>
+        </div>
+    </div>
     <div class="status-bar">
         <div class="status-item">
             <span class="status-dot" id="host-dot"></span>
             <span id="host-value">Not deployed</span>
         </div>
+        <button class="theme-toggle" id="theme-toggle" onclick="cycleTheme()" title="Toggle theme">
+            <span id="theme-icon">&#9790;</span>
+        </button>
     </div>
 </header>
 
@@ -35,7 +76,7 @@
 
         <!-- Settings -->
         <div class="section">
-            <div class="section-title">Settings</div>
+            <div class="section-title section-title-settings"><span class="section-icon">&#9881;</span> Settings</div>
             <div class="step-card" id="card-aws-settings">
                 <div class="step-header">
                     <span class="step-number aws">AWS</span>
@@ -62,35 +103,9 @@
             </div>
         </div>
 
-        <!-- Kill Chain Visual -->
-        <div class="kill-chain">
-            <div class="section-title">Kill Chain Progress</div>
-            <div class="chain-steps">
-                <div class="chain-node" title="Infrastructure">1</div>
-                <div class="chain-line"></div>
-                <div class="chain-node" title="Build Image">2</div>
-                <div class="chain-line"></div>
-                <div class="chain-node" title="Deploy App">3</div>
-                <div class="chain-line"></div>
-                <div class="chain-node" title="RCE">4</div>
-                <div class="chain-line"></div>
-                <div class="chain-node" title="Escape">5</div>
-                <div class="chain-line"></div>
-                <div class="chain-node" title="Takeover">6</div>
-            </div>
-            <div class="chain-labels">
-                <span class="chain-label">Infra</span>
-                <span class="chain-label">Build</span>
-                <span class="chain-label">Deploy</span>
-                <span class="chain-label">RCE</span>
-                <span class="chain-label">Escape</span>
-                <span class="chain-label">Takeover</span>
-            </div>
-        </div>
-
         <!-- Infrastructure -->
         <div class="section">
-            <div class="section-title">Infrastructure</div>
+            <div class="section-title section-title-infra"><span class="section-icon">&#9729;</span> Infrastructure</div>
 
             <div class="step-card" id="card-infra">
                 <div class="step-header">
@@ -177,7 +192,7 @@
 
         <!-- Attack -->
         <div class="section">
-            <div class="section-title">Attack Chain</div>
+            <div class="section-title section-title-attack"><span class="section-icon">&#9760;</span> Attack Chain</div>
 
             <div class="warning-banner" id="gp-warning">
                 <span class="warning-icon">&#x26A0;</span>
@@ -235,7 +250,7 @@
 
         <!-- Cortex Playbook -->
         <div class="section">
-            <div class="section-title">Cortex - Response</div>
+            <div class="section-title section-title-cortex"><span class="section-icon">&#9737;</span> Cortex - Response</div>
 
             <div class="step-card" id="card-lambda-deploy">
                 <div class="step-header">
@@ -593,7 +608,7 @@
 
         <!-- Cleanup -->
         <div class="section">
-            <div class="section-title">Cleanup</div>
+            <div class="section-title section-title-cleanup"><span class="section-icon">&#128465;</span> Cleanup</div>
 
             <div class="step-card" id="card-reset-containment">
                 <div class="step-header">
@@ -652,8 +667,8 @@
                 <span class="task-info" id="current-task-status">idle</span>
             </div>
             <div class="tab-bar">
-                <button class="tab" data-tab="overview" onclick="openTab('overview')">Overview</button>
-                <button class="tab active" data-tab="terminal" onclick="openTab('terminal')">Terminal</button>
+                <button class="tab active" data-tab="overview" onclick="openTab('overview')">Overview</button>
+                <button class="tab" data-tab="terminal" onclick="openTab('terminal')">Terminal</button>
                 <button class="tab" data-tab="kubectl" onclick="openTab('kubectl')">kubectl</button>
                 <button class="tab" data-tab="playbook" onclick="openTab('playbook')">Cortex</button>
                 <button class="tab tab-radar-btn" data-tab="radar" onclick="openTab('radar')">Security Radar</button>
@@ -661,7 +676,7 @@
         </div>
 
         <!-- Overview Tab -->
-        <div class="terminal-container tab-content" id="tab-overview">
+        <div class="terminal-container tab-content active" id="tab-overview">
             <div class="overview-content">
                 <div class="overview-section">
                     <h3 class="overview-title">K8s Container Escape Demo</h3>
@@ -821,7 +836,7 @@
         </div>
 
         <!-- Terminal Tab -->
-        <div class="terminal-container tab-content active" id="tab-terminal">
+        <div class="terminal-container tab-content" id="tab-terminal">
             <div class="terminal" id="terminal-output"></div>
             <div class="terminal-input-bar">
                 <span class="prompt-sign">$</span>
@@ -1066,6 +1081,6 @@ export AWS_SESSION_TOKEN="..."' oninput="parseAwsExport()"></textarea>
     </div>
 </div>
 
-<script src="/static/js/app.js?v=22"></script>
+<script src="/static/js/app.js?v=23"></script>
 </body>
 </html>

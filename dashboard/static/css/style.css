@@ -1,4 +1,5 @@
-:root {
+/* ─── Dark Theme (default) ─── */
+:root, [data-theme="dark"] {
     --bg-dark: #0a0e17;
     --bg-card: #111827;
     --bg-card-hover: #1a2332;
@@ -13,6 +14,56 @@
     --accent-cyan: #06b6d4;
     --terminal-bg: #0c1117;
     --terminal-green: #4ade80;
+    --header-bg: linear-gradient(135deg, #1a0a2e 0%, #16213e 50%, #0a1628 100%);
+    --sidebar-bg: #0f1419;
+    --tab-bg: #1e293b;
+    --tab-active-bg: #3b82f6;
+    --input-bg: #1e293b;
+    --input-border: #334155;
+    --modal-bg: #111827;
+    --scrollbar-track: #0a0e17;
+    --scrollbar-thumb: #1e293b;
+}
+
+/* ─── Light Theme ─── */
+[data-theme="light"] *::-webkit-scrollbar-track { background: #f1f5f9; }
+[data-theme="light"] *::-webkit-scrollbar-thumb { background: #cbd5e1; }
+[data-theme="light"] .header h1 {
+    background: linear-gradient(90deg, #dc2626, #ea580c);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+[data-theme="light"] .terminal-output,
+[data-theme="light"] .kubectl-output {
+    color: #1e293b;
+}
+[data-theme="light"] .step-number {
+    color: white;
+}
+[data-theme="light"] {
+    --bg-dark: #f8fafc;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f1f5f9;
+    --border: #e2e8f0;
+    --text: #1e293b;
+    --text-dim: #64748b;
+    --accent-red: #dc2626;
+    --accent-green: #16a34a;
+    --accent-blue: #2563eb;
+    --accent-orange: #ea580c;
+    --accent-purple: #9333ea;
+    --accent-cyan: #0891b2;
+    --terminal-bg: #f1f5f9;
+    --terminal-green: #166534;
+    --header-bg: linear-gradient(135deg, #e0e7ff 0%, #dbeafe 50%, #eff6ff 100%);
+    --sidebar-bg: #f1f5f9;
+    --tab-bg: #e2e8f0;
+    --tab-active-bg: #2563eb;
+    --input-bg: #ffffff;
+    --input-border: #cbd5e1;
+    --modal-bg: #ffffff;
+    --scrollbar-track: #f1f5f9;
+    --scrollbar-thumb: #cbd5e1;
 }
 
 * {
@@ -31,12 +82,125 @@ body {
 /* ─── Header ───────────────────────────────────── */
 
 .header {
-    background: linear-gradient(135deg, #1a0a2e 0%, #16213e 50%, #0a1628 100%);
+    background: var(--header-bg);
     border-bottom: 1px solid var(--border);
-    padding: 1.2rem 2rem;
+    padding: 1rem 2rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 1.5rem;
+}
+
+/* ─── Theme Toggle ─── */
+.theme-toggle {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0.3rem 0.5rem;
+    font-size: 1rem;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+.theme-toggle:hover {
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+/* ─── Header Kill Chain ──────────────────── */
+.header-kill-chain {
+    flex: 1;
+    max-width: 600px;
+}
+.header-chain-steps {
+    display: flex;
+    align-items: center;
+    gap: 0;
+}
+.header-chain-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+}
+.header-chain-stage span {
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    transition: color 0.3s;
+}
+.header-chain-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    background: var(--bg-dark);
+    transition: all 0.3s;
+}
+.header-chain-line {
+    flex: 1;
+    height: 2px;
+    background: var(--border);
+    min-width: 12px;
+    margin: 0 0 14px 0;
+    transition: background 0.3s;
+}
+/* States */
+.header-chain-stage.completed .header-chain-dot {
+    border-color: var(--accent-green);
+    background: var(--accent-green);
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+}
+.header-chain-stage.completed span {
+    color: var(--accent-green);
+}
+.header-chain-stage.active .header-chain-dot {
+    border-color: var(--accent-orange);
+    background: var(--accent-orange);
+    box-shadow: 0 0 8px rgba(249, 115, 22, 0.5);
+    animation: pulse-dot 1.5s infinite;
+}
+.header-chain-stage.active span {
+    color: var(--accent-orange);
+    font-weight: 600;
+}
+.header-chain-stage.attack .header-chain-dot {
+    border-color: #4a2020;
+}
+.header-chain-stage.attack.completed .header-chain-dot {
+    border-color: var(--accent-red);
+    background: var(--accent-red);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+}
+.header-chain-stage.attack.completed span {
+    color: var(--accent-red);
+}
+.header-chain-stage.attack.active .header-chain-dot {
+    border-color: var(--accent-red);
+    background: var(--accent-red);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+    animation: pulse-dot-red 1.5s infinite;
+}
+.header-chain-stage.attack.active span {
+    color: var(--accent-red);
+    font-weight: 600;
+}
+.header-chain-line.completed {
+    background: var(--accent-green);
+}
+.header-chain-line.attack-completed {
+    background: var(--accent-red);
+}
+@keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 6px rgba(249, 115, 22, 0.4); }
+    50% { box-shadow: 0 0 14px rgba(249, 115, 22, 0.7); }
+}
+@keyframes pulse-dot-red {
+    0%, 100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); }
+    50% { box-shadow: 0 0 14px rgba(239, 68, 68, 0.7); }
 }
 
 .header-left {
@@ -120,7 +284,37 @@ body {
     letter-spacing: 0.1em;
     color: var(--text-dim);
     margin-bottom: 0.6rem;
-    padding-left: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border-radius: 4px;
+    border-left: 3px solid transparent;
+}
+.section-icon {
+    margin-right: 0.3rem;
+}
+.section-title-settings {
+    border-left-color: var(--accent-blue);
+    color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.06);
+}
+.section-title-infra {
+    border-left-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+    background: rgba(6, 182, 212, 0.06);
+}
+.section-title-attack {
+    border-left-color: var(--accent-red);
+    color: var(--accent-red);
+    background: rgba(239, 68, 68, 0.06);
+}
+.section-title-cortex {
+    border-left-color: var(--accent-purple);
+    color: var(--accent-purple);
+    background: rgba(168, 85, 247, 0.06);
+}
+.section-title-cleanup {
+    border-left-color: var(--accent-orange);
+    color: var(--accent-orange);
+    background: rgba(249, 115, 22, 0.06);
 }
 
 .step-card {

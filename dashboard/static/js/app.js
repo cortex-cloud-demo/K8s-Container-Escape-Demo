@@ -6,18 +6,19 @@ const state = {
     pollInterval: null,
     stepStatuses: {},
     host: null,
-    activeTab: 'terminal',
+    activeTab: 'overview',
     kubectlTaskId: null,
     kubectlPollInterval: null,
 };
 
 const STEPS = [
-    { id: 'infra', label: 'Infra' },
-    { id: 'build', label: 'Build' },
-    { id: 'deploy', label: 'Deploy' },
-    { id: 'rce', label: 'RCE' },
-    { id: 'escape', label: 'Escape' },
-    { id: 'takeover', label: 'Takeover' },
+    { id: 'infra',    el: 'hc-infra',    attack: false },
+    { id: 'build',    el: 'hc-build',    attack: false },
+    { id: 'deploy',   el: 'hc-deploy',   attack: false },
+    { id: 'rce',      el: 'hc-rce',      attack: true },
+    { id: 'escape',   el: 'hc-escape',   attack: true },
+    { id: 'takeover', el: 'hc-takeover', attack: true },
+    { id: 'scan',     el: 'hc-scan',     attack: true },
 ];
 
 // ─── Terminal ─────────────────────────────────────────────────────────────────
@@ -105,9 +106,11 @@ function updateStepStatus(taskName, status) {
         'Terraform Apply': 'infra',
         'Build & Push Image': 'build',
         'Deploy to EKS': 'deploy',
+        'Undeploy from EKS': null,
         'Step 1: Spring4Shell RCE': 'rce',
         'Step 2: Container Escape': 'escape',
         'Step 3: Cluster Takeover': 'takeover',
+        'Step 4: K8s Vulnerability Scanning': 'scan',
         'Terraform Destroy': null,
         'Deploy Lambda': null,
         'Destroy Lambda': null,
@@ -128,6 +131,8 @@ function updateStepStatus(taskName, status) {
         'Step 1: Spring4Shell RCE': { id: 'rce-status',            ok: 'exploited',   run: 'running...' },
         'Step 2: Container Escape': { id: 'escape-status',         ok: 'escaped',     run: 'running...' },
         'Step 3: Cluster Takeover': { id: 'takeover-status',       ok: 'pwned',       run: 'running...' },
+        'Step 4: K8s Vulnerability Scanning': { id: 'scanning-status', ok: 'scanned',   run: 'scanning...' },
+        'Undeploy from EKS':        { id: 'deploy-status',         ok: 'undeployed',  run: 'removing...' },
         'Deploy Lambda':            { id: 'lambda-deploy-status',  ok: 'deployed',    run: 'deploying...' },
         'Terraform Destroy':        { id: 'infra-destroy-status',  ok: 'destroyed',   run: 'destroying...' },
         'Destroy Lambda':           { id: 'lambda-destroy-status', ok: 'destroyed',   run: 'destroying...' },
@@ -153,22 +158,24 @@ function updateStepStatus(taskName, status) {
 }
 
 function renderKillChain() {
-    const nodes = document.querySelectorAll('.chain-node');
-    const lines = document.querySelectorAll('.chain-line');
+    const lines = document.querySelectorAll('.header-chain-line');
 
     STEPS.forEach((step, i) => {
-        const node = nodes[i];
+        const el = document.getElementById(step.el);
+        if (!el) return;
         const s = state.stepStatuses[step.id];
 
-        node.classList.remove('completed', 'active', 'error');
-        if (s === 'success') node.classList.add('completed');
-        else if (s === 'running') node.classList.add('active');
-        else if (s === 'error') node.classList.add('error');
+        el.classList.remove('completed', 'active');
+        if (s === 'success') el.classList.add('completed');
+        else if (s === 'running') el.classList.add('active');
 
-        if (i > 0) {
-            lines[i - 1].classList.remove('completed');
+        // Update connecting lines
+        if (i > 0 && lines[i - 1]) {
+            lines[i - 1].classList.remove('completed', 'attack-completed');
             const prevStatus = state.stepStatuses[STEPS[i - 1].id];
-            if (prevStatus === 'success') lines[i - 1].classList.add('completed');
+            if (prevStatus === 'success') {
+                lines[i - 1].classList.add(step.attack ? 'attack-completed' : 'completed');
+            }
         }
     });
 }
@@ -1915,7 +1922,49 @@ function radarReset() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+// ─── Theme Toggle ────────────────────────────────────────────────────────────
+
+const THEMES = ['dark', 'light', 'auto'];
+const THEME_ICONS = { dark: '\u263E', light: '\u2600', auto: '\u25D1' };
+const THEME_TITLES = { dark: 'Dark mode', light: 'Light mode', auto: 'Auto (system)' };
+
+function getStoredTheme() {
+    return localStorage.getItem('theme') || 'dark';
+}
+
+function getEffectiveTheme(theme) {
+    if (theme === 'auto') {
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    return theme;
+}
+
+function applyTheme(theme) {
+    const effective = getEffectiveTheme(theme);
+    document.documentElement.setAttribute('data-theme', effective);
+    const icon = document.getElementById('theme-icon');
+    const btn = document.getElementById('theme-toggle');
+    if (icon) icon.textContent = THEME_ICONS[theme];
+    if (btn) btn.title = THEME_TITLES[theme];
+}
+
+function cycleTheme() {
+    const current = getStoredTheme();
+    const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length];
+    localStorage.setItem('theme', next);
+    applyTheme(next);
+}
+
+// Listen for system theme changes when in auto mode
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (getStoredTheme() === 'auto') applyTheme('auto');
+});
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+
 document.addEventListener('DOMContentLoaded', () => {
+    // Apply saved theme
+    applyTheme(getStoredTheme());
     // Shell input enter key
     document.getElementById('shell-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') shellExec();
