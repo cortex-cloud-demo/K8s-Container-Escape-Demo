@@ -640,6 +640,21 @@ echo "==> URL: http://${{HOST}}/app"
     return jsonify({"task_id": task_id})
 
 
+@app.route("/api/k8s/undeploy", methods=["POST"])
+def k8s_undeploy():
+    cmd = """set -e
+echo "==> Deleting vuln-app resources..."
+kubectl delete -f k8s/deployment.yaml --ignore-not-found=true 2>/dev/null || true
+kubectl delete -f k8s/service-account.yaml --ignore-not-found=true 2>/dev/null || true
+kubectl delete -f k8s/namespace.yaml --ignore-not-found=true --wait=false 2>/dev/null || true
+echo "==> Waiting for namespace deletion..."
+kubectl wait --for=delete namespace/vuln-app --timeout=60s 2>/dev/null || true
+echo "==> Undeploy complete"
+"""
+    task_id = create_task("Undeploy from EKS", cmd)
+    return jsonify({"task_id": task_id})
+
+
 @app.route("/api/k8s/status", methods=["GET"])
 def k8s_status():
     try:
@@ -754,6 +769,19 @@ def attack_step3():
     return jsonify({"task_id": task_id})
 
 
+@app.route("/api/attack/step4", methods=["POST"])
+def attack_step4():
+    host = get_host()
+    if not host:
+        return jsonify({"error": "No HOST found. Deploy the app first."}), 400
+    task_id = create_task(
+        "Step 4: K8s Vulnerability Scanning",
+        f"bash {ATTACK_DIR}/04-k8s-scanning.sh",
+        env_extra={"HOST": host},
+    )
+    return jsonify({"task_id": task_id})
+
+
 @app.route("/api/attack/shell", methods=["POST"])
 def attack_shell():
     """Execute a custom command on the compromised pod via webshell."""
@@ -764,8 +792,8 @@ def attack_shell():
     cmd = request.json.get("command", "id")
     task_id = create_task(
         f"Shell: {cmd[:40]}",
-        f"bash {ATTACK_DIR}/remote_shell.sh {cmd}",
-        env_extra={"HOST": host},
+        f"bash {ATTACK_DIR}/remote_shell.sh \"$SHELL_CMD\"",
+        env_extra={"HOST": host, "SHELL_CMD": cmd},
     )
     return jsonify({"task_id": task_id})
 
@@ -1532,23 +1560,34 @@ def deploy_all_to_cortex():
 
 CORTEX_POLICY_DIR = os.path.join(PROJECT_ROOT, "cortex-policy")
 
-CORTEX_POLICY_OBJECTS = [
-    {
-        "key": "policy_rules",
-        "file": "policy_rules_k8s_cortex-cloud-demo.export",
-        "name": "k8s_cortex-cloud-demo",
-        "label": "Policy Rules",
-    },
-    {
-        "key": "profiles",
-        "file": "profiles_k8s_cortex-cloud-demo.export",
-        "name": "k8s_cortex-cloud-demo",
-        "label": "Profiles",
-    },
-]
-
 CORTEX_POLICY_GROUP = "eks-k8s-container-escape-demo"
 CORTEX_POLICY_NAME = "k8s_cortex-cloud-demo"
+
+# Prevention profiles to create via API
+# All modules set to "report" for the demo (detect but don't block)
+CORTEX_PREVENTION_PROFILES = [
+    {
+        "name": "k8s-demo-malware",
+        "profile_type": "Malware",
+        "platform": "Linux",
+        "description": "K8s Container Escape Demo - Malware profile (Report mode). Detects webshells, container escapes, credential theft without blocking the attack chain.",
+        "modules": {},
+    },
+    {
+        "name": "k8s-demo-exploit",
+        "profile_type": "Exploit",
+        "platform": "Linux",
+        "description": "K8s Container Escape Demo - Exploit profile (Report mode). Detects exploitation techniques without blocking.",
+        "modules": {},
+    },
+    {
+        "name": "k8s-demo-agent-settings",
+        "profile_type": "Agent Settings",
+        "platform": "Linux",
+        "description": "K8s Container Escape Demo - Agent settings for K8s nodes.",
+        "modules": {},
+    },
+]
 
 
 @app.route("/api/cortex/policy-check", methods=["GET"])
@@ -1559,32 +1598,26 @@ def cortex_policy_check():
 
     results = []
 
-    # 1. Check endpoint group via endpoints API
-    try:
-        resp, code = cortex_json_request(
-            "/public_api/v1/endpoints/get_endpoint",
-            {"request_data": {
-                "search_from": 0, "search_to": 5,
-                "filters": [{"field": "group_name", "operator": "in", "value": [CORTEX_POLICY_GROUP]}],
-            }},
-        )
-        if resp.get("status") == "ok":
-            data = json.loads(resp.get("response", "{}"))
-            reply = data.get("reply", {})
-            count = reply.get("result_count", 0) if isinstance(reply, dict) else 0
-            endpoints = reply.get("endpoints", []) if isinstance(reply, dict) else []
-            results.append({
-                "type": "Endpoint Group",
-                "name": CORTEX_POLICY_GROUP,
-                "exists": count > 0,
-                "detail": f"{count} endpoint(s)",
-            })
-        else:
-            results.append({"type": "Endpoint Group", "name": CORTEX_POLICY_GROUP, "exists": None, "detail": resp.get("message", "")})
-    except Exception as e:
-        results.append({"type": "Endpoint Group", "name": CORTEX_POLICY_GROUP, "exists": None, "detail": str(e)})
+    # 1. Check prevention profiles to create
+    for profile in CORTEX_PREVENTION_PROFILES:
+        results.append({
+            "type": f"Profile: {profile['profile_type']}",
+            "name": profile["name"],
+            "exists": None,
+            "detail": f"{profile['platform']} - will be created on import",
+        })
 
-    # 2. Check prevention policy assignment on endpoints
+    return jsonify({"status": "ok", "results": results})
+
+
+@app.route("/api/cortex/policy-check-legacy", methods=["GET"])
+def cortex_policy_check_legacy():
+    """Legacy: Check endpoint group and policy assignment."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    results = []
+
     try:
         resp, code = cortex_json_request(
             "/public_api/v1/endpoints/get_endpoint",
@@ -1606,108 +1639,83 @@ def cortex_policy_check():
     except Exception as e:
         results.append({"type": "Prevention Policy", "name": CORTEX_POLICY_NAME, "exists": None, "detail": str(e)})
 
-    # 3. Check local export files
-    for obj in CORTEX_POLICY_OBJECTS:
-        fpath = os.path.join(CORTEX_POLICY_DIR, obj["file"])
-        exists = os.path.isfile(fpath)
-        size = os.path.getsize(fpath) if exists else 0
+    # 3. Check prevention profiles to create
+    for profile in CORTEX_PREVENTION_PROFILES:
         results.append({
-            "type": f"Local: {obj['label']}",
-            "name": obj["file"],
-            "exists": exists,
-            "detail": f"{size} bytes" if exists else "file not found",
-        })
-
-    # Check group TSV
-    group_files = [f for f in os.listdir(CORTEX_POLICY_DIR) if f.endswith(".tsv")] if os.path.isdir(CORTEX_POLICY_DIR) else []
-    if group_files:
-        fpath = os.path.join(CORTEX_POLICY_DIR, group_files[0])
-        results.append({
-            "type": "Local: Endpoint Group",
-            "name": group_files[0],
-            "exists": True,
-            "detail": f"{os.path.getsize(fpath)} bytes",
+            "type": f"Profile: {profile['profile_type']}",
+            "name": profile["name"],
+            "exists": None,
+            "detail": f"{profile['platform']} - will be created on import",
         })
 
     return jsonify({"status": "ok", "results": results})
 
 
+@app.route("/api/cortex/policy-list-profiles", methods=["GET"])
+def cortex_policy_list_profiles():
+    """List existing prevention profiles to discover valid module names."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+    api_path = "/public_api/v1/profiles/prevention/list"
+    result, status_code = cortex_json_request(api_path, {"request_data": {}})
+    return jsonify(result), status_code
+
+
 @app.route("/api/cortex/policy-import", methods=["POST"])
 def cortex_policy_import():
-    """Import Cortex policy objects from local export files."""
+    """Create Cortex prevention profiles via API."""
     if not cortex_settings.get("api_key"):
         return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
 
-    base_url = cortex_settings["base_url"].rstrip("/")
-    api_key = cortex_settings["api_key"]
-    api_key_id = cortex_settings["api_key_id"]
-
-    ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
-
     results = []
+    api_path = "/public_api/v1/profiles/prevention/add"
 
-    # Import policy rules and profiles via multipart upload
-    import_endpoints = {
-        "policy_rules": "/public_api/v1/policy/import_policy_rules",
-        "profiles": "/public_api/v1/policy/import_profiles",
-    }
-
-    for obj in CORTEX_POLICY_OBJECTS:
-        fpath = os.path.join(CORTEX_POLICY_DIR, obj["file"])
-        if not os.path.isfile(fpath):
-            results.append({"type": obj["label"], "status": "error", "message": f"File not found: {obj['file']}"})
-            continue
-
-        with open(fpath, "rb") as f:
-            file_data = f.read()
-
-        api_path = import_endpoints.get(obj["key"], "")
-        url = f"{base_url}{api_path}"
-
-        # Build multipart body manually (no requests library)
-        boundary = f"----CortexImport{uuid.uuid4().hex[:12]}"
-        body = (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="{obj["file"]}"\r\n'
-            f"Content-Type: application/octet-stream\r\n\r\n"
-        ).encode("utf-8") + file_data + f"\r\n--{boundary}--\r\n".encode("utf-8")
-
-        headers = {
-            "Authorization": api_key,
-            "x-xdr-auth-id": api_key_id,
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "Content-Length": str(len(body)),
+    for profile in CORTEX_PREVENTION_PROFILES:
+        profile_data = {
+            "name": profile["name"],
+            "profile_type": profile["profile_type"],
+            "platform": profile["platform"],
+            "description": profile["description"],
         }
+        if profile.get("modules"):
+            profile_data["modules"] = profile["modules"]
+        payload = {"request_data": profile_data}
 
         try:
-            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
-                resp_body = resp.read().decode("utf-8", errors="replace")
+            result, status_code = cortex_json_request(api_path, payload)
+            if result.get("status") == "ok":
                 results.append({
-                    "type": obj["label"],
+                    "type": f"Profile: {profile['profile_type']}",
+                    "name": profile["name"],
                     "status": "ok",
-                    "http_code": resp.status,
-                    "message": f"Imported successfully",
-                    "response": resp_body[:500],
+                    "message": "Created successfully",
                 })
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")[:500]
-            results.append({
-                "type": obj["label"],
-                "status": "error",
-                "http_code": e.code,
-                "message": f"HTTP {e.code}: {err_body}",
-            })
+            else:
+                msg = result.get("message", "") + " " + result.get("response", "")
+                # Check if profile already exists
+                if status_code == 409 or "already exists" in msg.lower() or "duplicate" in msg.lower():
+                    results.append({
+                        "type": f"Profile: {profile['profile_type']}",
+                        "name": profile["name"],
+                        "status": "exists",
+                        "message": "Profile already exists",
+                    })
+                else:
+                    results.append({
+                        "type": f"Profile: {profile['profile_type']}",
+                        "name": profile["name"],
+                        "status": "error",
+                        "message": f"HTTP {status_code}: {msg[:300]}",
+                    })
         except Exception as e:
             results.append({
-                "type": obj["label"],
+                "type": f"Profile: {profile['profile_type']}",
+                "name": profile["name"],
                 "status": "error",
                 "message": str(e),
             })
 
-    overall = "ok" if all(r.get("status") == "ok" for r in results) else "partial" if any(r.get("status") == "ok" for r in results) else "error"
+    overall = "ok" if all(r.get("status") in ("ok", "exists") for r in results) else "partial" if any(r.get("status") in ("ok", "exists") for r in results) else "error"
     return jsonify({"status": overall, "results": results})
 
 

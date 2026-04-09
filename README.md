@@ -81,6 +81,7 @@ Paste these in **AWS > Configure** (Access Key + Secret Key, no Session Token ne
 | RCE | **Step 1: Exploit** | Spring4Shell webshell |
 | Escape | **Step 2: Escape** | Container escape via nsenter, host fs, IMDS |
 | Takeover | **Step 3: Takeover** | cluster-admin SA token, secrets, AWS creds |
+| Scanning | **Step 4: Scan** | K8s vulnerability scanning (T1610/T1613) |
 
 ### 6. Deploy Cortex Response
 
@@ -387,6 +388,7 @@ Local state in each module directory (excluded from git):
 │   ├── 01-exploit-rce.sh         # Spring4Shell RCE
 │   ├── 02-container-escape.sh    # nsenter, host fs, IMDS
 │   ├── 03-cluster-takeover.sh    # SA token, secrets, AWS creds
+│   ├── 04-k8s-scanning.sh       # K8s vuln scanning (T1610/T1613)
 │   └── remote_shell.sh
 ├── Dockerfile                    # Multi-stage: Maven build + Tomcat 9
 ├── .gitignore

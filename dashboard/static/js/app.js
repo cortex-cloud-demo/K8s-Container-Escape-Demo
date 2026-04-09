@@ -495,6 +495,29 @@ function closeAwsSettings() {
     document.getElementById('aws-modal').classList.remove('visible');
 }
 
+function parseAwsExport() {
+    const raw = document.getElementById('aws-paste-export').value;
+    if (!raw) return;
+    const lines = raw.split('\n');
+    for (const line of lines) {
+        const m = line.match(/export\s+(AWS_\w+)\s*=\s*"?([^"]*)"?/i);
+        if (!m) continue;
+        const key = m[1].toUpperCase();
+        const val = m[2].trim();
+        if (key === 'AWS_ACCESS_KEY_ID') {
+            document.getElementById('aws-access-key').value = val;
+        } else if (key === 'AWS_SECRET_ACCESS_KEY') {
+            document.getElementById('aws-secret-key').value = val;
+        } else if (key === 'AWS_SESSION_TOKEN') {
+            document.getElementById('aws-session-token').value = val;
+        } else if (key === 'AWS_DEFAULT_REGION' || key === 'AWS_REGION') {
+            document.getElementById('aws-region').value = val;
+        }
+    }
+    document.getElementById('aws-paste-export').value = '';
+    document.getElementById('aws-paste-export').placeholder = 'Parsed! Fields populated below.';
+}
+
 async function saveAwsCredentials() {
     const payload = {
         aws_region: document.getElementById('aws-region').value.trim(),
@@ -1546,6 +1569,12 @@ function deployApp() {
     apiCall('/api/k8s/deploy');
 }
 
+function undeployApp() {
+    openTab('terminal');
+    termWriteHeader('Undeploy Vulnerable App from EKS');
+    apiCall('/api/k8s/undeploy');
+}
+
 async function k8sStatus() {
     openTab('terminal');
     termWriteHeader('Kubernetes Status');
@@ -1574,6 +1603,12 @@ function attackStep3() {
     openTab('terminal');
     termWriteHeader('STEP 3: Cluster Takeover');
     apiCall('/api/attack/step3');
+}
+
+function attackStep4() {
+    openTab('terminal');
+    termWriteHeader('STEP 4: K8s Vulnerability Scanning');
+    apiCall('/api/attack/step4');
 }
 
 function shellExec() {

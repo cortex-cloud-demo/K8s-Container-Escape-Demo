@@ -169,6 +169,7 @@
                 <div class="step-desc">Privileged pod, hostPID, hostPath, cluster-admin SA</div>
                 <div class="step-actions">
                     <button class="btn btn-primary" onclick="deployApp()">Deploy</button>
+                    <button class="btn btn-danger" onclick="undeployApp()">Undeploy</button>
                     <button class="btn btn-ghost" onclick="k8sStatus()">Status</button>
                 </div>
             </div>
@@ -216,6 +217,18 @@
                 <div class="step-desc">SA token + cluster-admin - full K8s & AWS access</div>
                 <div class="step-actions">
                     <button class="btn btn-danger" onclick="attackStep3()">Takeover</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-scanning">
+                <div class="step-header">
+                    <span class="step-number attack">STEP 4</span>
+                    <span class="step-status" id="scanning-status"></span>
+                </div>
+                <div class="step-name">K8s Vulnerability Scanning</div>
+                <div class="step-desc">T1610/T1613 - Container & resource discovery, RBAC enum, API probing</div>
+                <div class="step-actions">
+                    <button class="btn btn-danger" onclick="attackStep4()">Scan</button>
                 </div>
             </div>
         </div>
@@ -834,6 +847,7 @@
                 <button class="btn-shortcut" onclick="kubectlRun('get clusterrolebindings -o wide')">RBAC</button>
                 <button class="btn-shortcut" onclick="kubectlRun('describe pod -n vuln-app -l app=vuln-app')">describe pod</button>
                 <button class="btn-shortcut" onclick="kubectlRun('logs -n vuln-app -l app=vuln-app --tail=100')">logs</button>
+                <button class="btn-shortcut btn-danger" onclick="kubectlRun('delete pod -n vuln-app --all --force --grace-period=0')">kill pods</button>
             </div>
             <div class="terminal" id="kubectl-output"></div>
             <div class="terminal-input-bar kubectl-bar">
@@ -955,6 +969,14 @@
     <div class="modal modal-wide">
         <h3>AWS Credentials</h3>
         <p>Configure your AWS credentials to provision infrastructure. These are stored in-memory only (not persisted).</p>
+        <div class="form-group">
+            <label for="aws-paste-export">Paste export commands <span class="optional">(auto-fill below)</span></label>
+            <textarea id="aws-paste-export" rows="4" placeholder='Paste export commands here, e.g.:
+export AWS_ACCESS_KEY_ID="AKIA..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_SESSION_TOKEN="..."' oninput="parseAwsExport()"></textarea>
+        </div>
+        <hr style="border-color: #334155; margin: 0.75rem 0;" />
         <div class="form-group">
             <label for="aws-region">AWS Region</label>
             <input type="text" id="aws-region" placeholder="eu-west-3" value="eu-west-3" />

