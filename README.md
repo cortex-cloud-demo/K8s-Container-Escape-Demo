@@ -79,9 +79,11 @@ Paste these in **AWS > Configure** (Access Key + Secret Key, no Session Token ne
 | Build | **Build Image** | Docker build (linux/amd64) + push to ECR |
 | Deploy | **Deploy** | K8s manifests: namespace, SA, privileged deployment, LB |
 | RCE | **Step 1: Exploit** | Spring4Shell webshell |
-| Escape | **Step 2: Escape** | Container escape via nsenter, host fs, IMDS |
+| Escape | **Step 2: Escape** | Container escape via nsenter, mount, chroot, IMDS |
 | Takeover | **Step 3: Takeover** | cluster-admin SA token, secrets, AWS creds |
 | Scanning | **Step 4: Scan** | K8s vulnerability scanning (T1610/T1613) |
+| Malware | **Step 5: Deploy** | WildFire ELF, reverse shell, cryptominer, deepce |
+| Lateral | **Step 6: Move** | SSH scan, rogue pod, IMDS theft, cross-namespace |
 
 ### 6. Deploy Cortex Response
 
@@ -173,11 +175,13 @@ terraform output lambda_invoker_role_arn
 
 | Tab | Purpose |
 |-----|---------|
-| **Overview** | Architecture overview, attack chain, MITRE techniques, auth flow |
+| **Overview** | Architecture overview, 6-step attack chain, MITRE techniques, auth flow |
 | **Terminal** | Main output for all operations + webshell command execution |
-| **kubectl** | Interactive kubectl with shortcut buttons |
+| **kubectl** | Interactive kubectl with shortcut buttons (nodes, pods, secrets, kill pods) |
 | **Cortex** | Cortex playbook flow visualization + deployment output (scripts, playbooks) |
-| **Security Radar** | Before/after security posture comparison |
+| **SOC Live** | Real-time Cortex XDR alerts, MITRE ATT&CK heatmap, attack/detect/contain timer |
+| **Code** | Shift-left view: CVE details, K8s misconfigurations, IaC findings with fixes |
+| **Security Radar** | Before/after security posture comparison (6-axis spider chart) |
 
 ### Security Radar
 
@@ -385,23 +389,41 @@ Local state in each module directory (excluded from git):
 │   ├── service-account.yaml
 │   └── deployment.yaml           # Privileged pod + LoadBalancer
 ├── attack/
-│   ├── 01-exploit-rce.sh         # Spring4Shell RCE
-│   ├── 02-container-escape.sh    # nsenter, host fs, IMDS
-│   ├── 03-cluster-takeover.sh    # SA token, secrets, AWS creds
-│   ├── 04-k8s-scanning.sh       # K8s vuln scanning (T1610/T1613)
+│   ├── 01-exploit-rce.sh         # Spring4Shell RCE (/bin/sh -c webshell)
+│   ├── 02-container-escape.sh    # nsenter, mount, chroot, IMDS
+│   ├── 03-cluster-takeover.sh    # SA token, kubectl via base64 upload
+│   ├── 04-k8s-scanning.sh       # K8s vuln scanning (deepce, kube-hunter, peirates)
+│   ├── 05-deploy-malware.sh      # WildFire ELF, reverse shell, cryptominer
+│   ├── 06-lateral-movement.sh    # SSH scan, rogue pod, IMDS theft, node hopping
 │   └── remote_shell.sh
 ├── Dockerfile                    # Multi-stage: Maven build + Tomcat 9
 ├── .gitignore
 └── README.md
 ```
 
+## Demo Features
+
+| Feature | Description |
+|---------|-------------|
+| **Run Full Demo** | One-click button to execute all 6 attack steps automatically |
+| **Kill Chain Progress** | Header visualization showing attack progression (9 stages) |
+| **SOC Live** | Real-time Cortex XDR alert feed + MITRE ATT&CK heatmap |
+| **Code (Shift-Left)** | CVE details + K8s misconfigurations with severity and fixes |
+| **Security Radar** | Before/after spider chart (6-axis security posture) |
+| **Theme Toggle** | Dark / Light / Auto mode (persisted in localStorage) |
+| **AWS Paste Import** | Paste `export AWS_*` commands to auto-fill credentials |
+
 ## CLI Alternative
 
 ```bash
 # Attack scripts (without dashboard)
+export HOST=<LB_HOSTNAME>
 ./attack/01-exploit-rce.sh
 ./attack/02-container-escape.sh
 ./attack/03-cluster-takeover.sh
+./attack/04-k8s-scanning.sh
+./attack/05-deploy-malware.sh
+./attack/06-lateral-movement.sh
 
 # Manual cleanup
 kubectl delete namespace vuln-app

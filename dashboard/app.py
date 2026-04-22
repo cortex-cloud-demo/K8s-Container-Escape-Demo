@@ -43,6 +43,14 @@ cortex_settings = {
     "api_key": "",
 }
 
+# In-memory store for external cluster (BYOC mode)
+external_cluster = {
+    "enabled": False,
+    "kubeconfig": "",       # raw kubeconfig content or path
+    "app_host": "",         # LoadBalancer hostname of the vuln-app
+    "image_url": "",        # Container image URL (e.g. public ECR or Docker Hub)
+}
+
 
 def get_aws_env():
     """Build AWS credential environment variables.
@@ -257,6 +265,56 @@ def test_credentials():
         if result.returncode == 0:
             return jsonify({"status": "ok", "identity": json.loads(result.stdout)})
         return jsonify({"status": "error", "message": result.stderr.strip()}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ─── External Cluster (BYOC) ───────────────────────────────────────────────
+
+
+@app.route("/api/external-cluster", methods=["GET"])
+def get_external_cluster():
+    """Return current external cluster config."""
+    return jsonify(external_cluster)
+
+
+@app.route("/api/external-cluster", methods=["POST"])
+def set_external_cluster():
+    """Configure an external cluster (BYOC mode)."""
+    data = request.json
+    external_cluster["enabled"] = data.get("enabled", False)
+    external_cluster["app_host"] = data.get("app_host", "").strip()
+    external_cluster["image_url"] = data.get("image_url", "").strip()
+
+    kubeconfig_content = data.get("kubeconfig", "").strip()
+    if kubeconfig_content:
+        external_cluster["kubeconfig"] = kubeconfig_content
+        # Write kubeconfig to file
+        byoc_kubeconfig = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig-byoc")
+        with open(byoc_kubeconfig, "w") as f:
+            f.write(kubeconfig_content)
+        os.environ["KUBECONFIG"] = byoc_kubeconfig
+
+    return jsonify({"status": "ok", "external_cluster": external_cluster})
+
+
+@app.route("/api/external-cluster/test", methods=["POST"])
+def test_external_cluster():
+    """Test connectivity to the external cluster."""
+    if not external_cluster.get("enabled"):
+        return jsonify({"status": "error", "message": "External cluster not configured"}), 400
+
+    try:
+        env = os.environ.copy()
+        if external_cluster.get("kubeconfig"):
+            byoc_kubeconfig = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig-byoc")
+            env["KUBECONFIG"] = byoc_kubeconfig
+
+        result = subprocess.run(
+            "kubectl cluster-info 2>&1 && echo '---' && kubectl get nodes -o wide 2>&1",
+            shell=True, capture_output=True, text=True, env=env, timeout=15,
+        )
+        return jsonify({"status": "ok", "output": result.stdout + result.stderr})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -609,7 +667,40 @@ def k8s_deploy():
     except Exception as e:
         return jsonify({"error": f"Failed to generate kubeconfig: {e}"}), 500
 
-    cmd = f"""
+    # Determine image URL
+    if external_cluster.get("enabled") and external_cluster.get("image_url"):
+        image_url = external_cluster["image_url"]
+    else:
+        image_url = None  # Will be resolved from terraform output
+
+    if image_url:
+        # BYOC mode: use provided image URL
+        cmd = f"""
+set -e
+echo "==> BYOC Mode: Deploying to external cluster"
+echo "==> Testing cluster access..."
+kubectl cluster-info
+
+echo "==> Applying manifests..."
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/service-account.yaml
+
+echo "==> Setting image: {image_url}"
+sed "s|ECR_IMAGE_PLACEHOLDER|{image_url}|g" k8s/deployment.yaml | kubectl apply -f -
+
+echo "==> Waiting for deployment rollout..."
+kubectl rollout status deployment/vuln-app -n vuln-app --timeout=300s
+
+echo "==> Waiting for LoadBalancer..."
+sleep 15
+HOST=$(kubectl get svc vuln-app-service -n vuln-app -o jsonpath='{{.status.loadBalancer.ingress[0].hostname}}' 2>/dev/null || echo "pending")
+echo ""
+echo "==> Application deployed!"
+echo "==> HOST=${{HOST}}"
+echo "==> URL: http://${{HOST}}/app"
+"""
+    else:
+        cmd = f"""
 set -e
 REGION=$(cd terraform-infra && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
 ECR_URL=$(cd terraform-infra && terraform output -raw ecr_repository_url 2>/dev/null)
@@ -717,7 +808,11 @@ def kubectl_exec():
 
 
 def get_host():
-    """Get the LoadBalancer hostname."""
+    """Get the LoadBalancer hostname (or external cluster host if BYOC)."""
+    # BYOC mode: use manually configured host
+    if external_cluster.get("enabled") and external_cluster.get("app_host"):
+        return external_cluster["app_host"]
+
     env = os.environ.copy()
     env.update(get_aws_env())
     result = subprocess.run(
@@ -777,6 +872,32 @@ def attack_step4():
     task_id = create_task(
         "Step 4: K8s Vulnerability Scanning",
         f"bash {ATTACK_DIR}/04-k8s-scanning.sh",
+        env_extra={"HOST": host},
+    )
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/attack/step5", methods=["POST"])
+def attack_step5():
+    host = get_host()
+    if not host:
+        return jsonify({"error": "No HOST found. Deploy the app first."}), 400
+    task_id = create_task(
+        "Step 5: Deploy Malware",
+        f"bash {ATTACK_DIR}/05-deploy-malware.sh",
+        env_extra={"HOST": host},
+    )
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/attack/step6", methods=["POST"])
+def attack_step6():
+    host = get_host()
+    if not host:
+        return jsonify({"error": "No HOST found. Deploy the app first."}), 400
+    task_id = create_task(
+        "Step 6: Lateral Movement",
+        f"bash {ATTACK_DIR}/06-lateral-movement.sh",
         env_extra={"HOST": host},
     )
     return jsonify({"task_id": task_id})
@@ -1588,6 +1709,88 @@ CORTEX_PREVENTION_PROFILES = [
         "modules": {},
     },
 ]
+
+
+@app.route("/api/cortex/playbook-runs", methods=["GET"])
+def cortex_playbook_runs():
+    """Fetch recent playbook run statuses from Cortex."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    api_path = "/public_api/v1/inv_playbook/get_playbook_runs"
+    import time as _time
+    now_ms = int(_time.time() * 1000)
+    day_ago_ms = now_ms - (24 * 60 * 60 * 1000)
+
+    payload = {
+        "request_data": {
+            "search_from": 0,
+            "search_to": 10,
+            "sort": {"field": "start_time", "keyword": "desc"},
+            "filters": [
+                {"field": "start_time", "operator": "gte", "value": day_ago_ms}
+            ],
+        }
+    }
+
+    result, status_code = cortex_json_request(api_path, payload)
+    if result.get("status") != "ok":
+        return jsonify(result), status_code
+
+    try:
+        data = json.loads(result.get("response", "{}"))
+        runs = data.get("reply", {}).get("playbook_runs", [])
+        return jsonify({"status": "ok", "runs": runs, "total": len(runs)})
+    except Exception as e:
+        return jsonify({"status": "ok", "runs": [], "raw": result.get("response", "")[:500]})
+
+
+@app.route("/api/cortex/soc-alerts", methods=["GET"])
+def cortex_soc_alerts():
+    """Fetch recent XDR incidents/alerts for the SOC Live dashboard."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    # Get incidents from last 24 hours
+    api_path = "/public_api/v1/incidents/get_incidents"
+    import time as _time
+    now_ms = int(_time.time() * 1000)
+    day_ago_ms = now_ms - (24 * 60 * 60 * 1000)
+
+    payload = {
+        "request_data": {
+            "search_from": 0,
+            "search_to": 50,
+            "sort": {"field": "creation_time", "keyword": "desc"},
+            "filters": [
+                {"field": "creation_time", "operator": "gte", "value": day_ago_ms}
+            ],
+        }
+    }
+
+    result, status_code = cortex_json_request(api_path, payload)
+    if result.get("status") != "ok":
+        return jsonify(result), status_code
+
+    try:
+        data = json.loads(result.get("response", "{}"))
+        incidents = data.get("reply", {}).get("incidents", [])
+        alerts = []
+        for inc in incidents:
+            alerts.append({
+                "id": inc.get("incident_id"),
+                "name": inc.get("description", inc.get("incident_name", "Unknown")),
+                "severity": inc.get("severity", "unknown"),
+                "status": inc.get("status", ""),
+                "created": inc.get("creation_time"),
+                "host": inc.get("hosts", [""])[0] if inc.get("hosts") else "",
+                "mitre": inc.get("mitre_techniques_ids_and_names", []),
+                "alert_count": inc.get("alert_count", 0),
+                "category": inc.get("alert_categories", []),
+            })
+        return jsonify({"status": "ok", "alerts": alerts, "total": len(alerts)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/cortex/policy-check", methods=["GET"])

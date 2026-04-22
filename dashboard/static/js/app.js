@@ -19,6 +19,8 @@ const STEPS = [
     { id: 'escape',   el: 'hc-escape',   attack: true },
     { id: 'takeover', el: 'hc-takeover', attack: true },
     { id: 'scan',     el: 'hc-scan',     attack: true },
+    { id: 'malware',  el: 'hc-malware',  attack: true },
+    { id: 'lateral',  el: 'hc-lateral',  attack: true },
 ];
 
 // ─── Terminal ─────────────────────────────────────────────────────────────────
@@ -111,6 +113,8 @@ function updateStepStatus(taskName, status) {
         'Step 2: Container Escape': 'escape',
         'Step 3: Cluster Takeover': 'takeover',
         'Step 4: K8s Vulnerability Scanning': 'scan',
+        'Step 5: Deploy Malware': 'malware',
+        'Step 6: Lateral Movement': 'lateral',
         'Terraform Destroy': null,
         'Deploy Lambda': null,
         'Destroy Lambda': null,
@@ -132,6 +136,8 @@ function updateStepStatus(taskName, status) {
         'Step 2: Container Escape': { id: 'escape-status',         ok: 'escaped',     run: 'running...' },
         'Step 3: Cluster Takeover': { id: 'takeover-status',       ok: 'pwned',       run: 'running...' },
         'Step 4: K8s Vulnerability Scanning': { id: 'scanning-status', ok: 'scanned',   run: 'scanning...' },
+        'Step 5: Deploy Malware':             { id: 'malware-status',  ok: 'deployed',  run: 'deploying...' },
+        'Step 6: Lateral Movement':           { id: 'lateral-status',  ok: 'moved',     run: 'moving...' },
         'Undeploy from EKS':        { id: 'deploy-status',         ok: 'undeployed',  run: 'removing...' },
         'Deploy Lambda':            { id: 'lambda-deploy-status',  ok: 'deployed',    run: 'deploying...' },
         'Terraform Destroy':        { id: 'infra-destroy-status',  ok: 'destroyed',   run: 'destroying...' },
@@ -178,6 +184,9 @@ function renderKillChain() {
             }
         }
     });
+
+    // Update architecture diagram
+    updateArchDiagram();
 }
 
 async function refreshHost() {
@@ -1618,6 +1627,18 @@ function attackStep4() {
     apiCall('/api/attack/step4');
 }
 
+function attackStep5() {
+    openTab('terminal');
+    termWriteHeader('STEP 5: Deploy Malware & Offensive Tools');
+    apiCall('/api/attack/step5');
+}
+
+function attackStep6() {
+    openTab('terminal');
+    termWriteHeader('STEP 6: Lateral Movement');
+    apiCall('/api/attack/step6');
+}
+
 function shellExec() {
     const input = document.getElementById('shell-input');
     const cmd = input.value.trim();
@@ -1921,6 +1942,344 @@ function radarReset() {
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
+
+// ─── Live Architecture Diagram ───────────────────────────────────────────────
+
+const ARCH_STEP_MAP = {
+    rce: {
+        label: 'Step 1: Spring4Shell RCE',
+        conns: { 'conn-atk-lb': 'attack', 'conn-lb-pod': 'attack' },
+        nodes: { 'arch-attacker': 'attack', 'arch-lb': 'attack', 'arch-pod': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    escape: {
+        label: 'Step 2: Container Escape',
+        conns: { 'conn-pod-node': 'attack', 'conn-node-imds': 'attack' },
+        nodes: { 'arch-pod': 'attack', 'arch-node': 'attack', 'arch-imds': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    takeover: {
+        label: 'Step 3: Cluster Takeover',
+        conns: { 'conn-pod-node': 'attack', 'conn-node-api': 'attack' },
+        nodes: { 'arch-pod': 'attack', 'arch-node': 'attack', 'arch-api': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    scan: {
+        label: 'Step 4: K8s Scanning',
+        conns: { 'conn-node-api': 'attack' },
+        nodes: { 'arch-pod': 'attack', 'arch-api': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    malware: {
+        label: 'Step 5: Malware',
+        conns: { 'conn-lb-pod': 'attack' },
+        nodes: { 'arch-pod': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    lateral: {
+        label: 'Step 6: Lateral Movement',
+        conns: { 'conn-node-api': 'attack', 'conn-node-imds': 'attack', 'conn-pod-node': 'attack' },
+        nodes: { 'arch-pod': 'attack', 'arch-node': 'attack', 'arch-api': 'attack', 'arch-imds': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect', 'conn-cortex-lambda': 'response', 'conn-lambda-api': 'response' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect', 'arch-lambda': 'response' },
+    },
+};
+
+function updateArchDiagram() {
+    // Reset all
+    document.querySelectorAll('.arch-conn').forEach(c => {
+        c.classList.remove('active-attack', 'active-detect', 'active-response', 'done-attack', 'done-detect', 'done-response');
+    });
+    document.querySelectorAll('.arch-node').forEach(n => {
+        n.classList.remove('highlight-attack', 'highlight-detect', 'highlight-response');
+    });
+    const stepLabel = document.getElementById('arch-step-label');
+    if (stepLabel) { stepLabel.style.display = 'none'; stepLabel.textContent = ''; }
+
+    let activeStep = null;
+
+    // Apply states for each step
+    for (const [stepId, mapping] of Object.entries(ARCH_STEP_MAP)) {
+        const status = state.stepStatuses[stepId];
+        if (!status) continue;
+
+        const isActive = status === 'running';
+        const isDone = status === 'success';
+
+        if (isActive) activeStep = mapping;
+
+        if (isDone || isActive) {
+            // Attack connections
+            for (const [connId, type] of Object.entries(mapping.conns)) {
+                const el = document.getElementById(connId);
+                if (el) el.classList.add(isActive ? `active-${type}` : `done-${type}`);
+            }
+            // Attack nodes
+            for (const [nodeId, type] of Object.entries(mapping.nodes)) {
+                const el = document.getElementById(nodeId);
+                if (el) el.classList.add(isActive ? `highlight-${type}` : '');
+            }
+            // Detection connections
+            for (const [connId, type] of Object.entries(mapping.detect)) {
+                const el = document.getElementById(connId);
+                if (el) el.classList.add(isDone ? `done-${type}` : `active-${type}`);
+            }
+            // Detection nodes
+            for (const [nodeId, type] of Object.entries(mapping.detectNodes)) {
+                const el = document.getElementById(nodeId);
+                if (el && isActive) el.classList.add(`highlight-${type}`);
+            }
+        }
+    }
+
+    // Show active step label
+    if (activeStep && stepLabel) {
+        stepLabel.textContent = activeStep.label;
+        stepLabel.style.display = '';
+    }
+}
+
+// ─── External Cluster (BYOC) ─────────────────────────────────────────────────
+
+function openByocSettings() {
+    document.getElementById('byoc-modal').classList.add('visible');
+    // Load current settings
+    fetch('/api/external-cluster').then(r => r.json()).then(data => {
+        document.getElementById('byoc-enabled').checked = data.enabled || false;
+        document.getElementById('byoc-kubeconfig').value = data.kubeconfig || '';
+        document.getElementById('byoc-host').value = data.app_host || '';
+        document.getElementById('byoc-image').value = data.image_url || '';
+        toggleByocFields();
+    }).catch(() => {});
+}
+
+function closeByocSettings() {
+    document.getElementById('byoc-modal').classList.remove('visible');
+}
+
+function toggleByocFields() {
+    const enabled = document.getElementById('byoc-enabled').checked;
+    document.getElementById('byoc-fields').style.opacity = enabled ? '1' : '0.4';
+}
+
+async function saveByocSettings() {
+    const payload = {
+        enabled: document.getElementById('byoc-enabled').checked,
+        kubeconfig: document.getElementById('byoc-kubeconfig').value.trim(),
+        app_host: document.getElementById('byoc-host').value.trim(),
+        image_url: document.getElementById('byoc-image').value.trim(),
+    };
+    try {
+        const res = await fetch('/api/external-cluster', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            closeByocSettings();
+            const el = document.getElementById('byoc-status');
+            if (payload.enabled) {
+                el.textContent = 'configured';
+                el.style.color = '#22c55e';
+            } else {
+                el.textContent = 'disabled';
+                el.style.color = '#64748b';
+            }
+            refreshHost();
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function testByocCluster() {
+    openTab('terminal');
+    termWriteHeader('Testing External Cluster Connection');
+    try {
+        const res = await fetch('/api/external-cluster/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            termWrite(data.output + '\n');
+            const el = document.getElementById('byoc-status');
+            el.textContent = 'connected';
+            el.style.color = '#22c55e';
+        } else {
+            termWrite('Error: ' + data.message + '\n');
+        }
+    } catch (e) {
+        termWrite('Error: ' + e.message + '\n');
+    }
+}
+
+// ─── Demo Wizard ─────────────────────────────────────────────────────────────
+
+let demoRunning = false;
+let demoAbort = false;
+
+const DEMO_STEPS = [
+    { name: 'Step 1: RCE',       fn: () => apiCall('/api/attack/step1'),  wait: 15000, pct: 17 },
+    { name: 'Step 2: Escape',    fn: () => apiCall('/api/attack/step2'),  wait: 8000,  pct: 33 },
+    { name: 'Step 3: Takeover',  fn: () => apiCall('/api/attack/step3'),  wait: 10000, pct: 50 },
+    { name: 'Step 4: Scan',      fn: () => apiCall('/api/attack/step4'),  wait: 12000, pct: 67 },
+    { name: 'Step 5: Malware',   fn: () => apiCall('/api/attack/step5'),  wait: 10000, pct: 83 },
+    { name: 'Step 6: Lateral',   fn: () => apiCall('/api/attack/step6'),  wait: 10000, pct: 100 },
+];
+
+async function runFullDemo() {
+    if (demoRunning) return;
+    demoRunning = true;
+    demoAbort = false;
+
+    const btn = document.getElementById('btn-demo-wizard');
+    const stopBtn = document.getElementById('btn-demo-stop');
+    const progress = document.getElementById('demo-progress');
+    const progressBar = document.getElementById('demo-progress-bar');
+    const progressText = document.getElementById('demo-progress-text');
+
+    btn.classList.add('running');
+    btn.innerHTML = '<span class="demo-wizard-icon">&#9654;</span> Running Demo...';
+    stopBtn.style.display = '';
+    progress.style.display = '';
+
+    openTab('terminal');
+
+    for (let i = 0; i < DEMO_STEPS.length; i++) {
+        if (demoAbort) break;
+
+        const step = DEMO_STEPS[i];
+        progressText.textContent = step.name;
+        progressBar.style.width = ((i / DEMO_STEPS.length) * 100) + '%';
+
+        termWriteHeader(step.name);
+        step.fn();
+
+        // Wait for the step to complete (poll-based)
+        await new Promise(resolve => {
+            let elapsed = 0;
+            const check = setInterval(() => {
+                elapsed += 1000;
+                if (demoAbort || elapsed >= step.wait) {
+                    clearInterval(check);
+                    resolve();
+                }
+            }, 1000);
+        });
+
+        progressBar.style.width = step.pct + '%';
+    }
+
+    // Done
+    progressText.textContent = demoAbort ? 'Stopped' : 'Complete!';
+    progressBar.style.width = demoAbort ? progressBar.style.width : '100%';
+    btn.classList.remove('running');
+    btn.innerHTML = '<span class="demo-wizard-icon">&#9654;</span> Run Full Demo';
+    stopBtn.style.display = 'none';
+    demoRunning = false;
+
+    if (!demoAbort) {
+        termWrite('\n' + '='.repeat(50) + '\n');
+        termWrite('  FULL DEMO COMPLETE\n');
+        termWrite('  Check SOC Live tab for Cortex XDR alerts\n');
+        termWrite('='.repeat(50) + '\n');
+    }
+}
+
+function stopDemo() {
+    demoAbort = true;
+}
+
+// ─── SOC Live ────────────────────────────────────────────────────────────────
+
+let socAutoInterval = null;
+
+async function socRefresh() {
+    try {
+        const res = await fetch('/api/cortex/soc-alerts');
+        const data = await res.json();
+        if (data.status !== 'ok') {
+            document.getElementById('soc-alerts').innerHTML = `<div class="soc-empty">Error: ${data.message || 'Cannot fetch alerts'}</div>`;
+            return;
+        }
+
+        const alerts = data.alerts || [];
+        document.getElementById('soc-alert-count').textContent = alerts.length;
+
+        if (alerts.length === 0) {
+            document.getElementById('soc-alerts').innerHTML = '<div class="soc-empty">No alerts in the last 24 hours.</div>';
+            return;
+        }
+
+        // Update MITRE heatmap
+        const mitreTechniques = new Set();
+        alerts.forEach(a => {
+            (a.mitre || []).forEach(m => {
+                const tid = typeof m === 'string' ? m.split(' - ')[0] : (m.technique_id || '');
+                if (tid) mitreTechniques.add(tid.replace(/\.\d+$/, ''));
+            });
+            // Map alert categories to techniques
+            (a.category || []).forEach(cat => {
+                const catLower = (cat || '').toLowerCase();
+                if (catLower.includes('malware')) mitreTechniques.add('T1587');
+                if (catLower.includes('exploit')) mitreTechniques.add('T1190');
+                if (catLower.includes('webshell')) { mitreTechniques.add('T1505'); mitreTechniques.add('T1059'); }
+                if (catLower.includes('container')) mitreTechniques.add('T1611');
+                if (catLower.includes('credential')) mitreTechniques.add('T1552');
+            });
+        });
+        document.querySelectorAll('.mitre-cell').forEach(cell => {
+            const tid = cell.dataset.technique;
+            if (mitreTechniques.has(tid)) {
+                if (!cell.classList.contains('detected')) {
+                    cell.classList.add('detected');
+                }
+            }
+        });
+
+        // Render alerts
+        const html = alerts.map(a => {
+            const sev = (a.severity || 'unknown').toLowerCase();
+            const sevClass = sev === 'critical' ? 'critical' : sev === 'high' ? 'high' : sev === 'medium' ? 'medium' : 'low';
+            const time = a.created ? new Date(a.created).toLocaleTimeString() : '';
+            const date = a.created ? new Date(a.created).toLocaleDateString() : '';
+            const mitreStr = (a.mitre || []).map(m => typeof m === 'string' ? m : `${m.technique_id} ${m.technique_name || ''}`).join(', ');
+            return `<div class="soc-alert-item">
+                <span class="soc-alert-severity ${sevClass}">${sev}</span>
+                <div class="soc-alert-body">
+                    <div class="soc-alert-name">${a.name || 'Alert'}</div>
+                    <div class="soc-alert-desc">${a.host || ''} ${a.alert_count ? '(' + a.alert_count + ' alerts)' : ''}</div>
+                    ${mitreStr ? `<div class="soc-alert-mitre">MITRE: ${mitreStr}</div>` : ''}
+                </div>
+                <span class="soc-alert-time">${date}<br>${time}</span>
+            </div>`;
+        }).join('');
+        document.getElementById('soc-alerts').innerHTML = html;
+
+    } catch (e) {
+        document.getElementById('soc-alerts').innerHTML = `<div class="soc-empty">Error: ${e.message}</div>`;
+    }
+}
+
+function socClear() {
+    document.getElementById('soc-alerts').innerHTML = '<div class="soc-empty">Cleared. Click Refresh to reload.</div>';
+    document.getElementById('soc-alert-count').textContent = '0';
+    document.querySelectorAll('.mitre-cell').forEach(c => c.classList.remove('detected'));
+}
+
+function socToggleAutoRefresh() {
+    const checked = document.getElementById('soc-auto-refresh').checked;
+    if (checked) {
+        socRefresh();
+        socAutoInterval = setInterval(socRefresh, 30000);
+    } else {
+        if (socAutoInterval) { clearInterval(socAutoInterval); socAutoInterval = null; }
+    }
+}
 
 // ─── Theme Toggle ────────────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>K8s Escape Demo</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9">
+    <link rel="stylesheet" href="/static/css/style.css?v=12">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
@@ -55,6 +55,16 @@
                 <div class="header-chain-dot"></div>
                 <span>Scan</span>
             </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage attack" id="hc-malware" title="Deploy Malware">
+                <div class="header-chain-dot"></div>
+                <span>Malware</span>
+            </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage attack" id="hc-lateral" title="Lateral Movement">
+                <div class="header-chain-dot"></div>
+                <span>Lateral</span>
+            </div>
         </div>
     </div>
     <div class="status-bar">
@@ -73,6 +83,20 @@
 
     <!-- ─── Sidebar ────────────────────────────── -->
     <aside class="sidebar">
+
+        <!-- Demo Wizard -->
+        <div class="section">
+            <div class="demo-wizard">
+                <button class="btn btn-demo-wizard" id="btn-demo-wizard" onclick="runFullDemo()">
+                    <span class="demo-wizard-icon">&#9654;</span> Run Full Demo
+                </button>
+                <button class="btn btn-ghost btn-demo-stop" id="btn-demo-stop" onclick="stopDemo()" style="display:none;">Stop</button>
+                <div class="demo-wizard-progress" id="demo-progress" style="display:none;">
+                    <div class="demo-progress-bar" id="demo-progress-bar"></div>
+                    <span class="demo-progress-text" id="demo-progress-text">Initializing...</span>
+                </div>
+            </div>
+        </div>
 
         <!-- Settings -->
         <div class="section">
@@ -99,6 +123,18 @@
                 <div class="step-actions">
                     <button class="btn btn-cortex" onclick="openCortexSettings()">Configure</button>
                     <button class="btn btn-ghost" onclick="testCortexConnection()">Test</button>
+                </div>
+            </div>
+            <div class="step-card" id="card-byoc-settings">
+                <div class="step-header">
+                    <span class="step-number cluster">BYOC</span>
+                    <span class="step-status" id="byoc-status"></span>
+                </div>
+                <div class="step-name">External Cluster</div>
+                <div class="step-desc">Use an existing K8s cluster (skip infra steps)</div>
+                <div class="step-actions">
+                    <button class="btn btn-success" onclick="openByocSettings()">Configure</button>
+                    <button class="btn btn-ghost" onclick="testByocCluster()">Test</button>
                 </div>
             </div>
         </div>
@@ -244,6 +280,30 @@
                 <div class="step-desc">T1610/T1613 - Container & resource discovery, RBAC enum, API probing</div>
                 <div class="step-actions">
                     <button class="btn btn-danger" onclick="attackStep4()">Scan</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-malware">
+                <div class="step-header">
+                    <span class="step-number attack">STEP 5</span>
+                    <span class="step-status" id="malware-status"></span>
+                </div>
+                <div class="step-name">Deploy Malware</div>
+                <div class="step-desc">T1105/T1059 - WildFire ELF, reverse shell, cryptominer, deepce</div>
+                <div class="step-actions">
+                    <button class="btn btn-danger" onclick="attackStep5()">Deploy</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-lateral">
+                <div class="step-header">
+                    <span class="step-number attack">STEP 6</span>
+                    <span class="step-status" id="lateral-status"></span>
+                </div>
+                <div class="step-name">Lateral Movement</div>
+                <div class="step-desc">T1021/T1550 - SSH scan, rogue pod, IMDS theft, cross-namespace</div>
+                <div class="step-actions">
+                    <button class="btn btn-danger" onclick="attackStep6()">Move</button>
                 </div>
             </div>
         </div>
@@ -671,6 +731,8 @@
                 <button class="tab" data-tab="terminal" onclick="openTab('terminal')">Terminal</button>
                 <button class="tab" data-tab="kubectl" onclick="openTab('kubectl')">kubectl</button>
                 <button class="tab" data-tab="playbook" onclick="openTab('playbook')">Cortex</button>
+                <button class="tab tab-soc-btn" data-tab="soc" onclick="openTab('soc')">SOC Live</button>
+                <button class="tab tab-code-btn" data-tab="code" onclick="openTab('code')">Code</button>
                 <button class="tab tab-radar-btn" data-tab="radar" onclick="openTab('radar')">Security Radar</button>
             </div>
         </div>
@@ -681,6 +743,102 @@
                 <div class="overview-section">
                     <h3 class="overview-title">K8s Container Escape Demo</h3>
                     <p class="overview-intro">This demo illustrates a full attack chain exploiting Kubernetes misconfigurations, from initial RCE to cluster takeover, and shows how Cortex XDR detects and responds to each stage.</p>
+                </div>
+
+                <!-- Live Architecture Diagram -->
+                <div class="overview-section">
+                    <div class="arch-diagram" id="arch-diagram">
+                        <svg class="arch-svg" viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Connection lines (animated) -->
+                            <line id="conn-atk-lb" x1="110" y1="90" x2="280" y2="90" class="arch-conn" />
+                            <line id="conn-lb-pod" x1="370" y1="90" x2="460" y2="90" class="arch-conn" />
+                            <line id="conn-pod-node" x1="530" y1="130" x2="530" y2="180" class="arch-conn" />
+                            <line id="conn-node-api" x1="600" y1="220" x2="750" y2="220" class="arch-conn" />
+                            <line id="conn-pod-agent" x1="460" y1="130" x2="350" y2="230" class="arch-conn" />
+                            <line id="conn-agent-cortex" x1="300" y1="270" x2="160" y2="330" class="arch-conn" />
+                            <line id="conn-cortex-lambda" x1="210" y1="340" x2="520" y2="340" class="arch-conn conn-response" />
+                            <line id="conn-lambda-api" x1="600" y1="340" x2="750" y2="270" class="arch-conn conn-response" />
+                            <line id="conn-node-imds" x1="600" y1="220" x2="750" y2="150" class="arch-conn" />
+
+                            <!-- Attacker -->
+                            <g id="arch-attacker" class="arch-node">
+                                <rect x="20" y="55" width="140" height="70" rx="8" class="arch-box arch-box-attacker" />
+                                <text x="90" y="82" class="arch-label">Attacker</text>
+                                <text x="90" y="102" class="arch-sublabel">Dashboard</text>
+                            </g>
+
+                            <!-- LoadBalancer -->
+                            <g id="arch-lb" class="arch-node">
+                                <rect x="280" y="55" width="100" height="70" rx="8" class="arch-box arch-box-aws" />
+                                <text x="330" y="82" class="arch-label">LB</text>
+                                <text x="330" y="102" class="arch-sublabel">:80</text>
+                            </g>
+
+                            <!-- Pod (vuln-app) -->
+                            <g id="arch-pod" class="arch-node">
+                                <rect x="460" y="45" width="140" height="90" rx="8" class="arch-box arch-box-pod" />
+                                <text x="530" y="72" class="arch-label">Pod</text>
+                                <text x="530" y="90" class="arch-sublabel">vuln-app</text>
+                                <text x="530" y="106" class="arch-sublabel2">privileged</text>
+                                <text x="530" y="122" class="arch-sublabel2">hostPID | hostPath</text>
+                            </g>
+
+                            <!-- EKS Node -->
+                            <g id="arch-node" class="arch-node">
+                                <rect x="440" y="180" width="180" height="70" rx="8" class="arch-box arch-box-node" />
+                                <text x="530" y="207" class="arch-label">EKS Node</text>
+                                <text x="530" y="227" class="arch-sublabel">Amazon Linux 2023</text>
+                                <text x="530" y="241" class="arch-sublabel2">t3.medium | AL2023</text>
+                            </g>
+
+                            <!-- K8s API -->
+                            <g id="arch-api" class="arch-node">
+                                <rect x="700" y="185" width="120" height="70" rx="8" class="arch-box arch-box-api" />
+                                <text x="760" y="212" class="arch-label">K8s API</text>
+                                <text x="760" y="232" class="arch-sublabel">EKS Control</text>
+                                <text x="760" y="246" class="arch-sublabel2">Plane</text>
+                            </g>
+
+                            <!-- IMDS -->
+                            <g id="arch-imds" class="arch-node">
+                                <rect x="710" y="110" width="100" height="50" rx="8" class="arch-box arch-box-imds" />
+                                <text x="760" y="133" class="arch-label">IMDS</text>
+                                <text x="760" y="150" class="arch-sublabel">169.254.169.254</text>
+                            </g>
+
+                            <!-- XDR Agent -->
+                            <g id="arch-agent" class="arch-node">
+                                <rect x="250" y="220" width="120" height="60" rx="8" class="arch-box arch-box-agent" />
+                                <text x="310" y="245" class="arch-label">XDR Agent</text>
+                                <text x="310" y="263" class="arch-sublabel">DaemonSet</text>
+                            </g>
+
+                            <!-- Cortex XSIAM -->
+                            <g id="arch-cortex" class="arch-node">
+                                <rect x="30" y="305" width="180" height="80" rx="8" class="arch-box arch-box-cortex" />
+                                <text x="120" y="332" class="arch-label">Cortex XSIAM</text>
+                                <text x="120" y="352" class="arch-sublabel">Detection + Playbooks</text>
+                                <text x="120" y="368" class="arch-sublabel2">SOC</text>
+                            </g>
+
+                            <!-- Lambda -->
+                            <g id="arch-lambda" class="arch-node">
+                                <rect x="520" y="310" width="120" height="60" rx="8" class="arch-box arch-box-lambda" />
+                                <text x="580" y="335" class="arch-label">Lambda</text>
+                                <text x="580" y="353" class="arch-sublabel">Containment</text>
+                            </g>
+
+                            <!-- Attack step labels (shown during attack) -->
+                            <text id="arch-step-label" x="450" y="30" class="arch-step-text" style="display:none;"></text>
+                        </svg>
+
+                        <!-- Legend -->
+                        <div class="arch-legend">
+                            <span class="arch-legend-item"><span class="arch-legend-dot attack"></span> Attack flow</span>
+                            <span class="arch-legend-item"><span class="arch-legend-dot detect"></span> Detection</span>
+                            <span class="arch-legend-item"><span class="arch-legend-dot response"></span> Response</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="overview-section">
@@ -727,8 +885,26 @@
 
                         <div class="overview-step">
                             <div class="overview-step-header">Step 3: Cluster Takeover</div>
-                            <p>Use the pod's <code>cluster-admin</code> ServiceAccount token to gain full control of the Kubernetes cluster: list all namespaces, pods, secrets, nodes. Steal AWS credentials via IMDS for lateral movement to cloud services.</p>
+                            <p>Steal the pod's <code>cluster-admin</code> ServiceAccount token via the webshell, then deploy a kubectl attack script inside the container to enumerate the entire cluster: namespaces, pods, secrets, nodes, RBAC bindings.</p>
                             <div class="overview-technique">MITRE: T1078.004 (Cloud Accounts) / T1552.007 (Container API)</div>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 4: K8s Vulnerability Scanning</div>
+                            <p>Run K8s reconnaissance tools inside the container: permission enumeration (<code>auth can-i</code>), RBAC scanning, service discovery, pod security posture audit. Simulate deepce, kube-hunter, and peirates execution. Probe kubelet (10250) and etcd (2379) APIs from the host network namespace.</p>
+                            <div class="overview-technique">MITRE: T1613 (Container Discovery) / T1610 (Deploy Container)</div>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 5: Deploy Malware</div>
+                            <p>Download and execute known malware samples: WildFire test ELF, reverse shell script, cryptominer simulation. Deploy deepce container escape scanner. Harvest credentials from <code>/etc/shadow</code> and kubelet kubeconfig.</p>
+                            <div class="overview-technique">MITRE: T1105 (Tool Transfer) / T1059.004 (Unix Shell) / T1587.001 (Malware)</div>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 6: Lateral Movement</div>
+                            <p>Attempt to spread beyond the compromised node: SSH scanning of the VPC subnet, deploy a rogue privileged pod in <code>kube-system</code>, steal AWS IAM credentials via IMDS, access secrets in other namespaces, probe kubelet on other cluster nodes.</p>
+                            <div class="overview-technique">MITRE: T1021 (Remote Services) / T1550.001 (Application Access Token) / T1530 (Cloud Storage)</div>
                         </div>
                     </div>
                 </div>
@@ -741,10 +917,14 @@
                         </div>
                         <p>Cortex XDR agent deployed on the cluster detects each stage of the attack:</p>
                         <ul>
-                            <li><strong>Anti-Webshell</strong> - detects JSP webshell creation</li>
-                            <li><strong>Container Escape Protection</strong> - detects nsenter and namespace breakout</li>
-                            <li><strong>Behavioral Threat Protection</strong> - detects suspicious process activity</li>
-                            <li><strong>Credential Gathering</strong> - detects access to sensitive files and IMDS</li>
+                            <li><strong>Local Threat Detected</strong> - JSP webshell detected as malware on creation</li>
+                            <li><strong>Anti-Webshell Protection</strong> - detects webshell execution patterns</li>
+                            <li><strong>Container Escape Protection</strong> - detects privileged container escape via mount</li>
+                            <li><strong>Behavioral Threat Protection</strong> - detects suspicious causality chains</li>
+                            <li><strong>Credential Gathering</strong> - detects /etc/shadow and kubeconfig access</li>
+                            <li><strong>K8s Vulnerability Scanning</strong> - detects recon tools (deepce, kube-hunter, peirates)</li>
+                            <li><strong>Reverse Shell Protection</strong> - detects reverse shell connection attempts</li>
+                            <li><strong>Cryptominer Protection</strong> - detects cryptominer-like activity</li>
                         </ul>
                         <p>A <strong>prevention policy</strong> (rules + profiles) is imported on the Cortex tenant and assigned to the EKS endpoint group for K8s-specific protection.</p>
                         <p><strong>4 automation scripts</strong> are deployed to Cortex:</p>
@@ -869,6 +1049,169 @@
                 <span class="prompt-sign kubectl-prompt">kubectl</span>
                 <input type="text" id="kubectl-input" placeholder="get pods -n vuln-app, describe node, logs deployment/vuln-app -n vuln-app..." />
                 <button onclick="kubectlExec()">RUN</button>
+            </div>
+        </div>
+
+        <!-- SOC Live Tab -->
+        <div class="terminal-container tab-content" id="tab-soc">
+            <div class="soc-container">
+                <div class="soc-header">
+                    <h3 class="soc-title">SOC Live Dashboard</h3>
+                    <div class="soc-controls">
+                        <button class="btn btn-primary" onclick="socRefresh()">Refresh Alerts</button>
+                        <button class="btn btn-ghost" onclick="socClear()">Clear</button>
+                        <span class="soc-auto-label">
+                            <input type="checkbox" id="soc-auto-refresh" onchange="socToggleAutoRefresh()"> Auto-refresh (30s)
+                        </span>
+                    </div>
+                </div>
+
+                <!-- MITRE ATT&CK Heatmap -->
+                <div class="mitre-heatmap">
+                    <h4>MITRE ATT&CK Coverage</h4>
+                    <div class="mitre-grid">
+                        <div class="mitre-cell" id="mitre-T1190" data-technique="T1190"><span class="mitre-id">T1190</span><span class="mitre-name">Exploit Public App</span></div>
+                        <div class="mitre-cell" id="mitre-T1059" data-technique="T1059"><span class="mitre-id">T1059</span><span class="mitre-name">Command & Script</span></div>
+                        <div class="mitre-cell" id="mitre-T1505" data-technique="T1505"><span class="mitre-id">T1505</span><span class="mitre-name">Web Shell</span></div>
+                        <div class="mitre-cell" id="mitre-T1611" data-technique="T1611"><span class="mitre-id">T1611</span><span class="mitre-name">Escape to Host</span></div>
+                        <div class="mitre-cell" id="mitre-T1610" data-technique="T1610"><span class="mitre-id">T1610</span><span class="mitre-name">Deploy Container</span></div>
+                        <div class="mitre-cell" id="mitre-T1552" data-technique="T1552"><span class="mitre-id">T1552</span><span class="mitre-name">Credentials in Files</span></div>
+                        <div class="mitre-cell" id="mitre-T1613" data-technique="T1613"><span class="mitre-id">T1613</span><span class="mitre-name">Container Discovery</span></div>
+                        <div class="mitre-cell" id="mitre-T1550" data-technique="T1550"><span class="mitre-id">T1550</span><span class="mitre-name">Access Token Use</span></div>
+                        <div class="mitre-cell" id="mitre-T1530" data-technique="T1530"><span class="mitre-id">T1530</span><span class="mitre-name">Cloud Storage Data</span></div>
+                        <div class="mitre-cell" id="mitre-T1021" data-technique="T1021"><span class="mitre-id">T1021</span><span class="mitre-name">Remote Services</span></div>
+                        <div class="mitre-cell" id="mitre-T1105" data-technique="T1105"><span class="mitre-id">T1105</span><span class="mitre-name">Tool Transfer</span></div>
+                        <div class="mitre-cell" id="mitre-T1587" data-technique="T1587"><span class="mitre-id">T1587</span><span class="mitre-name">Malware</span></div>
+                    </div>
+                </div>
+
+                <!-- Alerts Timeline -->
+                <div class="soc-timeline">
+                    <h4>Cortex XDR Alerts <span class="soc-alert-count" id="soc-alert-count">0</span></h4>
+                    <div class="soc-alerts" id="soc-alerts">
+                        <div class="soc-empty">No alerts yet. Run the attack chain and click Refresh.</div>
+                    </div>
+                </div>
+
+                <!-- Demo Timer -->
+                <div class="soc-timer">
+                    <div class="timer-item">
+                        <span class="timer-label">Attack Duration</span>
+                        <span class="timer-value" id="timer-attack">--:--</span>
+                    </div>
+                    <div class="timer-item">
+                        <span class="timer-label">Time to Detect</span>
+                        <span class="timer-value" id="timer-detect">--:--</span>
+                    </div>
+                    <div class="timer-item">
+                        <span class="timer-label">Time to Contain</span>
+                        <span class="timer-value" id="timer-contain">--:--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Code Tab -->
+        <div class="terminal-container tab-content" id="tab-code">
+            <div class="code-container">
+                <h3 class="code-title">Shift-Left: Code & Configuration Risks</h3>
+                <p class="code-subtitle">What Prisma Cloud / IaC scanning would detect before deployment</p>
+
+                <div class="code-section">
+                    <h4 class="code-section-title critical">CVE-2022-22965 — Spring4Shell (CVSS 9.8)</h4>
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>Spring Framework 5.3.0–5.3.17</span>
+                        </div>
+                        <p>Remote Code Execution via ClassLoader manipulation in Spring MVC parameter binding. Allows unauthenticated attackers to deploy webshells on Tomcat servers.</p>
+                        <div class="code-fix">
+                            <strong>Fix:</strong> Upgrade to Spring Framework 5.3.18+ or Spring Boot 2.6.6+
+                        </div>
+                    </div>
+                </div>
+
+                <div class="code-section">
+                    <h4 class="code-section-title high">Kubernetes Misconfigurations (deployment.yaml)</h4>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>privileged: true</span>
+                        </div>
+                        <pre class="code-snippet">securityContext:
+  privileged: true    # Full host kernel access</pre>
+                        <div class="code-fix"><strong>Fix:</strong> <code>privileged: false</code> + <code>allowPrivilegeEscalation: false</code></div>
+                    </div>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>hostPID: true</span>
+                        </div>
+                        <pre class="code-snippet">spec:
+  hostPID: true       # Access host process namespace → nsenter escape</pre>
+                        <div class="code-fix"><strong>Fix:</strong> Remove <code>hostPID</code> or set to <code>false</code></div>
+                    </div>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity high">HIGH</span>
+                            <span>hostNetwork: true</span>
+                        </div>
+                        <pre class="code-snippet">spec:
+  hostNetwork: true   # Node network access, IMDS reachable</pre>
+                        <div class="code-fix"><strong>Fix:</strong> Remove <code>hostNetwork</code>, set IMDSv2 hop limit=1</div>
+                    </div>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>hostPath: /</span>
+                        </div>
+                        <pre class="code-snippet">volumes:
+  - hostPath:
+      path: /          # Read/write entire host filesystem</pre>
+                        <div class="code-fix"><strong>Fix:</strong> Use PersistentVolumeClaims, restrict via Pod Security Admission</div>
+                    </div>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>SA cluster-admin</span>
+                        </div>
+                        <pre class="code-snippet">ClusterRoleBinding:
+  roleRef: cluster-admin   # Full K8s API control</pre>
+                        <div class="code-fix"><strong>Fix:</strong> Least-privilege RBAC, namespace-scoped Role/RoleBinding</div>
+                    </div>
+                </div>
+
+                <div class="code-section">
+                    <h4 class="code-section-title medium">Missing Security Controls</h4>
+
+                    <div class="code-cards-grid">
+                        <div class="code-card-small">
+                            <span class="code-severity medium">MEDIUM</span>
+                            <strong>No Pod Security Standards</strong>
+                            <p>No PSA enforcement — all misconfigs allowed</p>
+                        </div>
+                        <div class="code-card-small">
+                            <span class="code-severity medium">MEDIUM</span>
+                            <strong>No Network Policies</strong>
+                            <p>Unrestricted pod-to-pod communication</p>
+                        </div>
+                        <div class="code-card-small">
+                            <span class="code-severity low">LOW</span>
+                            <strong>No Resource Limits</strong>
+                            <p>Pod can consume all node resources</p>
+                        </div>
+                        <div class="code-card-small">
+                            <span class="code-severity low">LOW</span>
+                            <strong>No readOnlyRootFilesystem</strong>
+                            <p>Attackers can write files in the container</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -1015,6 +1358,43 @@ export AWS_SESSION_TOKEN="..."' oninput="parseAwsExport()"></textarea>
     </div>
 </div>
 
+<!-- ─── External Cluster (BYOC) Modal ─────────────── -->
+<div class="modal-overlay" id="byoc-modal">
+    <div class="modal modal-wide">
+        <h3 style="color: #22c55e;">External Cluster (BYOC)</h3>
+        <p>Connect to an existing Kubernetes cluster. Skip infrastructure deployment and use your own cluster.</p>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="byoc-enabled" onchange="toggleByocFields()"> Enable External Cluster
+            </label>
+        </div>
+        <div id="byoc-fields">
+            <div class="form-group">
+                <label for="byoc-kubeconfig">Kubeconfig <span class="optional">(paste content or leave empty to use default ~/.kube/config)</span></label>
+                <textarea id="byoc-kubeconfig" rows="6" placeholder="apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://...
+  name: my-cluster
+..."></textarea>
+            </div>
+            <div class="form-group">
+                <label for="byoc-host">Application Host <span class="optional">(LoadBalancer hostname or IP of the vuln-app)</span></label>
+                <input type="text" id="byoc-host" placeholder="a809e77f3f12b414...eu-west-3.elb.amazonaws.com" autocomplete="off" />
+            </div>
+            <div class="form-group">
+                <label for="byoc-image">Container Image URL <span class="optional">(for Deploy step)</span></label>
+                <input type="text" id="byoc-image" placeholder="012345678901.dkr.ecr.eu-west-3.amazonaws.com/vuln-app:latest" autocomplete="off" />
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="closeByocSettings()">Cancel</button>
+            <button class="btn btn-success" onclick="saveByocSettings()">Save</button>
+        </div>
+    </div>
+</div>
+
 <!-- ─── Cortex Settings Modal ─────────────────────── -->
 <div class="modal-overlay" id="cortex-modal">
     <div class="modal modal-wide">
@@ -1081,6 +1461,6 @@ export AWS_SESSION_TOKEN="..."' oninput="parseAwsExport()"></textarea>
     </div>
 </div>
 
-<script src="/static/js/app.js?v=23"></script>
+<script src="/static/js/app.js?v=26"></script>
 </body>
 </html>
