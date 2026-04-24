@@ -25,6 +25,50 @@ ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")
 PLAYBOOK_DIR = os.path.join(PROJECT_ROOT, "playbook")
 KUBECONFIG_PATH = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig")
 
+# Toolbox container name
+TOOLBOX_CONTAINER = "k8s-escape-toolbox"
+
+
+def is_toolbox_running():
+    """Check if the toolbox container is running."""
+    try:
+        result = subprocess.run(
+            f"docker inspect -f '{{{{.State.Running}}}}' {TOOLBOX_CONTAINER}",
+            shell=True, capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip().strip("'") == "true"
+    except Exception:
+        return False
+
+
+def toolbox_cmd(command, cwd=None):
+    """Wrap a command to run inside the toolbox container.
+    If the toolbox is running, the command is executed via docker exec.
+    The project is mounted at /project in the container.
+    """
+    if is_toolbox_running():
+        # Replace local project paths with container paths
+        cmd = command.replace(PROJECT_ROOT, "/project")
+        # Determine working directory inside container
+        if cwd:
+            container_cwd = cwd.replace(PROJECT_ROOT, "/project")
+            cmd = f"cd {container_cwd} && {cmd}"
+        # Pass AWS env vars into the container
+        env_flags = ""
+        for var in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_DEFAULT_REGION", "AWS_REGION"]:
+            env_flags += f' -e {var}="${{{var}}}"'
+        # Map KUBECONFIG path to container path
+        env_flags += f' -e KUBECONFIG=/project/dashboard/.kubeconfig'
+        # Pass Cortex credentials for cortexcli install
+        if cortex_settings.get("base_url"):
+            env_flags += f' -e CORTEX_API_URL="{cortex_settings["base_url"]}"'
+            env_flags += f' -e CORTEX_API_KEY="{cortex_settings.get("api_key", "")}"'
+            env_flags += f' -e CORTEX_API_KEY_ID="{cortex_settings.get("api_key_id", "")}"'
+        # Escape single quotes in the command for bash -c '...'
+        cmd_escaped = cmd.replace("'", "'\\''")
+        return f"docker exec{env_flags} {TOOLBOX_CONTAINER} bash -c '{cmd_escaped}'"
+    return command
+
 # In-memory store for task outputs
 tasks = {}
 
@@ -154,8 +198,11 @@ def generate_kubeconfig(cluster_name, region):
     return KUBECONFIG_PATH
 
 
-def run_command(task_id, command, cwd=None, env_extra=None):
-    """Run a shell command asynchronously and store streaming output."""
+def run_command(task_id, command, cwd=None, env_extra=None, use_toolbox=False):
+    """Run a shell command asynchronously and store streaming output.
+    If use_toolbox=True and the toolbox container is running, the command
+    is executed inside the container via docker exec.
+    """
     tasks[task_id]["status"] = "running"
     tasks[task_id]["start_time"] = time.time()
 
@@ -165,9 +212,15 @@ def run_command(task_id, command, cwd=None, env_extra=None):
     if env_extra:
         env.update(env_extra)
 
+    # Wrap with toolbox if requested and available
+    actual_command = command
+    if use_toolbox and is_toolbox_running():
+        actual_command = toolbox_cmd(command, cwd=cwd)
+        tasks[task_id]["output"] += "[toolbox] Running inside container\n"
+
     try:
         proc = subprocess.Popen(
-            command,
+            actual_command,
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -191,7 +244,7 @@ def run_command(task_id, command, cwd=None, env_extra=None):
     tasks[task_id]["end_time"] = time.time()
 
 
-def create_task(name, command, cwd=None, env_extra=None):
+def create_task(name, command, cwd=None, env_extra=None, use_toolbox=False):
     """Create and start a background task."""
     task_id = str(uuid.uuid4())[:8]
     tasks[task_id] = {
@@ -206,7 +259,7 @@ def create_task(name, command, cwd=None, env_extra=None):
         "pid": None,
     }
     t = threading.Thread(
-        target=run_command, args=(task_id, command, cwd, env_extra), daemon=True
+        target=run_command, args=(task_id, command, cwd, env_extra, use_toolbox), daemon=True
     )
     t.start()
     return task_id
@@ -218,6 +271,32 @@ def create_task(name, command, cwd=None, env_extra=None):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/toolbox/status", methods=["GET"])
+def toolbox_status():
+    """Check if the toolbox container is running and return tool versions."""
+    running = is_toolbox_running()
+    if not running:
+        return jsonify({"status": "stopped", "running": False})
+
+    try:
+        result = subprocess.run(
+            f"docker exec {TOOLBOX_CONTAINER} bash -c '"
+            "echo terraform=$(terraform --version 2>/dev/null | head -1); "
+            "echo kubectl=$(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -1); "
+            "echo aws=$(aws --version 2>/dev/null); "
+            "echo cortexcli=$(cortexcli --version 2>/dev/null)'",
+            shell=True, capture_output=True, text=True, timeout=10,
+        )
+        versions = {}
+        for line in result.stdout.strip().split("\n"):
+            if "=" in line:
+                k, v = line.split("=", 1)
+                versions[k.strip()] = v.strip()
+        return jsonify({"status": "running", "running": True, "versions": versions})
+    except Exception as e:
+        return jsonify({"status": "error", "running": running, "message": str(e)})
 
 
 # ─── AWS Credentials ────────────────────────────────────────────────────────
@@ -497,20 +576,62 @@ def tf_output(tf_dir, output_name, env=None):
 
 @app.route("/api/infra/plan", methods=["POST"])
 def infra_plan():
+    lambda_dir = TERRAFORM_LAMBDA_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    infra_dir = TERRAFORM_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo "=================================================="
+echo "  PHASE 1: Infrastructure Plan"
+echo "=================================================="
+cd {infra_dir}
+{tf_init_cmd()}
+terraform plan -no-color {tf_var_region()}
+
+echo ""
+echo "=================================================="
+echo "  PHASE 2: Lambda Plan"
+echo "=================================================="
+cd ../{lambda_dir}
+{tf_init_cmd()}
+terraform plan -no-color {tf_var_region()}
+"""
     task_id = create_task(
         "Terraform Plan",
-        f"{tf_init_cmd()} && terraform plan -no-color {tf_var_region()}",
-        cwd=TERRAFORM_DIR,
+        cmd,
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
 
 @app.route("/api/infra/apply", methods=["POST"])
 def infra_apply():
+    # Deploy infra + lambda in one shot
+    lambda_dir = TERRAFORM_LAMBDA_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    infra_dir = TERRAFORM_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo "=================================================="
+echo "  PHASE 1: Infrastructure (EKS + VPC + IAM)"
+echo "=================================================="
+cd {infra_dir}
+{tf_init_cmd()}
+terraform apply -auto-approve -no-color {tf_var_region()}
+
+echo ""
+echo "=================================================="
+echo "  PHASE 2: Lambda Containment"
+echo "=================================================="
+cd ../{lambda_dir}
+{tf_init_cmd()}
+terraform apply -auto-approve -no-color {tf_var_region()}
+
+echo ""
+echo "=================================================="
+echo "  [OK] Infrastructure + Lambda deployed successfully"
+echo "=================================================="
+"""
     task_id = create_task(
         "Terraform Apply",
-        f"{tf_init_cmd()} && terraform apply -auto-approve -no-color {tf_var_region()}",
-        cwd=TERRAFORM_DIR,
+        cmd,
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
@@ -537,7 +658,7 @@ if [ -n "$VPC_ID" ]; then
   # Delete Classic ELBs in the VPC
   echo '==> Checking Classic Load Balancers...'
   ELBS=$(aws elb describe-load-balancers --region {region} \
-    --query "LoadBalancerDescriptions[?VPCId==\`$VPC_ID\`].LoadBalancerName" --output text 2>/dev/null || echo '')
+    --query "LoadBalancerDescriptions[?VPCId==\\`$VPC_ID\\`].LoadBalancerName" --output text 2>/dev/null || echo '')
   for ELB in $ELBS; do
     echo "    Deleting Classic ELB: $ELB"
     aws elb delete-load-balancer --load-balancer-name "$ELB" --region {region} 2>/dev/null || true
@@ -546,7 +667,7 @@ if [ -n "$VPC_ID" ]; then
   # Delete ALB/NLBs in the VPC
   echo '==> Checking ALB/NLB Load Balancers...'
   LB_ARNS=$(aws elbv2 describe-load-balancers --region {region} \
-    --query "LoadBalancers[?VpcId==\`$VPC_ID\`].LoadBalancerArn" --output text 2>/dev/null || echo '')
+    --query "LoadBalancers[?VpcId==\\`$VPC_ID\\`].LoadBalancerArn" --output text 2>/dev/null || echo '')
   for LB_ARN in $LB_ARNS; do
     echo "    Deleting ALB/NLB: $LB_ARN"
     aws elbv2 delete-load-balancer --load-balancer-arn "$LB_ARN" --region {region} 2>/dev/null || true
@@ -566,7 +687,7 @@ if [ -n "$VPC_ID" ]; then
   echo '==> Checking orphaned ENIs...'
   ENI_IDS=$(aws ec2 describe-network-interfaces --region {region} \
     --filters Name=vpc-id,Values=$VPC_ID \
-    --query "NetworkInterfaces[?Attachment.DeviceIndex!=\`0\` || Attachment.InstanceId==null].NetworkInterfaceId" \
+    --query "NetworkInterfaces[?Attachment.DeviceIndex!=\\`0\\` || Attachment.InstanceId==null].NetworkInterfaceId" \
     --output text 2>/dev/null || echo '')
   for ENI in $ENI_IDS; do
     ATTACH_ID=$(aws ec2 describe-network-interfaces --region {region} \
@@ -598,11 +719,24 @@ fi
 
 echo ''
 echo '=================================================='
-echo '  TERRAFORM DESTROY'
+echo '  PHASE 1: DESTROY LAMBDA'
 echo '=================================================='
+cd {TERRAFORM_LAMBDA_DIR}
+{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()} || echo 'Lambda destroy skipped (not deployed?)'
+
+echo ''
+echo '=================================================='
+echo '  PHASE 2: DESTROY INFRASTRUCTURE'
+echo '=================================================='
+cd {TERRAFORM_DIR}
 {tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()}
+
+echo ''
+echo '=================================================='
+echo '  [OK] All infrastructure destroyed'
+echo '=================================================='
 """
-    task_id = create_task("Terraform Destroy", cmd, cwd=TERRAFORM_DIR)
+    task_id = create_task("Terraform Destroy", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -624,6 +758,143 @@ def infra_outputs():
         return jsonify({"error": result.stderr}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─── Cortex CLI Image Scan ──────────────────────────────────────────────────
+
+
+@app.route("/api/cortex/image-scan", methods=["POST"])
+def cortex_image_scan():
+    """Scan a Docker image with cortexcli (CWP) before push."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    # Derive the cortexcli API base URL from the Cortex API URL
+    api_base_url = cortex_settings["base_url"].rstrip("/")
+    api_key = cortex_settings["api_key"]
+    api_key_id = cortex_settings["api_key_id"]
+
+    # Get the image name to scan
+    image_name = request.json.get("image", "")
+    if not image_name:
+        # Try to get from terraform output (ECR URL)
+        env = os.environ.copy()
+        env.update(get_aws_env())
+        ecr_url = tf_output(TERRAFORM_DIR, "ecr_repository_url", env)
+        if ecr_url:
+            image_name = f"{ecr_url}:latest"
+        else:
+            return jsonify({"status": "error", "message": "No image specified and ECR URL not found"}), 400
+
+    # Extract region from image name for ECR login
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+
+    cmd = f"""
+echo "=================================================="
+echo "  CORTEX CLI - Container Image Scan (CWP)"
+echo "=================================================="
+echo ""
+echo "  Image: {image_name}"
+echo "  API:   {api_base_url}"
+echo ""
+
+# Check if cortexcli is installed — download from tenant if needed
+if ! command -v cortexcli &> /dev/null; then
+    echo "[*] cortexcli not found. Downloading from Cortex tenant..."
+    if command -v cortexcli-install &> /dev/null; then
+        export CORTEX_API_URL="{api_base_url}"
+        export CORTEX_API_KEY="{api_key}"
+        export CORTEX_API_KEY_ID="{api_key_id}"
+        cortexcli-install
+    else
+        ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+        echo "[*] Getting signed download URL..."
+        SIGNED_URL=$(curl -sk \\
+            "{api_base_url}/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=${{ARCH}}" \\
+            -H "x-xdr-auth-id: {api_key_id}" \\
+            -H "Authorization: {api_key}" | jq -r ".signed_url" 2>/dev/null)
+        if [ -n "$SIGNED_URL" ] && [ "$SIGNED_URL" != "null" ]; then
+            echo "[*] Downloading cortexcli for linux-${{ARCH}}..."
+            curl -sk -o /usr/local/bin/cortexcli "$SIGNED_URL" && chmod +x /usr/local/bin/cortexcli
+        else
+            echo "[!] Failed to get download link. Install cortexcli manually."
+            echo "    brew tap paloaltonetworks/cortexcli && brew install cortexcli"
+        fi
+    fi
+fi
+
+echo "==> cortexcli version: $(cortexcli --version 2>/dev/null || echo 'unknown')"
+echo ""
+
+# Check if image exists locally
+echo "==> Checking if image exists locally..."
+if docker image inspect "{image_name}" > /dev/null 2>&1; then
+    echo "  [OK] Image found locally"
+else
+    echo "  [!] Image not found locally. Pulling from registry..."
+    # Login to ECR if image is from ECR
+    if echo "{image_name}" | grep -q "dkr.ecr"; then
+        ACCOUNT_ID=$(echo "{image_name}" | cut -d. -f1)
+        ECR_REGION=$(echo "{image_name}" | grep -oP 'ecr\\.\\K[^.]+')
+        echo "  [*] Logging in to ECR (account: $ACCOUNT_ID, region: ${{ECR_REGION:-{region}}})..."
+        aws ecr get-login-password --region ${{ECR_REGION:-{region}}} | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.${{ECR_REGION:-{region}}}.amazonaws.com 2>&1
+    fi
+    echo "  [*] Pulling image: {image_name}..."
+    docker pull "{image_name}" 2>&1
+    if [ $? -ne 0 ]; then
+        echo "  [FAIL] Cannot pull image. Make sure you have access to the registry."
+        exit 1
+    fi
+    echo "  [OK] Image pulled successfully"
+fi
+echo ""
+
+echo "==> Scanning image: {image_name}"
+echo "    (this may take 2-5 minutes — cortexcli is analyzing layers...)"
+echo ""
+
+# Progress indicator in background (prints dots while scan runs)
+(
+    while true; do
+        sleep 5
+        printf "." >&2
+    done
+) &
+PROGRESS_PID=$!
+trap "kill $PROGRESS_PID 2>/dev/null" EXIT
+echo "==> Command:"
+echo "    cortexcli --api-base-url {api_base_url} --api-key ****{api_key[-4:]} --api-key-id {api_key_id} image scan {image_name} --timeout 300"
+echo ""
+
+# Run the CWP image scan (timeout 5 min)
+cortexcli \\
+    --api-base-url "{api_base_url}" \\
+    --api-key "{api_key}" \\
+    --api-key-id "{api_key_id}" \\
+    image scan "{image_name}" \\
+    --timeout 300 2>&1
+
+SCAN_EXIT=$?
+
+# Stop progress indicator
+kill $PROGRESS_PID 2>/dev/null
+echo ""
+
+echo ""
+echo "=================================================="
+if [ $SCAN_EXIT -eq 0 ]; then
+    echo "  [OK] Image scan completed - no policy violations"
+elif [ $SCAN_EXIT -eq 1 ]; then
+    echo "  [!] Image scan completed - POLICY VIOLATIONS FOUND"
+    echo "      Vulnerabilities or compliance issues detected."
+else
+    echo "  [!] Image scan failed (exit code $SCAN_EXIT)"
+    echo "      Check the output above for details."
+fi
+echo "=================================================="
+"""
+    task_id = create_task("Cortex CLI: Image Scan", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
 
 
 # ─── Docker Build & Push ────────────────────────────────────────────────────
@@ -648,7 +919,7 @@ docker push ${{ECR_URL}}:latest
 
 echo "==> Done! Image pushed to ${{ECR_URL}}:latest"
 """
-    task_id = create_task("Build & Push Image", cmd)
+    task_id = create_task("Build & Push Image", cmd, use_toolbox=False)
     return jsonify({"task_id": task_id})
 
 
@@ -727,7 +998,7 @@ echo "==> Application deployed!"
 echo "==> HOST=${{HOST}}"
 echo "==> URL: http://${{HOST}}/app"
 """
-    task_id = create_task("Deploy to EKS", cmd)
+    task_id = create_task("Deploy to EKS", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -742,7 +1013,7 @@ echo "==> Waiting for namespace deletion..."
 kubectl wait --for=delete namespace/vuln-app --timeout=60s 2>/dev/null || true
 echo "==> Undeploy complete"
 """
-    task_id = create_task("Undeploy from EKS", cmd)
+    task_id = create_task("Undeploy from EKS", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -931,6 +1202,7 @@ def lambda_apply():
         "Deploy Lambda",
         f"echo '>>> Terraform Lambda Deploy starting...' && {tf_init_cmd()} 2>&1 && terraform apply -auto-approve -no-color {tf_var_region()} 2>&1",
         cwd=TERRAFORM_LAMBDA_DIR,
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
@@ -942,6 +1214,7 @@ def lambda_destroy():
         "Destroy Lambda",
         f"{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()}",
         cwd=TERRAFORM_LAMBDA_DIR,
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 

@@ -121,7 +121,7 @@ tasks:
       agent_os_sub_type:
         simple: ${incident.agent_os_sub_type}
       cluster_name:
-        simple: ${incident.cluster_name}
+        simple: ${incident.clustername.[0]}
     separatecontext: false
     continueonerrortype: ""
     view: |-
@@ -168,7 +168,7 @@ tasks:
       namespace:
         simple: ${K8sEscape.Namespace}
       cluster_name:
-        simple: ${K8sEscape.ClusterName}
+        simple: ${inputs.ClusterName}
       node_fqdn:
         simple: ${K8sEscape.NodeFQDN}
       process_name:
@@ -502,7 +502,13 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
-inputs: []
+inputs:
+  - key: ClusterName
+    value:
+      simple: eks-escape-demo
+    required: true
+    description: EKS cluster name
+    playbookInputQuery: null
 inputSections: []
 outputSections:
   - outputs:
