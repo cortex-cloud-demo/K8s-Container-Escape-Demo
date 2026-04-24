@@ -9,8 +9,14 @@ if [ ! -d ".venv" ]; then
     python3 -m venv .venv
 fi
 
-# Activate venv
-source .venv/bin/activate
+# Activate venv (Cross-platform compatibility)
+if [ -f ".venv/Scripts/activate" ]; then
+    # Windows (Git Bash / MinGW)
+    source .venv/Scripts/activate
+else
+    # Linux / macOS
+    source .venv/bin/activate
+fi
 
 # Install/update dependencies
 echo "==> Installing dependencies..."
