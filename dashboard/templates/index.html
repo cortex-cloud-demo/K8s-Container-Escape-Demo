@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>K8s Escape Demo</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9">
+    <link rel="stylesheet" href="/static/css/style.css?v=33">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
@@ -55,9 +55,23 @@
                 <div class="header-chain-dot"></div>
                 <span>Scan</span>
             </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage attack" id="hc-malware" title="Deploy Malware">
+                <div class="header-chain-dot"></div>
+                <span>Malware</span>
+            </div>
+            <div class="header-chain-line"></div>
+            <div class="header-chain-stage attack" id="hc-lateral" title="Lateral Movement">
+                <div class="header-chain-dot"></div>
+                <span>Lateral</span>
+            </div>
         </div>
     </div>
     <div class="status-bar">
+        <div class="status-item" title="Runner toolbox container status">
+            <span class="status-dot" id="toolbox-dot"></span>
+            <span id="toolbox-value" class="status-label">Runner</span>
+        </div>
         <div class="status-item">
             <span class="status-dot" id="host-dot"></span>
             <span id="host-value">Not deployed</span>
@@ -73,6 +87,20 @@
 
     <!-- ─── Sidebar ────────────────────────────── -->
     <aside class="sidebar">
+
+        <!-- Demo Wizard -->
+        <div class="section">
+            <div class="demo-wizard">
+                <button class="btn btn-demo-wizard" id="btn-demo-wizard" onclick="runFullDemo()">
+                    <span class="demo-wizard-icon">&#9654;</span> Run Full Demo
+                </button>
+                <button class="btn btn-ghost btn-demo-stop" id="btn-demo-stop" onclick="stopDemo()" style="display:none;">Stop</button>
+                <div class="demo-wizard-progress" id="demo-progress" style="display:none;">
+                    <div class="demo-progress-bar" id="demo-progress-bar"></div>
+                    <span class="demo-progress-text" id="demo-progress-text">Initializing...</span>
+                </div>
+            </div>
+        </div>
 
         <!-- Settings -->
         <div class="section">
@@ -101,6 +129,18 @@
                     <button class="btn btn-ghost" onclick="testCortexConnection()">Test</button>
                 </div>
             </div>
+            <div class="step-card" id="card-byoc-settings">
+                <div class="step-header">
+                    <span class="step-number cluster">BYOC</span>
+                    <span class="step-status" id="byoc-status"></span>
+                </div>
+                <div class="step-name">External Cluster</div>
+                <div class="step-desc">Use an existing K8s cluster (skip infra steps)</div>
+                <div class="step-actions">
+                    <button class="btn btn-success" onclick="openByocSettings()">Configure</button>
+                    <button class="btn btn-ghost" onclick="testByocCluster()">Test</button>
+                </div>
+            </div>
         </div>
 
         <!-- Infrastructure -->
@@ -112,8 +152,8 @@
                     <span class="step-number infra">INFRA</span>
                     <span class="step-status" id="infra-status"></span>
                 </div>
-                <div class="step-name">EKS + ECR + VPC</div>
-                <div class="step-desc">Terraform: cluster K8s 1.35, ECR registry, VPC, IAM</div>
+                <div class="step-name">EKS + ECR + VPC + Lambda</div>
+                <div class="step-desc">Terraform: EKS cluster, ECR, VPC, IAM + Containment Lambda</div>
                 <div class="step-actions">
                     <button class="btn btn-ghost" onclick="infraPlan()">Plan</button>
                     <button class="btn btn-primary" onclick="infraApply()">Apply</button>
@@ -246,21 +286,58 @@
                     <button class="btn btn-danger" onclick="attackStep4()">Scan</button>
                 </div>
             </div>
+
+            <div class="step-card" id="card-malware">
+                <div class="step-header">
+                    <span class="step-number attack">STEP 5</span>
+                    <span class="step-status" id="malware-status"></span>
+                </div>
+                <div class="step-name">Deploy Malware</div>
+                <div class="step-desc">T1105/T1059 - WildFire ELF, reverse shell, cryptominer, deepce</div>
+                <div class="step-actions">
+                    <button class="btn btn-danger" onclick="attackStep5()">Deploy</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-lateral">
+                <div class="step-header">
+                    <span class="step-number attack">STEP 6</span>
+                    <span class="step-status" id="lateral-status"></span>
+                </div>
+                <div class="step-name">Lateral Movement</div>
+                <div class="step-desc">T1021/T1550 - SSH scan, rogue pod, IMDS theft, cross-namespace</div>
+                <div class="step-actions">
+                    <button class="btn btn-danger" onclick="attackStep6()">Move</button>
+                </div>
+            </div>
         </div>
 
-        <!-- Cortex Playbook -->
+        <!-- Cortex Response -->
         <div class="section">
-            <div class="section-title section-title-cortex"><span class="section-icon">&#9737;</span> Cortex - Response</div>
+            <div class="section-title section-title-cortex"><span class="section-icon">&#128737;</span> Cortex - Response</div>
+
+            <div class="step-card" id="card-image-scan">
+                <div class="step-header">
+                    <span class="step-number cortex">SCAN</span>
+                    <span class="step-status" id="image-scan-status"></span>
+                </div>
+                <div class="step-name">Scan Container Image</div>
+                <div class="step-desc">CortexCLI CWP - scan for vulnerabilities &amp; malware before push</div>
+                <div class="step-actions">
+                    <button class="btn btn-success" onclick="cortexImageScan()">Scan Image</button>
+                    <button class="btn btn-ghost" onclick="cortexImageScanCustom()">Custom Image</button>
+                </div>
+            </div>
 
             <div class="step-card" id="card-lambda-deploy">
                 <div class="step-header">
-                    <span class="step-number aws">LAMBDA</span>
+                    <span class="step-number cortex">LAMBDA</span>
                     <span class="step-status" id="lambda-deploy-status"></span>
                 </div>
                 <div class="step-name">Deploy Containment Lambda</div>
                 <div class="step-desc">Terraform: IAM role, EKS access, Lambda function</div>
                 <div class="step-actions">
-                    <button class="btn btn-primary" onclick="lambdaDeploy()">Deploy</button>
+                    <button class="btn btn-cortex" onclick="lambdaDeploy()">Deploy</button>
                     <button class="btn btn-ghost" onclick="testLambda()">Test</button>
                     <button class="btn btn-ghost" onclick="lambdaStatus()">Status</button>
                 </div>
@@ -289,7 +366,7 @@
                 </div>
 
                 <div class="cortex-objects-list" style="margin-top: 0.75rem;">
-                    <div class="cortex-object-title" style="font-size: 0.7rem; color: #818cf8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem; font-weight: 600;">Scripts</div>
+                    <div class="cortex-object-title" style="font-size: 0.7rem; color: #22c55e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem; font-weight: 600;">Scripts</div>
 
                     <div class="cortex-object-item">
                         <div class="cortex-object-info" onclick="showCortexDetail('ExtractK8sContainerEscapeIOCs')" style="cursor:pointer;">
@@ -335,7 +412,7 @@
                         </div>
                     </div>
 
-                    <div class="cortex-object-title" style="font-size: 0.7rem; color: #818cf8; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.6rem; margin-bottom: 0.4rem; font-weight: 600;">Playbooks</div>
+                    <div class="cortex-object-title" style="font-size: 0.7rem; color: #22c55e; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.6rem; margin-bottom: 0.4rem; font-weight: 600;">Playbooks</div>
 
                     <div class="cortex-object-item">
                         <div class="cortex-object-info" onclick="showCortexDetail('pb-containment')" style="cursor:pointer;">
@@ -671,7 +748,10 @@
                 <button class="tab" data-tab="terminal" onclick="openTab('terminal')">Terminal</button>
                 <button class="tab" data-tab="kubectl" onclick="openTab('kubectl')">kubectl</button>
                 <button class="tab" data-tab="playbook" onclick="openTab('playbook')">Cortex</button>
+                <button class="tab tab-soc-btn" data-tab="soc" onclick="openTab('soc')">SOC Live</button>
+                <button class="tab tab-code-btn" data-tab="code" onclick="openTab('code')">Code</button>
                 <button class="tab tab-radar-btn" data-tab="radar" onclick="openTab('radar')">Security Radar</button>
+                <button class="tab" data-tab="platform" onclick="openTab('platform')" style="color:var(--accent-cyan);font-weight:700;">Architecture</button>
             </div>
         </div>
 
@@ -680,7 +760,218 @@
             <div class="overview-content">
                 <div class="overview-section">
                     <h3 class="overview-title">K8s Container Escape Demo</h3>
-                    <p class="overview-intro">This demo illustrates a full attack chain exploiting Kubernetes misconfigurations, from initial RCE to cluster takeover, and shows how Cortex XDR detects and responds to each stage.</p>
+                    <p class="overview-intro"><strong>Code to Cloud to SOC</strong> &mdash; Full attack chain on AWS EKS with 6 attack steps, 14+ Cortex XDR issues generated, and automated containment via playbooks + Lambda. Everything runs from a local dashboard with a Docker toolbox container (no local CLI installs needed).</p>
+                </div>
+
+                <!-- Live Architecture Diagram -->
+                <div class="overview-section">
+                    <div class="arch-diagram" id="arch-diagram">
+                        <svg class="arch-svg" viewBox="0 0 960 490" xmlns="http://www.w3.org/2000/svg">
+                            <defs>
+                                <marker id="arrow-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
+                                </marker>
+                                <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#22c55e" />
+                                </marker>
+                            </defs>
+
+                            <!-- ═══ BACKGROUND ZONES ═══ -->
+
+                            <!-- AWS Cloud (full width right) -->
+                            <rect x="200" y="5" width="755" height="290" rx="12" class="arch-zone arch-zone-aws" />
+                            <text x="577" y="22" class="arch-zone-label" id="arch-aws-label">AWS CLOUD</text>
+
+                            <!-- EKS Cluster (inside AWS) -->
+                            <rect x="310" y="35" width="475" height="255" rx="10" class="arch-zone arch-zone-eks" />
+                            <text x="547" y="50" class="arch-zone-label" style="fill:#06b6d4;">EKS CLUSTER &mdash; eks-escape-demo</text>
+
+                            <!-- Cortex zone (bottom) -->
+                            <rect x="5" y="310" width="950" height="175" rx="12" class="arch-zone arch-zone-cortex" />
+                            <text x="480" y="327" class="arch-zone-label" style="fill:#22c55e;">CORTEX XSIAM / SOC</text>
+
+                            <!-- ═══ CONNECTION PATHS ═══ -->
+
+                            <!-- Attacker → Internet (attack goes through internet) -->
+                            <path id="conn-atk-inet" d="M 90 155 L 90 120" class="arch-conn" />
+                            <!-- Internet → ELB -->
+                            <path id="conn-inet-lb" d="M 130 80 L 210 80" class="arch-conn" style="stroke:#94a3b8;stroke-dasharray:3 3;" />
+                            <!-- Combined: Attacker → Internet → ELB (attack overlay) -->
+                            <path id="conn-atk-lb" d="M 90 155 L 90 80 L 210 80" class="arch-conn" style="display:none;" />
+                            <!-- ELB → WebApp -->
+                            <path id="conn-lb-pod" d="M 280 80 L 320 80" class="arch-conn" />
+                            <!-- WebApp → Node 1 (escape) -->
+                            <path id="conn-pod-node" d="M 400 125 L 400 170" class="arch-conn" />
+                            <!-- Node 1 → K8s API (takeover) -->
+                            <path id="conn-node-api" d="M 490 200 L 570 100" class="arch-conn" />
+                            <!-- Node → IMDS (goes outside EKS to AWS) -->
+                            <path id="conn-node-imds" d="M 490 185 Q 700 155 810 165" class="arch-conn" />
+                            <!-- Node/Pod → Agent (detection) -->
+                            <path id="conn-pod-agent" d="M 335 125 L 335 170" class="arch-conn" />
+                            <!-- Agent → Cortex XSIAM -->
+                            <path id="conn-agent-cortex" d="M 335 240 L 150 370" class="arch-conn" />
+                            <!-- Cortex → Lambda (response) -->
+                            <path id="conn-cortex-lambda" d="M 260 400 L 580 400" class="arch-conn conn-response" />
+                            <!-- Lambda → K8s API (containment) -->
+                            <path id="conn-lambda-api" d="M 680 390 Q 720 300 660 120" class="arch-conn conn-response" />
+
+                            <!-- ═══ ROW 1: Entry path (y=55-130) ═══ -->
+
+                            <!-- Internet cloud -->
+                            <g id="arch-internet" class="arch-node">
+                                <ellipse cx="90" cy="80" rx="48" ry="28" style="fill:rgba(148,163,184,0.08);stroke:#94a3b8;stroke-width:1.5;" />
+                                <text x="90" y="76" class="arch-icon-sm" style="fill:#94a3b8;">&#9729;</text>
+                                <text x="90" y="92" class="arch-label-sm" style="fill:#94a3b8;">Internet</text>
+                            </g>
+
+                            <!-- Attacker -->
+                            <g id="arch-attacker" class="arch-node">
+                                <rect x="20" y="155" width="140" height="100" rx="10" class="arch-box arch-box-attacker" />
+                                <text x="90" y="178" class="arch-icon">&#128187;</text>
+                                <text x="90" y="198" class="arch-label">Attacker</text>
+                                <text x="90" y="213" class="arch-sublabel">Dashboard</text>
+                                <text x="90" y="226" class="arch-sublabel2">Spring4Shell Exploit</text>
+                                <text x="90" y="238" class="arch-sublabel2">Steps 1-6</text>
+                                <text x="90" y="250" class="arch-sublabel2" style="fill:#ef4444;">http://ELB/app</text>
+                            </g>
+
+                            <!-- ELB (inside AWS, outside EKS) -->
+                            <g id="arch-lb" class="arch-node">
+                                <rect x="210" y="55" width="75" height="55" rx="8" class="arch-box arch-box-aws" />
+                                <text x="247" y="76" class="arch-icon-sm">&#9889;</text>
+                                <text x="247" y="92" class="arch-label-sm">ELB</text>
+                                <text x="247" y="105" class="arch-sublabel2">:80&rarr;:8080</text>
+                            </g>
+
+                            <!-- WebApp Pod (inside EKS) -->
+                            <g id="arch-pod" class="arch-node" style="cursor:pointer;" onclick="openWebApp()">
+                                <rect x="320" y="55" width="160" height="82" rx="10" class="arch-box arch-box-pod" />
+                                <text x="400" y="73" class="arch-icon-sm">&#128230;</text>
+                                <text x="400" y="90" class="arch-label">WebApp</text>
+                                <text x="400" y="104" class="arch-sublabel2">privileged | hostPID | hostPath</text>
+                                <text x="400" y="116" class="arch-sublabel2" style="fill:#ef4444;">CVE-2022-22965</text>
+                                <!-- Open app button -->
+                                <rect x="350" y="120" width="100" height="16" rx="4" style="fill:rgba(249,115,22,0.2);stroke:#f97316;stroke-width:0.8;cursor:pointer;" />
+                                <text x="400" y="131" class="arch-sublabel2" style="fill:#f97316;font-weight:700;">&#8599; Open App</text>
+                            </g>
+
+                            <!-- K8s API Server (inside EKS) -->
+                            <g id="arch-api" class="arch-node">
+                                <rect x="570" y="60" width="130" height="70" rx="10" class="arch-box arch-box-api" />
+                                <text x="635" y="78" class="arch-icon-sm">&#9096;</text>
+                                <text x="635" y="95" class="arch-label-sm">K8s API Server</text>
+                                <text x="635" y="110" class="arch-sublabel">EKS Control Plane</text>
+                                <text x="635" y="124" class="arch-sublabel2">v1.35</text>
+                            </g>
+
+                            <!-- ═══ ROW 2: Cluster internals (y=165-255) ═══ -->
+
+                            <!-- Cortex Cloud Security Agent (inside EKS) -->
+                            <g id="arch-agent" class="arch-node">
+                                <rect x="315" y="170" width="140" height="75" rx="8" class="arch-box arch-box-agent" />
+                                <text x="385" y="189" class="arch-icon-sm">&#128737;</text>
+                                <text x="385" y="205" class="arch-label-sm" style="fill:#22c55e;">Cortex Cloud</text>
+                                <text x="385" y="217" class="arch-label-sm" style="fill:#22c55e;">Security Agent</text>
+                                <text x="385" y="231" class="arch-sublabel2">DaemonSet per node</text>
+                            </g>
+
+                            <!-- EKS Node 1 -->
+                            <g id="arch-node" class="arch-node">
+                                <rect x="470" y="170" width="140" height="75" rx="10" class="arch-box arch-box-node" />
+                                <text x="540" y="190" class="arch-icon-sm">&#128421;</text>
+                                <text x="540" y="207" class="arch-label-sm">Node 1</text>
+                                <text x="540" y="222" class="arch-sublabel">ip-10-0-0-x</text>
+                                <text x="540" y="235" class="arch-sublabel2">AL2023 | t3.medium</text>
+                            </g>
+
+                            <!-- EKS Node 2 -->
+                            <g id="arch-node2" class="arch-node">
+                                <rect x="625" y="170" width="140" height="75" rx="10" class="arch-box arch-box-node" />
+                                <text x="695" y="190" class="arch-icon-sm">&#128421;</text>
+                                <text x="695" y="207" class="arch-label-sm">Node 2</text>
+                                <text x="695" y="222" class="arch-sublabel">ip-10-0-1-x</text>
+                                <text x="695" y="235" class="arch-sublabel2">AL2023 | t3.medium</text>
+                            </g>
+
+                            <!-- ═══ AWS Services outside EKS (right column) ═══ -->
+
+                            <!-- AWS IMDS -->
+                            <g id="arch-imds" class="arch-node">
+                                <rect x="810" y="145" width="130" height="55" rx="8" class="arch-box arch-box-imds" />
+                                <text x="875" y="166" class="arch-icon-sm">&#9729;</text>
+                                <text x="875" y="183" class="arch-label-sm">AWS IMDS</text>
+                                <text x="875" y="195" class="arch-sublabel2">169.254.169.254</text>
+                            </g>
+
+                            <!-- ECR -->
+                            <g id="arch-ecr" class="arch-node">
+                                <rect x="810" y="215" width="130" height="45" rx="6" class="arch-box arch-box-aws" style="opacity:0.6;" />
+                                <text x="875" y="233" class="arch-label-sm" style="opacity:0.6;">ECR Registry</text>
+                                <text x="875" y="250" class="arch-sublabel2" style="opacity:0.6;">Container Images</text>
+                            </g>
+
+                            <!-- ═══ ROW 3: Cortex SOC (y=335-480) ═══ -->
+
+                            <!-- Cortex XSIAM -->
+                            <g id="arch-cortex" class="arch-node" style="cursor:pointer;" onclick="openCortexConsole()">
+                                <rect x="20" y="340" width="230" height="130" rx="12" class="arch-box arch-box-cortex" />
+                                <text x="135" y="365" class="arch-icon">&#128737;</text>
+                                <text x="135" y="388" class="arch-label" style="fill:#22c55e;">Cortex XSIAM</text>
+                                <text x="135" y="405" class="arch-sublabel">Detection &amp; Response</text>
+                                <text x="135" y="422" class="arch-sublabel2">Analytics &bull; Playbooks &bull; XQL</text>
+                                <text x="135" y="438" class="arch-sublabel2" id="arch-cortex-alert" style="display:none;"></text>
+                                <text x="135" y="454" class="arch-sublabel2" id="arch-cortex-playbook" style="display:none;"></text>
+                                <!-- Open console button -->
+                                <rect x="80" y="455" width="110" height="18" rx="4" style="fill:rgba(34,197,94,0.2);stroke:#22c55e;stroke-width:0.8;cursor:pointer;" />
+                                <text x="135" y="467" class="arch-sublabel2" style="fill:#22c55e;font-weight:700;">&#8599; Open Console</text>
+                            </g>
+
+                            <!-- Playbook tasks panel -->
+                            <g id="arch-playbook-tasks" style="display:none;">
+                                <rect x="265" y="340" width="300" height="130" rx="10" class="arch-box" style="fill:rgba(34,197,94,0.05);stroke:#22c55e;" />
+                                <text x="415" y="358" class="arch-label-sm" style="fill:#22c55e;">Containment Playbook</text>
+                                <text x="280" y="376" class="arch-task" id="pb-task-1">1. Triage (ExtractIOCs)</text>
+                                <text x="280" y="392" class="arch-task" id="pb-task-2">2. Collect Evidence</text>
+                                <text x="280" y="408" class="arch-task" id="pb-task-3">3. Network Isolation</text>
+                                <text x="280" y="424" class="arch-task" id="pb-task-4">4. Revoke RBAC</text>
+                                <text x="280" y="440" class="arch-task" id="pb-task-5">5. Scale Down</text>
+                                <text x="280" y="456" class="arch-task" id="pb-task-6">6. Kill Pods</text>
+                                <text x="430" y="376" class="arch-task" id="pb-task-7">7. Cordon Node</text>
+                                <text x="430" y="392" class="arch-task" id="pb-task-8">8. Verify</text>
+                                <text x="430" y="408" class="arch-task" id="pb-task-9">9. Complete</text>
+                            </g>
+
+                            <!-- Lambda -->
+                            <g id="arch-lambda" class="arch-node">
+                                <rect x="580" y="370" width="110" height="65" rx="10" class="arch-box arch-box-lambda" />
+                                <text x="635" y="393" class="arch-icon-sm">&#955;</text>
+                                <text x="635" y="412" class="arch-label">Lambda</text>
+                                <text x="635" y="427" class="arch-sublabel">Containment</text>
+                            </g>
+
+                            <!-- Dynamic particles are created by JS -->
+
+                            <!-- Active step banner -->
+                            <g id="arch-step-banner" style="display:none;">
+                                <rect x="250" y="0" width="460" height="28" rx="6" class="arch-step-bg" />
+                                <text id="arch-step-label" x="480" y="19" class="arch-step-text"></text>
+                            </g>
+
+                            <!-- CTA banner when all steps done — clickable, opens Cortex cases -->
+                            <g id="arch-cta-banner" style="display:none;cursor:pointer;" onclick="openCortexCases()">
+                                <rect x="130" y="258" width="700" height="38" rx="8" style="fill:rgba(34,197,94,0.15);stroke:#22c55e;stroke-width:2;" />
+                                <text id="arch-cta-text" x="480" y="282" style="fill:#22c55e;font-size:14px;font-weight:700;text-anchor:middle;font-family:sans-serif;">&#8599; Analyze / Forensic and take action in Cortex XSIAM</text>
+                            </g>
+                        </svg>
+
+                        <!-- Legend -->
+                        <div class="arch-legend">
+                            <span class="arch-legend-item"><span class="arch-legend-dot attack"></span> Attack flow</span>
+                            <span class="arch-legend-item"><span class="arch-legend-dot detect"></span> Cortex Detection</span>
+                            <span class="arch-legend-item"><span class="arch-legend-dot response"></span> Cortex Response</span>
+                            <span class="arch-legend-item arch-legend-status" id="arch-status">Idle</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="overview-section">
@@ -689,8 +980,13 @@
                             <span class="overview-phase-num phase-infra">1</span>
                             <span class="overview-phase-title">Infrastructure Setup</span>
                         </div>
-                        <p>Deploy an EKS cluster on AWS with Terraform using admin credentials (one-time bootstrap). Terraform creates a dedicated <strong>dashboard IAM User</strong> with permanent Access Key credentials and a scoped <strong>dashboard operator IAM Role</strong> with least-privilege permissions (EKS, ECR, Lambda, VPC, IAM). After deployment, use the dashboard user's permanent credentials &mdash; the dashboard automatically assumes the operator role via STS AssumeRole. Terraform state is stored locally (no S3 backend needed).</p>
-                        <p>Build a vulnerable Spring Boot application (CVE-2022-22965) as a Docker image and push it to ECR. Deploy it as a <strong>privileged pod</strong> with dangerous security settings:</p>
+                        <p>A single <strong>Apply</strong> deploys everything in 2 phases via the Runner Toolbox container:</p>
+                        <ul>
+                            <li><strong>Phase 1</strong> &mdash; VPC, EKS cluster (AL2023 nodes), ECR registry, Dashboard IAM User + Operator Role</li>
+                            <li><strong>Phase 2</strong> &mdash; Containment Lambda, IAM invoker role, EKS access entry, Cortex IAM user</li>
+                        </ul>
+                        <p>All CLI tools (terraform, kubectl, aws) run inside the <strong>Docker toolbox container</strong> &mdash; no local install needed. Terraform state is stored locally. After bootstrap, use the dashboard user's permanent credentials (auto-AssumeRole).</p>
+                        <p>Optionally <strong>scan the container image</strong> with CortexCLI (CWP) before pushing to ECR. Then deploy the vulnerable Spring Boot app as a <strong>privileged pod</strong>:</p>
                         <ul>
                             <li><code>privileged: true</code> - full access to host devices</li>
                             <li><code>hostPID: true</code> - visibility into host processes</li>
@@ -727,8 +1023,26 @@
 
                         <div class="overview-step">
                             <div class="overview-step-header">Step 3: Cluster Takeover</div>
-                            <p>Use the pod's <code>cluster-admin</code> ServiceAccount token to gain full control of the Kubernetes cluster: list all namespaces, pods, secrets, nodes. Steal AWS credentials via IMDS for lateral movement to cloud services.</p>
+                            <p>Steal the pod's <code>cluster-admin</code> ServiceAccount token via the webshell, then deploy a kubectl attack script inside the container to enumerate the entire cluster: namespaces, pods, secrets, nodes, RBAC bindings.</p>
                             <div class="overview-technique">MITRE: T1078.004 (Cloud Accounts) / T1552.007 (Container API)</div>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 4: K8s Vulnerability Scanning</div>
+                            <p>Run K8s reconnaissance tools inside the container: permission enumeration (<code>auth can-i</code>), RBAC scanning, service discovery, pod security posture audit. Simulate deepce, kube-hunter, and peirates execution. Probe kubelet (10250) and etcd (2379) APIs from the host network namespace.</p>
+                            <div class="overview-technique">MITRE: T1613 (Container Discovery) / T1610 (Deploy Container)</div>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 5: Deploy Malware</div>
+                            <p>Download and execute known malware samples: WildFire test ELF, reverse shell script, cryptominer simulation. Deploy deepce container escape scanner. Harvest credentials from <code>/etc/shadow</code> and kubelet kubeconfig.</p>
+                            <div class="overview-technique">MITRE: T1105 (Tool Transfer) / T1059.004 (Unix Shell) / T1587.001 (Malware)</div>
+                        </div>
+
+                        <div class="overview-step">
+                            <div class="overview-step-header">Step 6: Lateral Movement</div>
+                            <p>Attempt to spread beyond the compromised node: SSH scanning of the VPC subnet, deploy a rogue privileged pod in <code>kube-system</code>, steal AWS IAM credentials via IMDS, access secrets in other namespaces, probe kubelet on other cluster nodes.</p>
+                            <div class="overview-technique">MITRE: T1021 (Remote Services) / T1550.001 (Application Access Token) / T1530 (Cloud Storage)</div>
                         </div>
                     </div>
                 </div>
@@ -739,14 +1053,19 @@
                             <span class="overview-phase-num phase-cortex">3</span>
                             <span class="overview-phase-title">Cortex XDR Detection & Response</span>
                         </div>
-                        <p>Cortex XDR agent deployed on the cluster detects each stage of the attack:</p>
+                        <p>Cortex provides <strong>shift-left scanning</strong> (CortexCLI CWP), <strong>runtime detection</strong> (Cloud Security Agent), and <strong>automated response</strong> (playbooks + Lambda). The Cortex Cloud Security Agent (DaemonSet) on each EKS node detects:</p>
                         <ul>
-                            <li><strong>Anti-Webshell</strong> - detects JSP webshell creation</li>
-                            <li><strong>Container Escape Protection</strong> - detects nsenter and namespace breakout</li>
-                            <li><strong>Behavioral Threat Protection</strong> - detects suspicious process activity</li>
-                            <li><strong>Credential Gathering</strong> - detects access to sensitive files and IMDS</li>
+                            <li><strong>Local Threat Detected</strong> - JSP webshell detected as malware on creation</li>
+                            <li><strong>Anti-Webshell Protection</strong> - detects webshell execution patterns</li>
+                            <li><strong>Container Escape Protection</strong> - detects privileged container escape via mount</li>
+                            <li><strong>Behavioral Threat Protection</strong> - detects suspicious causality chains</li>
+                            <li><strong>Credential Gathering</strong> - detects /etc/shadow and kubeconfig access</li>
+                            <li><strong>K8s Vulnerability Scanning</strong> - detects recon tools (deepce, kube-hunter, peirates)</li>
+                            <li><strong>Reverse Shell Protection</strong> - detects reverse shell connection attempts</li>
+                            <li><strong>Cryptominer Protection</strong> - detects cryptominer-like activity</li>
                         </ul>
-                        <p>A <strong>prevention policy</strong> (rules + profiles) is imported on the Cortex tenant and assigned to the EKS endpoint group for K8s-specific protection.</p>
+                        <p><strong>CortexCLI (CWP)</strong> scans the container image <em>before push</em> for vulnerabilities and malware &mdash; downloaded dynamically from the Cortex tenant into the Runner Toolbox container.</p>
+                        <p>A <strong>prevention policy</strong> (profiles created via API) is assigned to the EKS endpoint group for K8s-specific protection.</p>
                         <p><strong>4 automation scripts</strong> are deployed to Cortex:</p>
                         <ul>
                             <li><strong>ExtractK8sContainerEscapeIOCs</strong> &mdash; Triage script that analyzes XDR issue fields to extract IOCs (container ID, namespace, node FQDN, process name/SHA256, container image). Determines incident severity based on attack indicators (Spring4Shell, webshell, container escape, credential theft). Populates <code>K8sEscape.*</code> context used by all downstream scripts and playbooks.</li>
@@ -872,6 +1191,169 @@
             </div>
         </div>
 
+        <!-- SOC Live Tab -->
+        <div class="terminal-container tab-content" id="tab-soc">
+            <div class="soc-container">
+                <div class="soc-header">
+                    <h3 class="soc-title">SOC Live Dashboard</h3>
+                    <div class="soc-controls">
+                        <button class="btn btn-primary" onclick="socRefresh()">Refresh Alerts</button>
+                        <button class="btn btn-ghost" onclick="socClear()">Clear</button>
+                        <span class="soc-auto-label">
+                            <input type="checkbox" id="soc-auto-refresh" onchange="socToggleAutoRefresh()"> Auto-refresh (30s)
+                        </span>
+                    </div>
+                </div>
+
+                <!-- MITRE ATT&CK Heatmap -->
+                <div class="mitre-heatmap">
+                    <h4>MITRE ATT&CK Coverage</h4>
+                    <div class="mitre-grid">
+                        <div class="mitre-cell" id="mitre-T1190" data-technique="T1190"><span class="mitre-id">T1190</span><span class="mitre-name">Exploit Public App</span></div>
+                        <div class="mitre-cell" id="mitre-T1059" data-technique="T1059"><span class="mitre-id">T1059</span><span class="mitre-name">Command & Script</span></div>
+                        <div class="mitre-cell" id="mitre-T1505" data-technique="T1505"><span class="mitre-id">T1505</span><span class="mitre-name">Web Shell</span></div>
+                        <div class="mitre-cell" id="mitre-T1611" data-technique="T1611"><span class="mitre-id">T1611</span><span class="mitre-name">Escape to Host</span></div>
+                        <div class="mitre-cell" id="mitre-T1610" data-technique="T1610"><span class="mitre-id">T1610</span><span class="mitre-name">Deploy Container</span></div>
+                        <div class="mitre-cell" id="mitre-T1552" data-technique="T1552"><span class="mitre-id">T1552</span><span class="mitre-name">Credentials in Files</span></div>
+                        <div class="mitre-cell" id="mitre-T1613" data-technique="T1613"><span class="mitre-id">T1613</span><span class="mitre-name">Container Discovery</span></div>
+                        <div class="mitre-cell" id="mitre-T1550" data-technique="T1550"><span class="mitre-id">T1550</span><span class="mitre-name">Access Token Use</span></div>
+                        <div class="mitre-cell" id="mitre-T1530" data-technique="T1530"><span class="mitre-id">T1530</span><span class="mitre-name">Cloud Storage Data</span></div>
+                        <div class="mitre-cell" id="mitre-T1021" data-technique="T1021"><span class="mitre-id">T1021</span><span class="mitre-name">Remote Services</span></div>
+                        <div class="mitre-cell" id="mitre-T1105" data-technique="T1105"><span class="mitre-id">T1105</span><span class="mitre-name">Tool Transfer</span></div>
+                        <div class="mitre-cell" id="mitre-T1587" data-technique="T1587"><span class="mitre-id">T1587</span><span class="mitre-name">Malware</span></div>
+                    </div>
+                </div>
+
+                <!-- Alerts Timeline -->
+                <div class="soc-timeline">
+                    <h4>Cortex XDR Alerts <span class="soc-alert-count" id="soc-alert-count">0</span></h4>
+                    <div class="soc-alerts" id="soc-alerts">
+                        <div class="soc-empty">No alerts yet. Run the attack chain and click Refresh.</div>
+                    </div>
+                </div>
+
+                <!-- Demo Timer -->
+                <div class="soc-timer">
+                    <div class="timer-item">
+                        <span class="timer-label">Attack Duration</span>
+                        <span class="timer-value" id="timer-attack">--:--</span>
+                    </div>
+                    <div class="timer-item">
+                        <span class="timer-label">Time to Detect</span>
+                        <span class="timer-value" id="timer-detect">--:--</span>
+                    </div>
+                    <div class="timer-item">
+                        <span class="timer-label">Time to Contain</span>
+                        <span class="timer-value" id="timer-contain">--:--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Code Tab -->
+        <div class="terminal-container tab-content" id="tab-code">
+            <div class="code-container">
+                <h3 class="code-title">Shift-Left: Code & Configuration Risks</h3>
+                <p class="code-subtitle">What Prisma Cloud / IaC scanning would detect before deployment</p>
+
+                <div class="code-section">
+                    <h4 class="code-section-title critical">CVE-2022-22965 — Spring4Shell (CVSS 9.8)</h4>
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>Spring Framework 5.3.0–5.3.17</span>
+                        </div>
+                        <p>Remote Code Execution via ClassLoader manipulation in Spring MVC parameter binding. Allows unauthenticated attackers to deploy webshells on Tomcat servers.</p>
+                        <div class="code-fix">
+                            <strong>Fix:</strong> Upgrade to Spring Framework 5.3.18+ or Spring Boot 2.6.6+
+                        </div>
+                    </div>
+                </div>
+
+                <div class="code-section">
+                    <h4 class="code-section-title high">Kubernetes Misconfigurations (deployment.yaml)</h4>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>privileged: true</span>
+                        </div>
+                        <pre class="code-snippet">securityContext:
+  privileged: true    # Full host kernel access</pre>
+                        <div class="code-fix"><strong>Fix:</strong> <code>privileged: false</code> + <code>allowPrivilegeEscalation: false</code></div>
+                    </div>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>hostPID: true</span>
+                        </div>
+                        <pre class="code-snippet">spec:
+  hostPID: true       # Access host process namespace → nsenter escape</pre>
+                        <div class="code-fix"><strong>Fix:</strong> Remove <code>hostPID</code> or set to <code>false</code></div>
+                    </div>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity high">HIGH</span>
+                            <span>hostNetwork: true</span>
+                        </div>
+                        <pre class="code-snippet">spec:
+  hostNetwork: true   # Node network access, IMDS reachable</pre>
+                        <div class="code-fix"><strong>Fix:</strong> Remove <code>hostNetwork</code>, set IMDSv2 hop limit=1</div>
+                    </div>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>hostPath: /</span>
+                        </div>
+                        <pre class="code-snippet">volumes:
+  - hostPath:
+      path: /          # Read/write entire host filesystem</pre>
+                        <div class="code-fix"><strong>Fix:</strong> Use PersistentVolumeClaims, restrict via Pod Security Admission</div>
+                    </div>
+
+                    <div class="code-card">
+                        <div class="code-meta">
+                            <span class="code-severity critical">CRITICAL</span>
+                            <span>SA cluster-admin</span>
+                        </div>
+                        <pre class="code-snippet">ClusterRoleBinding:
+  roleRef: cluster-admin   # Full K8s API control</pre>
+                        <div class="code-fix"><strong>Fix:</strong> Least-privilege RBAC, namespace-scoped Role/RoleBinding</div>
+                    </div>
+                </div>
+
+                <div class="code-section">
+                    <h4 class="code-section-title medium">Missing Security Controls</h4>
+
+                    <div class="code-cards-grid">
+                        <div class="code-card-small">
+                            <span class="code-severity medium">MEDIUM</span>
+                            <strong>No Pod Security Standards</strong>
+                            <p>No PSA enforcement — all misconfigs allowed</p>
+                        </div>
+                        <div class="code-card-small">
+                            <span class="code-severity medium">MEDIUM</span>
+                            <strong>No Network Policies</strong>
+                            <p>Unrestricted pod-to-pod communication</p>
+                        </div>
+                        <div class="code-card-small">
+                            <span class="code-severity low">LOW</span>
+                            <strong>No Resource Limits</strong>
+                            <p>Pod can consume all node resources</p>
+                        </div>
+                        <div class="code-card-small">
+                            <span class="code-severity low">LOW</span>
+                            <strong>No readOnlyRootFilesystem</strong>
+                            <p>Attackers can write files in the container</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Radar Tab -->
         <div class="radar-tab tab-content" id="tab-radar">
             <div class="radar-controls">
@@ -975,6 +1457,295 @@
             </div>
             <div class="terminal" id="playbook-output"></div>
         </div>
+        <!-- Architecture Tab -->
+        <div class="terminal-container tab-content" id="tab-platform">
+            <div class="overview-content">
+                <div class="overview-section">
+                    <h3 class="overview-title" style="color:var(--accent-cyan);">Platform Architecture</h3>
+                    <p class="overview-intro">How the demo platform works — local dashboard, toolbox container, AWS infrastructure, and Cortex integration.</p>
+                </div>
+
+                <div class="overview-section">
+                    <div class="arch-diagram">
+                        <svg class="arch-svg" viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg">
+
+                            <!-- ═══ ZONES ═══ -->
+                            <!-- Local machine -->
+                            <rect x="5" y="5" width="450" height="510" rx="12" class="arch-zone" style="stroke:var(--accent-cyan);fill:rgba(6,182,212,0.03);" />
+                            <text x="230" y="22" class="arch-zone-label" style="fill:var(--accent-cyan);">LOCAL MACHINE (macOS / Linux / Windows)</text>
+
+                            <!-- Docker -->
+                            <rect x="15" y="230" width="430" height="275" rx="10" class="arch-zone" style="stroke:var(--accent-orange);fill:rgba(249,115,22,0.03);" />
+                            <text x="230" y="247" class="arch-zone-label" style="fill:var(--accent-orange);">DOCKER DESKTOP</text>
+
+                            <!-- AWS Cloud -->
+                            <rect x="475" y="5" width="480" height="300" rx="12" class="arch-zone arch-zone-aws" />
+                            <text x="715" y="22" class="arch-zone-label" id="arch2-aws-label">AWS CLOUD</text>
+
+                            <!-- Cortex -->
+                            <rect x="475" y="320" width="480" height="195" rx="12" class="arch-zone arch-zone-cortex" />
+                            <text x="715" y="337" class="arch-zone-label" style="fill:var(--accent-green);">CORTEX CLOUD (SaaS)</text>
+
+                            <!-- ═══ CONNECTIONS ═══ -->
+                            <!-- Dashboard → Toolbox (docker exec) -->
+                            <path d="M 220 175 L 220 265" style="stroke:var(--accent-cyan);stroke-width:2;stroke-dasharray:none;fill:none;" />
+                            <text x="235" y="220" class="arch-sublabel2" style="fill:var(--accent-cyan);">docker exec</text>
+
+                            <!-- Dashboard → Browser -->
+                            <path d="M 140 80 L 60 80" style="stroke:var(--text-dim);stroke-width:1.5;stroke-dasharray:4 3;fill:none;" />
+
+                            <!-- Toolbox → AWS (terraform, kubectl, aws cli) -->
+                            <path d="M 440 340 L 490 200" style="stroke:var(--accent-orange);stroke-width:1.5;stroke-dasharray:none;fill:none;" />
+                            <text x="478" y="275" class="arch-sublabel2" style="fill:var(--accent-orange);">terraform</text>
+                            <text x="478" y="285" class="arch-sublabel2" style="fill:var(--accent-orange);">kubectl</text>
+                            <text x="478" y="295" class="arch-sublabel2" style="fill:var(--accent-orange);">aws cli</text>
+
+                            <!-- Toolbox → Cortex (cortexcli scan) -->
+                            <path d="M 440 420 L 490 420" style="stroke:var(--accent-green);stroke-width:1.5;stroke-dasharray:none;fill:none;" />
+                            <text x="455" y="413" class="arch-sublabel2" style="fill:var(--accent-green);">cortexcli</text>
+
+                            <!-- Toolbox → Docker socket -->
+                            <path d="M 170 420 L 170 460" style="stroke:var(--accent-orange);stroke-width:1.5;stroke-dasharray:3 3;fill:none;" />
+
+                            <!-- Dashboard → Cortex API -->
+                            <path d="M 350 140 Q 430 300 490 400" style="stroke:var(--accent-green);stroke-width:1.5;stroke-dasharray:5 3;fill:none;" />
+                            <text x="400" y="310" class="arch-sublabel2" style="fill:var(--accent-green);">REST API</text>
+
+                            <!-- Dashboard → Attack scripts → ELB -->
+                            <path d="M 350 100 L 490 100" style="stroke:var(--accent-red);stroke-width:1.5;stroke-dasharray:5 3;fill:none;" />
+                            <text x="420" y="93" class="arch-sublabel2" style="fill:var(--accent-red);">exploit</text>
+
+                            <!-- Cortex → Lambda → EKS -->
+                            <path d="M 720 370 L 720 285" style="stroke:var(--accent-green);stroke-width:1.5;stroke-dasharray:none;fill:none;" />
+                            <text x="735" y="330" class="arch-sublabel2" style="fill:var(--accent-green);">playbook</text>
+
+                            <!-- ═══ COMPONENTS ═══ -->
+
+                            <!-- Browser -->
+                            <g>
+                                <rect x="20" y="45" width="110" height="55" rx="8" class="arch-box" style="stroke:var(--text-dim);fill:rgba(148,163,184,0.06);" />
+                                <text x="75" y="68" class="arch-icon-sm">&#127760;</text>
+                                <text x="75" y="85" class="arch-label-sm">Browser</text>
+                                <text x="75" y="96" class="arch-sublabel2">localhost:5555</text>
+                            </g>
+
+                            <!-- Flask Dashboard -->
+                            <g>
+                                <rect x="140" y="40" width="220" height="140" rx="10" class="arch-box" style="stroke:var(--accent-cyan);fill:rgba(6,182,212,0.08);" />
+                                <text x="250" y="62" class="arch-icon-sm">&#128187;</text>
+                                <text x="250" y="80" class="arch-label">Flask Dashboard</text>
+                                <text x="250" y="96" class="arch-sublabel">app.py (Python)</text>
+                                <text x="250" y="112" class="arch-sublabel2">API routes &bull; Task manager</text>
+                                <text x="250" y="124" class="arch-sublabel2">Cortex API client</text>
+                                <text x="250" y="136" class="arch-sublabel2">Attack script orchestration</text>
+                                <text x="250" y="152" class="arch-sublabel2">WebSocket polling</text>
+                                <text x="250" y="168" class="arch-sublabel2" style="fill:var(--accent-cyan);">run.sh &rarr; auto-start</text>
+                            </g>
+
+                            <!-- tfstate (local) -->
+                            <g>
+                                <rect x="15" y="190" width="110" height="35" rx="6" class="arch-box" style="stroke:var(--text-dim);fill:rgba(148,163,184,0.06);" />
+                                <text x="70" y="210" class="arch-label-sm" style="fill:var(--text-dim);">tfstate (local)</text>
+                                <text x="70" y="222" class="arch-sublabel2">terraform-infra/</text>
+                            </g>
+
+                            <!-- Toolbox Container -->
+                            <g>
+                                <rect x="25" y="260" width="410" height="145" rx="10" class="arch-box" style="stroke:var(--accent-orange);fill:rgba(249,115,22,0.06);" />
+                                <text x="230" y="282" class="arch-icon-sm">&#128230;</text>
+                                <text x="230" y="298" class="arch-label">Runner Toolbox Container</text>
+                                <text x="230" y="314" class="arch-sublabel">k8s-escape-toolbox (Ubuntu 22.04)</text>
+                                <!-- Tools grid -->
+                                <rect x="40" y="325" width="85" height="28" rx="4" style="fill:rgba(249,115,22,0.1);stroke:var(--accent-orange);stroke-width:0.8;" />
+                                <text x="82" y="343" class="arch-sublabel2" style="fill:var(--accent-orange);">Terraform</text>
+                                <rect x="135" y="325" width="75" height="28" rx="4" style="fill:rgba(249,115,22,0.1);stroke:var(--accent-orange);stroke-width:0.8;" />
+                                <text x="172" y="343" class="arch-sublabel2" style="fill:var(--accent-orange);">kubectl</text>
+                                <rect x="220" y="325" width="75" height="28" rx="4" style="fill:rgba(249,115,22,0.1);stroke:var(--accent-orange);stroke-width:0.8;" />
+                                <text x="257" y="343" class="arch-sublabel2" style="fill:var(--accent-orange);">AWS CLI</text>
+                                <rect x="305" y="325" width="60" height="28" rx="4" style="fill:rgba(249,115,22,0.1);stroke:var(--accent-orange);stroke-width:0.8;" />
+                                <text x="335" y="343" class="arch-sublabel2" style="fill:var(--accent-orange);">Helm</text>
+                                <rect x="375" y="325" width="50" height="28" rx="4" style="fill:rgba(249,115,22,0.1);stroke:var(--accent-orange);stroke-width:0.8;" />
+                                <text x="400" y="343" class="arch-sublabel2" style="fill:var(--accent-orange);">Docker</text>
+
+                                <rect x="40" y="360" width="110" height="28" rx="4" style="fill:rgba(34,197,94,0.1);stroke:var(--accent-green);stroke-width:0.8;" />
+                                <text x="95" y="378" class="arch-sublabel2" style="fill:var(--accent-green);">CortexCLI (CWP)</text>
+
+                                <text x="230" y="400" class="arch-sublabel2">/project mounted &bull; Docker socket &bull; AWS creds</text>
+                            </g>
+
+                            <!-- Docker Socket -->
+                            <g>
+                                <rect x="25" y="415" width="280" height="80" rx="8" class="arch-box" style="stroke:var(--accent-orange);fill:rgba(249,115,22,0.04);opacity:0.7;" />
+                                <text x="165" y="438" class="arch-label-sm" style="fill:var(--accent-orange);">Docker Engine</text>
+                                <text x="165" y="455" class="arch-sublabel2">/var/run/docker.sock</text>
+                                <text x="165" y="468" class="arch-sublabel2">docker build &bull; docker push &bull; image scan</text>
+                                <text x="165" y="481" class="arch-sublabel2">Container images (local cache)</text>
+                            </g>
+
+                            <!-- Attack scripts -->
+                            <g>
+                                <rect x="315" y="415" width="125" height="80" rx="8" class="arch-box arch-box-attacker" />
+                                <text x="377" y="438" class="arch-icon-sm">&#128187;</text>
+                                <text x="377" y="453" class="arch-label-sm" style="fill:var(--accent-red);">Attack Scripts</text>
+                                <text x="377" y="468" class="arch-sublabel2">Steps 1-6</text>
+                                <text x="377" y="481" class="arch-sublabel2">curl &rarr; webshell</text>
+                                <text x="377" y="492" class="arch-sublabel2" style="fill:var(--accent-red);">Local execution</text>
+                            </g>
+
+                            <!-- ═══ AWS COMPONENTS ═══ -->
+
+                            <!-- EKS Cluster -->
+                            <g>
+                                <rect x="490" y="40" width="220" height="120" rx="10" class="arch-box" style="stroke:var(--accent-cyan);fill:rgba(6,182,212,0.06);" />
+                                <text x="600" y="60" class="arch-icon-sm">&#9096;</text>
+                                <text x="600" y="78" class="arch-label">EKS Cluster</text>
+                                <text x="600" y="94" class="arch-sublabel">eks-escape-demo</text>
+                                <text x="600" y="110" class="arch-sublabel2">Nodes &bull; Pods &bull; Services</text>
+                                <text x="600" y="124" class="arch-sublabel2">vuln-app &bull; Cortex Agent</text>
+                                <text x="600" y="138" class="arch-sublabel2">K8s API &bull; LoadBalancer</text>
+                                <text x="600" y="152" class="arch-sublabel2" style="fill:var(--accent-red);">WebApp (CVE-2022-22965)</text>
+                            </g>
+
+                            <!-- ECR -->
+                            <g>
+                                <rect x="730" y="45" width="110" height="55" rx="8" class="arch-box arch-box-aws" />
+                                <text x="785" y="66" class="arch-icon-sm">&#128230;</text>
+                                <text x="785" y="83" class="arch-label-sm">ECR</text>
+                                <text x="785" y="96" class="arch-sublabel2">Container Registry</text>
+                            </g>
+
+                            <!-- Lambda -->
+                            <g>
+                                <rect x="490" y="180" width="170" height="70" rx="10" class="arch-box arch-box-lambda" />
+                                <text x="575" y="203" class="arch-icon-sm">&#955;</text>
+                                <text x="575" y="220" class="arch-label">Lambda</text>
+                                <text x="575" y="236" class="arch-sublabel">Containment</text>
+                                <text x="575" y="248" class="arch-sublabel2">STS &rarr; EKS API</text>
+                            </g>
+
+                            <!-- IAM -->
+                            <g>
+                                <rect x="680" y="180" width="130" height="70" rx="8" class="arch-box arch-box-aws" style="opacity:0.7;" />
+                                <text x="745" y="203" class="arch-icon-sm" style="opacity:0.7;">&#128274;</text>
+                                <text x="745" y="220" class="arch-label-sm" style="opacity:0.7;">IAM</text>
+                                <text x="745" y="236" class="arch-sublabel2" style="opacity:0.7;">Dashboard User</text>
+                                <text x="745" y="248" class="arch-sublabel2" style="opacity:0.7;">Lambda Invoker Role</text>
+                            </g>
+
+                            <!-- IMDS -->
+                            <g>
+                                <rect x="840" y="130" width="100" height="45" rx="6" class="arch-box arch-box-imds" style="opacity:0.6;" />
+                                <text x="890" y="151" class="arch-label-sm" style="opacity:0.6;">IMDS</text>
+                                <text x="890" y="168" class="arch-sublabel2" style="opacity:0.6;">169.254.169.254</text>
+                            </g>
+
+                            <!-- ═══ CORTEX COMPONENTS ═══ -->
+
+                            <!-- Cortex XSIAM -->
+                            <g>
+                                <rect x="490" y="350" width="200" height="110" rx="12" class="arch-box arch-box-cortex" />
+                                <text x="590" y="375" class="arch-icon">&#128737;</text>
+                                <text x="590" y="398" class="arch-label" style="fill:var(--accent-green);">Cortex XSIAM</text>
+                                <text x="590" y="415" class="arch-sublabel">Detection &amp; Response</text>
+                                <text x="590" y="430" class="arch-sublabel2">Issues &bull; Playbooks &bull; XQL</text>
+                                <text x="590" y="445" class="arch-sublabel2">Automation Scripts</text>
+                            </g>
+
+                            <!-- Cortex Agent (in EKS) -->
+                            <g>
+                                <rect x="720" y="355" width="170" height="100" rx="10" class="arch-box arch-box-agent" />
+                                <text x="805" y="378" class="arch-icon-sm">&#128737;</text>
+                                <text x="805" y="395" class="arch-label-sm" style="fill:var(--accent-green);">Cortex Cloud</text>
+                                <text x="805" y="408" class="arch-label-sm" style="fill:var(--accent-green);">Security Agent</text>
+                                <text x="805" y="425" class="arch-sublabel2">DaemonSet on EKS nodes</text>
+                                <text x="805" y="438" class="arch-sublabel2">Telemetry &rarr; XSIAM</text>
+                                <text x="805" y="451" class="arch-sublabel2" style="fill:var(--accent-green);">CWP &bull; BTP &bull; Anti-Webshell</text>
+                            </g>
+
+                        </svg>
+
+                        <!-- Legend -->
+                        <div class="arch-legend">
+                            <span class="arch-legend-item"><span class="arch-legend-dot" style="background:var(--accent-cyan);"></span> Dashboard (local)</span>
+                            <span class="arch-legend-item"><span class="arch-legend-dot" style="background:var(--accent-orange);"></span> Toolbox (Docker)</span>
+                            <span class="arch-legend-item"><span class="arch-legend-dot" style="background:var(--accent-green);"></span> Cortex Cloud</span>
+                            <span class="arch-legend-item"><span class="arch-legend-dot attack"></span> Attack flow</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Platform details -->
+                <div class="overview-section">
+                    <div class="overview-phase">
+                        <div class="overview-phase-header">
+                            <span class="overview-phase-num" style="background:rgba(6,182,212,0.2);color:var(--accent-cyan);">1</span>
+                            <span class="overview-phase-title">Local Dashboard (Flask)</span>
+                        </div>
+                        <p>The Flask web application runs <strong>locally</strong> on your machine. It serves the UI, manages background tasks, and orchestrates all operations. No cloud hosting needed — just <code>./run.sh</code>.</p>
+                        <ul>
+                            <li><strong>API routes</strong> — REST endpoints for each operation (infra, build, deploy, attack, cortex)</li>
+                            <li><strong>Task manager</strong> — async background execution with real-time output streaming</li>
+                            <li><strong>Cortex API client</strong> — deploy scripts/playbooks, fetch alerts, import policies</li>
+                            <li><strong>Attack orchestration</strong> — Steps 1-6 run locally via bash scripts + curl to the webshell</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="overview-section">
+                    <div class="overview-phase">
+                        <div class="overview-phase-header">
+                            <span class="overview-phase-num" style="background:rgba(249,115,22,0.2);color:var(--accent-orange);">2</span>
+                            <span class="overview-phase-title">Runner Toolbox Container</span>
+                        </div>
+                        <p>A Docker container with all CLI tools, <strong>auto-built at startup</strong>. Commands are routed via <code>docker exec</code> — no need to install terraform, kubectl, or aws cli locally.</p>
+                        <ul>
+                            <li><strong>Terraform</strong> — infrastructure provisioning (EKS, VPC, Lambda, IAM)</li>
+                            <li><strong>kubectl</strong> — Kubernetes manifests deployment and management</li>
+                            <li><strong>AWS CLI</strong> — ECR login, STS, infrastructure operations</li>
+                            <li><strong>Helm</strong> — chart deployments (XDR agent)</li>
+                            <li><strong>CortexCLI</strong> — container image scanning (CWP), downloaded from tenant at runtime</li>
+                            <li><strong>Docker CLI</strong> — build, push, scan via mounted Docker socket</li>
+                        </ul>
+                        <p style="font-size:0.82rem;color:var(--text-dim);margin-top:0.5rem;">Volumes: <code>/project</code> (source), <code>/var/run/docker.sock</code> (Docker), <code>~/.aws</code> (credentials). Terraform state stays local.</p>
+                    </div>
+                </div>
+
+                <div class="overview-section">
+                    <div class="overview-phase">
+                        <div class="overview-phase-header">
+                            <span class="overview-phase-num" style="background:rgba(34,197,94,0.2);color:var(--accent-green);">3</span>
+                            <span class="overview-phase-title">Cortex Cloud Integration</span>
+                        </div>
+                        <p>Cortex XSIAM provides <strong>detection, investigation, and automated response</strong>. The Cortex Cloud Security Agent (DaemonSet) collects telemetry from EKS nodes.</p>
+                        <ul>
+                            <li><strong>Agent</strong> — deployed on each EKS node, detects webshells, container escapes, malware</li>
+                            <li><strong>Issues</strong> — XDR issues created for each detection (Local Threat, Container Escape, etc.)</li>
+                            <li><strong>Playbooks</strong> — automated containment (NetworkPolicy, RBAC, scale down, cordon)</li>
+                            <li><strong>CortexCLI</strong> — pre-deployment image scanning for vulnerabilities and malware</li>
+                            <li><strong>API</strong> — scripts/playbooks deployment, alert polling, policy management</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="overview-section">
+                    <div class="overview-phase">
+                        <div class="overview-phase-header">
+                            <span class="overview-phase-num" style="background:rgba(249,115,22,0.2);color:var(--accent-orange);">4</span>
+                            <span class="overview-phase-title">Portability</span>
+                        </div>
+                        <p>The platform detects the host environment at startup and adapts automatically:</p>
+                        <ul>
+                            <li><strong>macOS (Apple Silicon)</strong> — arm64 toolbox, Docker Desktop socket at <code>~/.docker/run/docker.sock</code></li>
+                            <li><strong>macOS (Intel)</strong> — amd64 toolbox, standard Docker socket</li>
+                            <li><strong>Linux</strong> — native amd64/arm64 toolbox, <code>/var/run/docker.sock</code></li>
+                            <li><strong>Windows (WSL2)</strong> — Linux toolbox in WSL, Docker Desktop integration</li>
+                            <li><strong>No Docker</strong> — graceful fallback, tools must be installed locally</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </main>
 
 </div>
@@ -1015,10 +1786,47 @@ export AWS_SESSION_TOKEN="..."' oninput="parseAwsExport()"></textarea>
     </div>
 </div>
 
+<!-- ─── External Cluster (BYOC) Modal ─────────────── -->
+<div class="modal-overlay" id="byoc-modal">
+    <div class="modal modal-wide">
+        <h3 style="color: #22c55e;">External Cluster (BYOC)</h3>
+        <p>Connect to an existing Kubernetes cluster. Skip infrastructure deployment and use your own cluster.</p>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="byoc-enabled" onchange="toggleByocFields()"> Enable External Cluster
+            </label>
+        </div>
+        <div id="byoc-fields">
+            <div class="form-group">
+                <label for="byoc-kubeconfig">Kubeconfig <span class="optional">(paste content or leave empty to use default ~/.kube/config)</span></label>
+                <textarea id="byoc-kubeconfig" rows="6" placeholder="apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://...
+  name: my-cluster
+..."></textarea>
+            </div>
+            <div class="form-group">
+                <label for="byoc-host">Application Host <span class="optional">(LoadBalancer hostname or IP of the vuln-app)</span></label>
+                <input type="text" id="byoc-host" placeholder="a809e77f3f12b414...eu-west-3.elb.amazonaws.com" autocomplete="off" />
+            </div>
+            <div class="form-group">
+                <label for="byoc-image">Container Image URL <span class="optional">(for Deploy step)</span></label>
+                <input type="text" id="byoc-image" placeholder="012345678901.dkr.ecr.eu-west-3.amazonaws.com/vuln-app:latest" autocomplete="off" />
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="closeByocSettings()">Cancel</button>
+            <button class="btn btn-success" onclick="saveByocSettings()">Save</button>
+        </div>
+    </div>
+</div>
+
 <!-- ─── Cortex Settings Modal ─────────────────────── -->
 <div class="modal-overlay" id="cortex-modal">
     <div class="modal modal-wide">
-        <h3 style="color: #818cf8;">Cortex API</h3>
+        <h3 style="color: #22c55e;">Cortex API</h3>
         <p>Configure your Cortex API credentials to deploy scripts and playbooks (containment, forensic, threat hunt). Stored in-memory only.</p>
         <div class="form-group">
             <label for="cortex-base-url">API Base URL</label>
@@ -1081,6 +1889,6 @@ export AWS_SESSION_TOKEN="..."' oninput="parseAwsExport()"></textarea>
     </div>
 </div>
 
-<script src="/static/js/app.js?v=23"></script>
+<script src="/static/js/app.js?v=48"></script>
 </body>
 </html>

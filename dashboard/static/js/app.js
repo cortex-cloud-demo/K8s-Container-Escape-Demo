@@ -19,6 +19,8 @@ const STEPS = [
     { id: 'escape',   el: 'hc-escape',   attack: true },
     { id: 'takeover', el: 'hc-takeover', attack: true },
     { id: 'scan',     el: 'hc-scan',     attack: true },
+    { id: 'malware',  el: 'hc-malware',  attack: true },
+    { id: 'lateral',  el: 'hc-lateral',  attack: true },
 ];
 
 // ─── Terminal ─────────────────────────────────────────────────────────────────
@@ -55,6 +57,12 @@ function startPolling(taskId) {
             el.scrollTop = el.scrollHeight;
 
             updateContentHeader(task.name, task.status);
+
+            // Update step status on EVERY poll — this triggers diagram animations
+            // when status is 'running', not just on completion
+            if (task.status === 'running' || task.status === 'starting') {
+                updateStepStatus(task.name, 'running');
+            }
 
             if (task.status === 'success' || task.status === 'error') {
                 stopPolling();
@@ -111,6 +119,8 @@ function updateStepStatus(taskName, status) {
         'Step 2: Container Escape': 'escape',
         'Step 3: Cluster Takeover': 'takeover',
         'Step 4: K8s Vulnerability Scanning': 'scan',
+        'Step 5: Deploy Malware': 'malware',
+        'Step 6: Lateral Movement': 'lateral',
         'Terraform Destroy': null,
         'Deploy Lambda': null,
         'Destroy Lambda': null,
@@ -132,7 +142,10 @@ function updateStepStatus(taskName, status) {
         'Step 2: Container Escape': { id: 'escape-status',         ok: 'escaped',     run: 'running...' },
         'Step 3: Cluster Takeover': { id: 'takeover-status',       ok: 'pwned',       run: 'running...' },
         'Step 4: K8s Vulnerability Scanning': { id: 'scanning-status', ok: 'scanned',   run: 'scanning...' },
+        'Step 5: Deploy Malware':             { id: 'malware-status',  ok: 'deployed',  run: 'deploying...' },
+        'Step 6: Lateral Movement':           { id: 'lateral-status',  ok: 'moved',     run: 'moving...' },
         'Undeploy from EKS':        { id: 'deploy-status',         ok: 'undeployed',  run: 'removing...' },
+        'Cortex CLI: Image Scan':   { id: 'image-scan-status',     ok: 'scanned',     run: 'scanning...' },
         'Deploy Lambda':            { id: 'lambda-deploy-status',  ok: 'deployed',    run: 'deploying...' },
         'Terraform Destroy':        { id: 'infra-destroy-status',  ok: 'destroyed',   run: 'destroying...' },
         'Destroy Lambda':           { id: 'lambda-destroy-status', ok: 'destroyed',   run: 'destroying...' },
@@ -178,6 +191,9 @@ function renderKillChain() {
             }
         }
     });
+
+    // Update architecture diagram
+    updateArchDiagram();
 }
 
 async function refreshHost() {
@@ -550,6 +566,7 @@ async function saveAwsCredentials() {
         if (res.ok) {
             closeAwsSettings();
             updateAwsStatus('configured');
+            refreshAwsRegionLabel();
             termWriteHeader('AWS Credentials');
             termWrite('Credentials saved successfully.\n');
             termWrite(`Region: ${payload.aws_region}\n`);
@@ -1595,27 +1612,39 @@ async function k8sStatus() {
 }
 
 function attackStep1() {
-    openTab('terminal');
+    openTab('overview');
     termWriteHeader('STEP 1: Spring4Shell RCE (CVE-2022-22965)');
     apiCall('/api/attack/step1');
 }
 
 function attackStep2() {
-    openTab('terminal');
+    openTab('overview');
     termWriteHeader('STEP 2: Container Escape');
     apiCall('/api/attack/step2');
 }
 
 function attackStep3() {
-    openTab('terminal');
+    openTab('overview');
     termWriteHeader('STEP 3: Cluster Takeover');
     apiCall('/api/attack/step3');
 }
 
 function attackStep4() {
-    openTab('terminal');
+    openTab('overview');
     termWriteHeader('STEP 4: K8s Vulnerability Scanning');
     apiCall('/api/attack/step4');
+}
+
+function attackStep5() {
+    openTab('overview');
+    termWriteHeader('STEP 5: Deploy Malware & Offensive Tools');
+    apiCall('/api/attack/step5');
+}
+
+function attackStep6() {
+    openTab('overview');
+    termWriteHeader('STEP 6: Lateral Movement');
+    apiCall('/api/attack/step6');
 }
 
 function shellExec() {
@@ -1922,6 +1951,657 @@ function radarReset() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+// ─── Live Architecture Diagram ───────────────────────────────────────────────
+
+const ARCH_STEP_MAP = {
+    rce: {
+        label: 'Step 1: Spring4Shell RCE (CVE-2022-22965)',
+        conns: { 'conn-atk-inet': 'attack', 'conn-inet-lb': 'attack', 'conn-lb-pod': 'attack' },
+        nodes: { 'arch-attacker': 'attack', 'arch-internet': 'attack', 'arch-lb': 'attack', 'arch-pod': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    escape: {
+        label: 'Step 2: Container Escape (nsenter, mount, chroot)',
+        conns: { 'conn-atk-inet': 'attack', 'conn-inet-lb': 'attack', 'conn-lb-pod': 'attack', 'conn-pod-node': 'attack', 'conn-node-imds': 'attack' },
+        nodes: { 'arch-attacker': 'attack', 'arch-internet': 'attack', 'arch-lb': 'attack', 'arch-pod': 'attack', 'arch-node': 'attack', 'arch-imds': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    takeover: {
+        label: 'Step 3: Cluster Takeover (SA token cluster-admin)',
+        conns: { 'conn-atk-inet': 'attack', 'conn-inet-lb': 'attack', 'conn-lb-pod': 'attack', 'conn-pod-node': 'attack', 'conn-node-api': 'attack' },
+        nodes: { 'arch-attacker': 'attack', 'arch-internet': 'attack', 'arch-lb': 'attack', 'arch-pod': 'attack', 'arch-node': 'attack', 'arch-api': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    scan: {
+        label: 'Step 4: K8s Vulnerability Scanning (T1610/T1613)',
+        conns: { 'conn-atk-inet': 'attack', 'conn-inet-lb': 'attack', 'conn-lb-pod': 'attack', 'conn-pod-node': 'attack', 'conn-node-api': 'attack' },
+        nodes: { 'arch-attacker': 'attack', 'arch-internet': 'attack', 'arch-lb': 'attack', 'arch-pod': 'attack', 'arch-node': 'attack', 'arch-api': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    malware: {
+        label: 'Step 5: Deploy Malware (WildFire, deepce, reverse shell)',
+        conns: { 'conn-atk-inet': 'attack', 'conn-inet-lb': 'attack', 'conn-lb-pod': 'attack' },
+        nodes: { 'arch-attacker': 'attack', 'arch-internet': 'attack', 'arch-lb': 'attack', 'arch-pod': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+    lateral: {
+        label: 'Step 6: Lateral Movement (SSH, rogue pod, IMDS, cross-NS)',
+        conns: { 'conn-atk-inet': 'attack', 'conn-inet-lb': 'attack', 'conn-lb-pod': 'attack', 'conn-pod-node': 'attack', 'conn-node-api': 'attack', 'conn-node-imds': 'attack' },
+        nodes: { 'arch-attacker': 'attack', 'arch-internet': 'attack', 'arch-lb': 'attack', 'arch-pod': 'attack', 'arch-node': 'attack', 'arch-api': 'attack', 'arch-imds': 'attack' },
+        detect: { 'conn-pod-agent': 'detect', 'conn-agent-cortex': 'detect' },
+        detectNodes: { 'arch-agent': 'detect', 'arch-cortex': 'detect' },
+    },
+};
+
+function updateArchDiagram() {
+    // Reset all visual states
+    document.querySelectorAll('.arch-conn').forEach(c => {
+        c.classList.remove('active-attack', 'active-detect', 'active-response', 'done-attack', 'done-detect', 'done-response');
+    });
+    document.querySelectorAll('.arch-node').forEach(n => {
+        n.classList.remove('highlight-attack', 'highlight-detect', 'highlight-response', 'node-active-pulse');
+    });
+
+    const stepBanner = document.getElementById('arch-step-banner');
+    const stepLabel = document.getElementById('arch-step-label');
+    const statusEl = document.getElementById('arch-status');
+    const playbookTasks = document.getElementById('arch-playbook-tasks');
+    const cortexAlert = document.getElementById('arch-cortex-alert');
+    const cortexPlaybook = document.getElementById('arch-cortex-playbook');
+
+    if (stepBanner) stepBanner.style.display = 'none';
+    if (playbookTasks) playbookTasks.style.display = 'none';
+    if (cortexAlert) cortexAlert.style.display = 'none';
+    if (cortexPlaybook) cortexPlaybook.style.display = 'none';
+
+    let activeStep = null;
+    let activeStepId = null;
+    let anyActive = false;
+    let completedCount = 0;
+
+    // Apply states for each step
+    for (const [stepId, mapping] of Object.entries(ARCH_STEP_MAP)) {
+        const status = state.stepStatuses[stepId];
+        if (!status) continue;
+
+        const isActive = status === 'running';
+        const isDone = status === 'success';
+
+        if (isActive) { activeStep = mapping; activeStepId = stepId; anyActive = true; }
+        if (isDone) completedCount++;
+
+        if (isDone || isActive) {
+            // Attack connections — thick glowing lines when active
+            for (const [connId, type] of Object.entries(mapping.conns)) {
+                const el = document.getElementById(connId);
+                if (el) el.classList.add(isActive ? `active-${type}` : `done-${type}`);
+            }
+            // Attack nodes — strong pulsing glow when active
+            for (const [nodeId, type] of Object.entries(mapping.nodes)) {
+                const el = document.getElementById(nodeId);
+                if (el) {
+                    if (isActive) {
+                        el.classList.add(`highlight-${type}`, 'node-active-pulse');
+                    }
+                }
+            }
+            // Detection connections
+            for (const [connId, type] of Object.entries(mapping.detect)) {
+                const el = document.getElementById(connId);
+                if (el) el.classList.add(isDone ? `done-${type}` : `active-${type}`);
+            }
+            // Detection nodes
+            for (const [nodeId, type] of Object.entries(mapping.detectNodes || {})) {
+                const el = document.getElementById(nodeId);
+                if (el && isActive) el.classList.add(`highlight-${type}`, 'node-active-pulse');
+            }
+        }
+    }
+
+    // Show active step banner with prominent styling
+    if (activeStep && stepBanner && stepLabel) {
+        stepLabel.textContent = activeStep.label;
+        stepBanner.style.display = '';
+    }
+
+    // Update status indicator
+    if (statusEl) {
+        statusEl.classList.remove('status-attack', 'status-detect', 'status-idle');
+        if (anyActive) {
+            statusEl.textContent = activeStep ? activeStep.label : 'Running...';
+            statusEl.classList.add('status-attack');
+        } else if (completedCount > 0) {
+            statusEl.textContent = `${completedCount}/6 steps completed`;
+            statusEl.classList.add('status-detect');
+        } else {
+            statusEl.textContent = 'Idle';
+            statusEl.classList.add('status-idle');
+        }
+    }
+
+    // Animate particles along ALL active attack paths
+    const ctaBanner = document.getElementById('arch-cta-banner');
+    if (ctaBanner) ctaBanner.style.display = 'none';
+
+    // Stop all previous particle animations
+    stopAllParticles();
+
+    if (anyActive && activeStep) {
+        // Create particles for each active attack connection
+        const attackConns = Object.entries(activeStep.conns).filter(([,t]) => t === 'attack');
+        attackConns.forEach(([connId], idx) => {
+            const pathEl = document.getElementById(connId);
+            if (pathEl) {
+                const p = getOrCreateParticle('attack-' + idx, 5, '#ef4444');
+                animateParticleAlongPath(p, pathEl, 0.006 + idx * 0.002);
+            }
+        });
+
+        // Create particles for detection connections
+        const detectConns = Object.entries(activeStep.detect).filter(([,t]) => t === 'detect');
+        detectConns.forEach(([connId], idx) => {
+            const pathEl = document.getElementById(connId);
+            if (pathEl) {
+                const p = getOrCreateParticle('detect-' + idx, 4, '#22c55e');
+                animateParticleAlongPath(p, pathEl, 0.005);
+            }
+        });
+    }
+
+    // Show detection activity on Cortex when steps complete
+    if (completedCount >= 1 && cortexAlert) {
+        cortexAlert.textContent = 'Analyzing threats...';
+        cortexAlert.style.display = '';
+        cortexAlert.style.fill = '#f97316';
+    }
+
+    // Show playbook tasks panel and CTA when all attack steps done
+    if (completedCount >= 6 && playbookTasks) {
+        playbookTasks.style.display = '';
+        // Activate response connections
+        const connCL = document.getElementById('conn-cortex-lambda');
+        const connLA = document.getElementById('conn-lambda-api');
+        if (connCL) connCL.classList.add('active-response');
+        if (connLA) connLA.classList.add('active-response');
+        // Highlight response nodes
+        const lambda = document.getElementById('arch-lambda');
+        if (lambda) lambda.classList.add('highlight-response', 'node-active-pulse');
+        const cortex = document.getElementById('arch-cortex');
+        if (cortex) cortex.classList.add('highlight-response', 'node-active-pulse');
+
+        if (cortexAlert) {
+            cortexAlert.textContent = 'Cortex Analyses - Incident detected';
+            cortexAlert.style.fill = '#ef4444';
+        }
+        if (cortexPlaybook) {
+            cortexPlaybook.textContent = 'Playbook ready';
+            cortexPlaybook.style.display = '';
+            cortexPlaybook.style.fill = '#22c55e';
+        }
+        // Show blinking CTA
+        if (ctaBanner) ctaBanner.style.display = '';
+
+        // Animate response particles (Cortex → Lambda → API)
+        const connCLpath = document.getElementById('conn-cortex-lambda');
+        const connLApath = document.getElementById('conn-lambda-api');
+        if (connCLpath) {
+            const p = getOrCreateParticle('response-0', 5, '#22c55e');
+            animateParticleAlongPath(p, connCLpath, 0.006);
+        }
+        if (connLApath) {
+            const p = getOrCreateParticle('response-1', 5, '#22c55e');
+            animateParticleAlongPath(p, connLApath, 0.006);
+        }
+    }
+}
+
+// ─── SVG Particle Animation Engine ──────────────────────────────────────────
+
+let particleAnimations = {};
+let particleElements = {};
+
+function getOrCreateParticle(id, radius, color) {
+    if (particleElements[id]) {
+        particleElements[id].style.display = '';
+        return particleElements[id];
+    }
+    const svg = document.querySelector('.arch-svg');
+    if (!svg) return null;
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.id = 'dyn-particle-' + id;
+    circle.setAttribute('r', radius);
+    circle.style.fill = color;
+    circle.style.filter = `drop-shadow(0 0 8px ${color})`;
+    svg.appendChild(circle);
+    particleElements[id] = circle;
+    return circle;
+}
+
+function stopAllParticles() {
+    for (const [id, animId] of Object.entries(particleAnimations)) {
+        cancelAnimationFrame(animId);
+    }
+    particleAnimations = {};
+    for (const [id, el] of Object.entries(particleElements)) {
+        if (el) el.style.display = 'none';
+    }
+}
+
+function animateParticleAlongPath(circle, pathEl, speed) {
+    if (!circle || !pathEl) return;
+    const id = circle.id;
+    if (particleAnimations[id]) cancelAnimationFrame(particleAnimations[id]);
+
+    const totalLength = pathEl.getTotalLength();
+    let progress = Math.random(); // random start position
+
+    function step() {
+        progress += (speed || 0.006);
+        if (progress > 1) progress = 0;
+        const point = pathEl.getPointAtLength(progress * totalLength);
+        circle.setAttribute('cx', point.x);
+        circle.setAttribute('cy', point.y);
+        particleAnimations[id] = requestAnimationFrame(step);
+    }
+    step();
+}
+
+// ─── AWS Region Label ────────────────────────────────────────────────────────
+
+function refreshAwsRegionLabel() {
+    fetch('/api/credentials').then(r => r.json()).then(data => {
+        const region = data.aws_region || '';
+        const el = document.getElementById('arch-aws-label');
+        if (el) {
+            el.textContent = region ? `AWS CLOUD (${region})` : 'AWS CLOUD';
+        }
+        const el2 = document.getElementById('arch2-aws-label');
+        if (el2) {
+            el2.textContent = region ? `AWS CLOUD (${region})` : 'AWS CLOUD';
+        }
+    }).catch(() => {});
+}
+
+// ─── Toolbox Status ──────────────────────────────────────────────────────────
+
+async function refreshToolboxStatus() {
+    const dot = document.getElementById('toolbox-dot');
+    const label = document.getElementById('toolbox-value');
+    if (!dot || !label) return;
+
+    try {
+        const res = await fetch('/api/toolbox/status');
+        const data = await res.json();
+
+        dot.classList.remove('active', 'building', 'error');
+
+        if (data.running) {
+            dot.classList.add('active');
+            const versions = data.versions || {};
+            label.textContent = 'Runner: running';
+            label.title = Object.entries(versions).map(([k,v]) => `${k}: ${v}`).join('\n');
+        } else if (data.status === 'stopped') {
+            label.textContent = 'Runner: stopped';
+            label.title = 'Container not running. Tools run locally.';
+        } else {
+            label.textContent = 'Runner: n/a';
+            label.title = 'Docker not available';
+        }
+    } catch (e) {
+        dot.classList.remove('active', 'error');
+        dot.classList.add('building');
+        label.textContent = 'Runner: building...';
+        label.title = 'Building runner toolbox container...';
+    }
+}
+
+// ─── Cortex CLI Image Scan ────────────────────────────────────────────────────
+
+function cortexImageScan(imageName) {
+    openTab('terminal');
+    termWriteHeader('Cortex CLI - Container Image Scan (CWP)');
+    showNotification('Cortex CLI scan started — this may take 2-5 minutes...', 'info');
+    const body = imageName ? { image: imageName } : {};
+    apiCall('/api/cortex/image-scan', 'POST', body);
+}
+
+function showNotification(message, type) {
+    // Remove existing notification
+    const existing = document.getElementById('toast-notification');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.id = 'toast-notification';
+    toast.className = 'toast-notification toast-' + (type || 'info');
+    toast.innerHTML = '<span class="toast-icon">' + (type === 'info' ? '&#9432;' : type === 'success' ? '&#10003;' : '&#9888;') + '</span> ' + message;
+    document.body.appendChild(toast);
+
+    // Auto-remove after 10s
+    setTimeout(() => { toast.classList.add('toast-fade'); setTimeout(() => toast.remove(), 500); }, 10000);
+}
+
+function cortexImageScanCustom() {
+    const imageName = prompt('Enter the Docker image to scan:', 'nginx:latest');
+    if (imageName) {
+        cortexImageScan(imageName);
+    }
+}
+
+// ─── Diagram Links ───────────────────────────────────────────────────────────
+
+function openCortexConsole() {
+    // Derive console URL from API URL
+    // API: https://api-<tenant>.xdr.<region>.paloaltonetworks.com
+    // Console: https://<tenant>.xdr.<region>.paloaltonetworks.com
+    fetch('/api/cortex/credentials').then(r => r.json()).then(data => {
+        const apiUrl = data.base_url || '';
+        if (!apiUrl) {
+            alert('Cortex API URL not configured. Go to Settings > Cortex > Configure.');
+            return;
+        }
+        // Remove api- prefix and trailing slashes
+        let consoleUrl = apiUrl.replace(/\/+$/, '');
+        // Pattern: https://api-<tenant>.xdr.<region>.paloaltonetworks.com
+        consoleUrl = consoleUrl.replace(/^(https?:\/\/)api-/, '$1');
+        window.open(consoleUrl, '_blank');
+    }).catch(() => {
+        alert('Cannot read Cortex settings.');
+    });
+}
+
+function openCortexCases() {
+    fetch('/api/cortex/credentials').then(r => r.json()).then(data => {
+        const apiUrl = data.base_url || '';
+        if (!apiUrl) {
+            alert('Cortex API URL not configured. Go to Settings > Cortex > Configure.');
+            return;
+        }
+        let consoleUrl = apiUrl.replace(/\/+$/, '').replace(/^(https?:\/\/)api-/, '$1');
+        window.open(consoleUrl + '/cases', '_blank');
+    }).catch(() => alert('Cannot read Cortex settings.'));
+}
+
+function openWebApp() {
+    const hostEl = document.getElementById('host-value');
+    const host = hostEl ? hostEl.textContent : '';
+    if (!host || host === 'Not deployed') {
+        alert('WebApp not deployed. Deploy the app first.');
+        return;
+    }
+    // host may be truncated with ..., use the full host from state
+    if (state.host) {
+        window.open('http://' + state.host + '/app', '_blank');
+    } else {
+        // Try to get it from the API
+        fetch('/api/k8s/host').then(r => r.json()).then(data => {
+            if (data.host) {
+                window.open('http://' + data.host + '/app', '_blank');
+            } else {
+                alert('WebApp host not found.');
+            }
+        }).catch(() => alert('Cannot get WebApp host.'));
+    }
+}
+
+// ─── External Cluster (BYOC) ─────────────────────────────────────────────────
+
+function openByocSettings() {
+    document.getElementById('byoc-modal').classList.add('visible');
+    // Load current settings
+    fetch('/api/external-cluster').then(r => r.json()).then(data => {
+        document.getElementById('byoc-enabled').checked = data.enabled || false;
+        document.getElementById('byoc-kubeconfig').value = data.kubeconfig || '';
+        document.getElementById('byoc-host').value = data.app_host || '';
+        document.getElementById('byoc-image').value = data.image_url || '';
+        toggleByocFields();
+    }).catch(() => {});
+}
+
+function closeByocSettings() {
+    document.getElementById('byoc-modal').classList.remove('visible');
+}
+
+function toggleByocFields() {
+    const enabled = document.getElementById('byoc-enabled').checked;
+    document.getElementById('byoc-fields').style.opacity = enabled ? '1' : '0.4';
+}
+
+async function saveByocSettings() {
+    const payload = {
+        enabled: document.getElementById('byoc-enabled').checked,
+        kubeconfig: document.getElementById('byoc-kubeconfig').value.trim(),
+        app_host: document.getElementById('byoc-host').value.trim(),
+        image_url: document.getElementById('byoc-image').value.trim(),
+    };
+    try {
+        const res = await fetch('/api/external-cluster', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            closeByocSettings();
+            const el = document.getElementById('byoc-status');
+            if (payload.enabled) {
+                el.textContent = 'configured';
+                el.style.color = '#22c55e';
+            } else {
+                el.textContent = 'disabled';
+                el.style.color = '#64748b';
+            }
+            refreshHost();
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function testByocCluster() {
+    openTab('terminal');
+    termWriteHeader('Testing External Cluster Connection');
+    try {
+        const res = await fetch('/api/external-cluster/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            termWrite(data.output + '\n');
+            const el = document.getElementById('byoc-status');
+            el.textContent = 'connected';
+            el.style.color = '#22c55e';
+        } else {
+            termWrite('Error: ' + data.message + '\n');
+        }
+    } catch (e) {
+        termWrite('Error: ' + e.message + '\n');
+    }
+}
+
+// ─── Demo Wizard ─────────────────────────────────────────────────────────────
+
+let demoRunning = false;
+let demoAbort = false;
+
+const DEMO_STEPS = [
+    { name: 'Step 1: RCE',       fn: () => apiCall('/api/attack/step1'),  wait: 15000, pct: 17 },
+    { name: 'Step 2: Escape',    fn: () => apiCall('/api/attack/step2'),  wait: 8000,  pct: 33 },
+    { name: 'Step 3: Takeover',  fn: () => apiCall('/api/attack/step3'),  wait: 10000, pct: 50 },
+    { name: 'Step 4: Scan',      fn: () => apiCall('/api/attack/step4'),  wait: 12000, pct: 67 },
+    { name: 'Step 5: Malware',   fn: () => apiCall('/api/attack/step5'),  wait: 10000, pct: 83 },
+    { name: 'Step 6: Lateral',   fn: () => apiCall('/api/attack/step6'),  wait: 10000, pct: 100 },
+];
+
+async function runFullDemo() {
+    if (demoRunning) return;
+    demoRunning = true;
+    demoAbort = false;
+
+    const btn = document.getElementById('btn-demo-wizard');
+    const stopBtn = document.getElementById('btn-demo-stop');
+    const progress = document.getElementById('demo-progress');
+    const progressBar = document.getElementById('demo-progress-bar');
+    const progressText = document.getElementById('demo-progress-text');
+
+    btn.classList.add('running');
+    btn.innerHTML = '<span class="demo-wizard-icon">&#9654;</span> Running Demo...';
+    stopBtn.style.display = '';
+    progress.style.display = '';
+
+    // Open Overview to show the interactive diagram during the demo
+    openTab('overview');
+    // Scroll to the diagram
+    const diagram = document.getElementById('arch-diagram');
+    if (diagram) diagram.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    for (let i = 0; i < DEMO_STEPS.length; i++) {
+        if (demoAbort) break;
+
+        const step = DEMO_STEPS[i];
+        progressText.textContent = `${step.name} (${i+1}/${DEMO_STEPS.length})`;
+        progressBar.style.width = ((i / DEMO_STEPS.length) * 100) + '%';
+
+        // Don't clear terminal between steps in full demo mode
+        termWrite(`\n${'='.repeat(50)}\n  ${step.name}\n${'='.repeat(50)}\n\n`);
+        step.fn();
+
+        // Wait for the actual task to complete by polling task status
+        await new Promise(resolve => {
+            let elapsed = 0;
+            const maxWait = step.wait + 30000; // extra buffer
+            const check = setInterval(() => {
+                elapsed += 1000;
+                // Check if task finished (status changed from running)
+                const taskId = state.currentTaskId;
+                if (taskId) {
+                    fetch(`/api/tasks/${taskId}`).then(r => r.json()).then(task => {
+                        if (task.status === 'success' || task.status === 'error') {
+                            clearInterval(check);
+                            // Small pause between steps for readability
+                            setTimeout(resolve, 2000);
+                        }
+                    }).catch(() => {});
+                }
+                if (demoAbort || elapsed >= maxWait) {
+                    clearInterval(check);
+                    resolve();
+                }
+            }, 1500);
+        });
+
+        progressBar.style.width = step.pct + '%';
+    }
+
+    // Done
+    progressText.textContent = demoAbort ? 'Stopped' : 'Complete!';
+    progressBar.style.width = demoAbort ? progressBar.style.width : '100%';
+    btn.classList.remove('running');
+    btn.innerHTML = '<span class="demo-wizard-icon">&#9654;</span> Run Full Demo';
+    stopBtn.style.display = 'none';
+    demoRunning = false;
+
+    if (!demoAbort) {
+        termWrite('\n' + '='.repeat(50) + '\n');
+        termWrite('  FULL DEMO COMPLETE\n');
+        termWrite('  Check SOC Live tab for Cortex XDR alerts\n');
+        termWrite('='.repeat(50) + '\n');
+    }
+}
+
+function stopDemo() {
+    demoAbort = true;
+}
+
+// ─── SOC Live ────────────────────────────────────────────────────────────────
+
+let socAutoInterval = null;
+
+async function socRefresh() {
+    try {
+        const res = await fetch('/api/cortex/soc-alerts');
+        const data = await res.json();
+        if (data.status !== 'ok') {
+            document.getElementById('soc-alerts').innerHTML = `<div class="soc-empty">Error: ${data.message || 'Cannot fetch alerts'}</div>`;
+            return;
+        }
+
+        const alerts = data.alerts || [];
+        document.getElementById('soc-alert-count').textContent = alerts.length;
+
+        if (alerts.length === 0) {
+            document.getElementById('soc-alerts').innerHTML = '<div class="soc-empty">No alerts in the last 24 hours.</div>';
+            return;
+        }
+
+        // Update MITRE heatmap
+        const mitreTechniques = new Set();
+        alerts.forEach(a => {
+            (a.mitre || []).forEach(m => {
+                const tid = typeof m === 'string' ? m.split(' - ')[0] : (m.technique_id || '');
+                if (tid) mitreTechniques.add(tid.replace(/\.\d+$/, ''));
+            });
+            // Map alert categories to techniques
+            (a.category || []).forEach(cat => {
+                const catLower = (cat || '').toLowerCase();
+                if (catLower.includes('malware')) mitreTechniques.add('T1587');
+                if (catLower.includes('exploit')) mitreTechniques.add('T1190');
+                if (catLower.includes('webshell')) { mitreTechniques.add('T1505'); mitreTechniques.add('T1059'); }
+                if (catLower.includes('container')) mitreTechniques.add('T1611');
+                if (catLower.includes('credential')) mitreTechniques.add('T1552');
+            });
+        });
+        document.querySelectorAll('.mitre-cell').forEach(cell => {
+            const tid = cell.dataset.technique;
+            if (mitreTechniques.has(tid)) {
+                if (!cell.classList.contains('detected')) {
+                    cell.classList.add('detected');
+                }
+            }
+        });
+
+        // Render alerts
+        const html = alerts.map(a => {
+            const sev = (a.severity || 'unknown').toLowerCase();
+            const sevClass = sev === 'critical' ? 'critical' : sev === 'high' ? 'high' : sev === 'medium' ? 'medium' : 'low';
+            const time = a.created ? new Date(a.created).toLocaleTimeString() : '';
+            const date = a.created ? new Date(a.created).toLocaleDateString() : '';
+            const mitreStr = (a.mitre || []).map(m => typeof m === 'string' ? m : `${m.technique_id} ${m.technique_name || ''}`).join(', ');
+            return `<div class="soc-alert-item">
+                <span class="soc-alert-severity ${sevClass}">${sev}</span>
+                <div class="soc-alert-body">
+                    <div class="soc-alert-name">${a.name || 'Alert'}</div>
+                    <div class="soc-alert-desc">${a.host || ''} ${a.alert_count ? '(' + a.alert_count + ' alerts)' : ''}</div>
+                    ${mitreStr ? `<div class="soc-alert-mitre">MITRE: ${mitreStr}</div>` : ''}
+                </div>
+                <span class="soc-alert-time">${date}<br>${time}</span>
+            </div>`;
+        }).join('');
+        document.getElementById('soc-alerts').innerHTML = html;
+
+    } catch (e) {
+        document.getElementById('soc-alerts').innerHTML = `<div class="soc-empty">Error: ${e.message}</div>`;
+    }
+}
+
+function socClear() {
+    document.getElementById('soc-alerts').innerHTML = '<div class="soc-empty">Cleared. Click Refresh to reload.</div>';
+    document.getElementById('soc-alert-count').textContent = '0';
+    document.querySelectorAll('.mitre-cell').forEach(c => c.classList.remove('detected'));
+}
+
+function socToggleAutoRefresh() {
+    const checked = document.getElementById('soc-auto-refresh').checked;
+    if (checked) {
+        socRefresh();
+        socAutoInterval = setInterval(socRefresh, 30000);
+    } else {
+        if (socAutoInterval) { clearInterval(socAutoInterval); socAutoInterval = null; }
+    }
+}
+
 // ─── Theme Toggle ────────────────────────────────────────────────────────────
 
 const THEMES = ['dark', 'light', 'auto'];
@@ -1965,6 +2645,10 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', ()
 document.addEventListener('DOMContentLoaded', () => {
     // Apply saved theme
     applyTheme(getStoredTheme());
+
+    // Poll toolbox status
+    refreshToolboxStatus();
+    setInterval(refreshToolboxStatus, 10000);
     // Shell input enter key
     document.getElementById('shell-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') shellExec();
@@ -1977,6 +2661,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     refreshHost();
     refreshClusterStatus();
+    refreshAwsRegionLabel();
 
     // Load Cortex console link if credentials exist
     fetch('/api/cortex/credentials').then(r => r.json()).then(data => {

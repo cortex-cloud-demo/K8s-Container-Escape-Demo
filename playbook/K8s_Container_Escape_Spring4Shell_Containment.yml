@@ -122,7 +122,7 @@ tasks:
       agent_os_sub_type:
         simple: ${incident.agent_os_sub_type}
       cluster_name:
-        simple: ${incident.cluster_name}
+        simple: ${incident.clustername.[0]}
     separatecontext: false
     continueonerrortype: ""
     view: |-
@@ -184,7 +184,7 @@ tasks:
       action:
         simple: collect_evidence
       cluster_name:
-        simple: ${K8sEscape.ClusterName}
+        simple: ${inputs.ClusterName}
       namespace:
         simple: ${K8sEscape.Namespace}
       node_hostname:
@@ -343,7 +343,7 @@ tasks:
       action:
         simple: network_isolate
       cluster_name:
-        simple: ${K8sEscape.ClusterName}
+        simple: ${inputs.ClusterName}
       namespace:
         simple: ${K8sEscape.Namespace}
     separatecontext: false
@@ -402,7 +402,7 @@ tasks:
       action:
         simple: revoke_rbac
       cluster_name:
-        simple: ${K8sEscape.ClusterName}
+        simple: ${inputs.ClusterName}
       namespace:
         simple: ${K8sEscape.Namespace}
     separatecontext: false
@@ -459,7 +459,7 @@ tasks:
       action:
         simple: scale_down
       cluster_name:
-        simple: ${K8sEscape.ClusterName}
+        simple: ${inputs.ClusterName}
       namespace:
         simple: ${K8sEscape.Namespace}
     separatecontext: false
@@ -516,7 +516,7 @@ tasks:
       action:
         simple: cordon_node
       cluster_name:
-        simple: ${K8sEscape.ClusterName}
+        simple: ${inputs.ClusterName}
       namespace:
         simple: ${K8sEscape.Namespace}
       node_hostname:
@@ -575,7 +575,7 @@ tasks:
       action:
         simple: delete_pod
       cluster_name:
-        simple: ${K8sEscape.ClusterName}
+        simple: ${inputs.ClusterName}
       namespace:
         simple: ${K8sEscape.Namespace}
     separatecontext: false
@@ -634,7 +634,7 @@ tasks:
       action:
         simple: collect_evidence
       cluster_name:
-        simple: ${K8sEscape.ClusterName}
+        simple: ${inputs.ClusterName}
       namespace:
         simple: ${K8sEscape.Namespace}
     separatecontext: false
@@ -737,6 +737,12 @@ inputs:
       simple: k8s-escape-demo-containment
     required: true
     description: Name of the AWS Lambda containment function
+    playbookInputQuery: null
+  - key: ClusterName
+    value:
+      simple: eks-escape-demo
+    required: true
+    description: EKS cluster name (used if not found in issue fields)
     playbookInputQuery: null
 inputSections:
   - inputs:
