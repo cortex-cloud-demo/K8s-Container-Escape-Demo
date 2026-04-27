@@ -28,6 +28,17 @@ resource "aws_iam_role" "containment_lambda" {
       Action = "sts:AssumeRole"
     }]
   })
+  tags = {
+    git_commit           = "791cb1d04c6fb07ca96504f84588f83d6040e6f8"
+    git_file             = "terraform-lambda/main.tf"
+    git_last_modified_at = "2026-04-01 16:24:39"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "containment_lambda"
+    yor_trace            = "dc8096ff-9e40-4a55-b980-5bfd7c16a81f"
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_basic" {
@@ -111,7 +122,16 @@ resource "aws_iam_role" "lambda_invoker" {
   max_session_duration = 3600
 
   tags = {
-    Name = "${var.project_name}-lambda-invoker"
+    Name                 = "${var.project_name}-lambda-invoker"
+    git_commit           = "9e5d9a119a382e50dfaca29a8f6225d8242e423f"
+    git_file             = "terraform-lambda/main.tf"
+    git_last_modified_at = "2026-04-02 07:07:56"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "lambda_invoker"
+    yor_trace            = "b9e373ee-7e0f-4534-bb29-5530140f89a7"
   }
 }
 
@@ -144,8 +164,17 @@ resource "aws_iam_user" "cortex_playbook" {
   name = "${var.project_name}-cortex-playbook-user"
 
   tags = {
-    Name    = "${var.project_name}-cortex-playbook-user"
-    Purpose = "Cortex playbook - permanent credentials for Lambda invocation via AssumeRole"
+    Name                 = "${var.project_name}-cortex-playbook-user"
+    Purpose              = "Cortex playbook - permanent credentials for Lambda invocation via AssumeRole"
+    git_commit           = "9e5d9a119a382e50dfaca29a8f6225d8242e423f"
+    git_file             = "terraform-lambda/main.tf"
+    git_last_modified_at = "2026-04-02 07:07:56"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "cortex_playbook"
+    yor_trace            = "adfd4568-3f08-4ed3-bd28-9cae77c2a564"
   }
 }
 
@@ -175,6 +204,17 @@ resource "aws_eks_access_entry" "lambda" {
   cluster_name  = data.aws_eks_cluster.main.name
   principal_arn = aws_iam_role.containment_lambda.arn
   type          = "STANDARD"
+  tags = {
+    git_commit           = "791cb1d04c6fb07ca96504f84588f83d6040e6f8"
+    git_file             = "terraform-lambda/main.tf"
+    git_last_modified_at = "2026-04-01 16:24:39"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "lambda"
+    yor_trace            = "6b306db2-5b5f-456b-b326-5e41c60ce37f"
+  }
 }
 
 resource "aws_eks_access_policy_association" "lambda_admin" {
@@ -218,6 +258,15 @@ resource "aws_lambda_function" "containment" {
   }
 
   tags = {
-    Name = "${var.project_name}-containment"
+    Name                 = "${var.project_name}-containment"
+    git_commit           = "791cb1d04c6fb07ca96504f84588f83d6040e6f8"
+    git_file             = "terraform-lambda/main.tf"
+    git_last_modified_at = "2026-04-01 16:24:39"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "containment"
+    yor_trace            = "71126be0-319a-41ea-a361-348a5e5ebcef"
   }
 }

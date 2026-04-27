@@ -1,8 +1,8 @@
-# Kubernetes Container Escape Demo
+# Code-to-Cloud-to-SOC — K8s Container Escape Demo
 
-**Code to Cloud to SOC** — Full attack chain demo on AWS EKS with automated detection by Cortex XDR and incident response via Cortex playbooks + AWS Lambda containment.
+Full attack chain demo on AWS EKS — from Spring4Shell RCE to container escape to cluster takeover — with automated detection by Cortex XDR and incident response via Cortex playbooks + AWS Lambda containment.
 
-From Spring4Shell RCE to container escape to cluster takeover — 6 attack steps, 14+ Cortex XDR issues generated, automated containment via playbooks.
+6 attack steps, 14+ Cortex XDR issues generated, automated containment via playbooks. Shift-left scanning with CortexCLI (CWP + IaC/SCA).
 
 Everything is orchestrated from a **web dashboard** with a **Docker toolbox container** for portability (no local tool install required).
 
@@ -15,18 +15,18 @@ https://github.com/user-attachments/assets/be352d10-b865-4da2-a20d-8689d79344bd
 ```
 ┌─────────────────────────── LOCAL MACHINE ──────────────────────────┐
 │                                                                     │
-│  Flask Dashboard (app.py)  ◄── run.sh ──►  Browser :5555           │
+│  Flask Dashboard (app.py)  <── run.sh ──>  Browser :5555            │
 │       │                                                             │
 │       │ docker exec                                                 │
-│       ▼                                                             │
+│       v                                                             │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │  Runner Toolbox Container (k8s-escape-toolbox)                 │ │
-│  │  Terraform │ kubectl │ AWS CLI │ Helm │ Docker CLI │ CortexCLI │ │
+│  │  Runner Toolbox Container (Ubuntu 24.04)                       │ │
+│  │  Terraform │ kubectl │ AWS CLI │ Helm │ Docker │ CortexCLI │ Node.js │ │
 │  │  /project mounted │ Docker socket │ tfstate local              │ │
 │  └────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
          │                    │                      │
-         ▼                    ▼                      ▼
+         v                    v                      v
    ┌── AWS Cloud ──┐   ┌── Cortex Cloud ──┐   ┌── Attack ──┐
    │ EKS + Lambda  │   │ XSIAM + Agent    │   │ Steps 1-6  │
    │ ECR + IAM     │   │ Playbooks + XQL  │   │ via webshell│
@@ -42,9 +42,9 @@ https://github.com/user-attachments/assets/be352d10-b865-4da2-a20d-8689d79344bd
 | **Docker Desktop** | Toolbox container + image build (only requirement) |
 | **Python 3.9+** | Dashboard application |
 | **AWS Account** | Infrastructure provisioning (admin for bootstrap) |
-| **Cortex XSIAM** | Detection, playbooks, CWP scanning (optional) |
+| **Cortex XSIAM** | Detection, playbooks, CWP/IaC scanning (optional) |
 
-> All CLI tools (terraform, kubectl, aws, helm, cortexcli) run inside the toolbox container — no local installation needed.
+> All CLI tools (terraform, kubectl, aws, helm, cortexcli, node.js) run inside the toolbox container — no local installation needed.
 
 ### 1. Clone & Launch
 
@@ -56,10 +56,9 @@ cd K8s-Container-Escape-Demo/dashboard
 
 This will:
 1. Create a Python virtual environment and install dependencies
-2. Build the **Runner Toolbox** Docker container (background)
-3. Start the dashboard on **http://localhost:5555**
-
-The toolbox container auto-detects your OS/arch (macOS arm64/Intel, Linux, Windows WSL2).
+2. Detect your OS/arch (macOS arm64/Intel, Linux, Windows WSL2)
+3. Build the **Runner Toolbox** Docker container (background)
+4. Start the dashboard on **http://localhost:5555**
 
 ### 2. Configure Credentials
 
@@ -71,7 +70,7 @@ The toolbox container auto-detects your OS/arch (macOS arm64/Intel, Linux, Windo
 
 ### 3. Deploy Infrastructure
 
-Click **INFRA > Apply** — deploys in 2 phases:
+Click **INFRA > Apply** — deploys in 2 phases via the Runner Toolbox:
 1. **Infrastructure**: VPC, EKS cluster (AL2023), ECR, IAM users/roles
 2. **Lambda**: Containment function, IAM invoker role, EKS access entry
 
@@ -81,10 +80,21 @@ Click **INFRA > Apply** — deploys in 2 phases:
 |------|--------|--------|
 | Connect | **Connect** | Generate kubeconfig for EKS |
 | Build | **Build & Push** | Docker build (linux/amd64) + push to ECR |
-| Scan | **Scan Image** | CortexCLI CWP scan (vulnerabilities + malware) |
 | Deploy | **Deploy** | K8s manifests: privileged pod + LoadBalancer |
 
-### 5. Run Attack Chain
+### 5. AppSec — Shift-Left Scanning
+
+| Scan | Button | Target | What it detects |
+|------|--------|--------|-----------------|
+| **CWP Image** | Scan Image | Container image | Vulnerabilities, malware, secrets, SBOM |
+| **IaC** | Terraform | terraform-infra/ | Terraform misconfigurations |
+| **K8s** | K8s | k8s/ | K8s manifest security issues |
+| **SCA** | SCA | app/ | Vulnerable dependencies (Spring4Shell) |
+| **Full** | Scan All | Entire repo | All of the above + secrets detection |
+
+All scans run via **CortexCLI** inside the Runner Toolbox container (downloaded dynamically from Cortex tenant).
+
+### 6. Run Attack Chain
 
 | Step | Button | MITRE | What it does |
 |------|--------|-------|-------------|
@@ -95,34 +105,37 @@ Click **INFRA > Apply** — deploys in 2 phases:
 | Step 5 | **Deploy** | T1105, T1059 | Malware — WildFire ELF, reverse shell, cryptominer |
 | Step 6 | **Move** | T1021, T1550 | Lateral movement — SSH, rogue pod, IMDS theft |
 
-Or use **Run Full Demo** to execute all 6 steps automatically. The Overview diagram animates in real-time — red flows show the attack path, green flows show Cortex detection and response. After completion, click **"Analyze / Forensic and take action in Cortex XSIAM"** to open the Cortex console directly on the Cases page.
+Or use **Run Full Demo** (or click **Run Attack** in the diagram) to execute all 6 steps automatically. The Overview diagram animates in real-time — red flows show the attack path, green flows show Cortex detection and response.
 
-### 6. Deploy Cortex Response
+After completion, click **"Analyze / Forensic and take action in Cortex XSIAM"** to open the Cortex console directly on the Cases page.
+
+### 7. Deploy Cortex Response
 
 | Step | Button | Action |
 |------|--------|--------|
-| Scan Image | **Scan Image** | CortexCLI container image scan (CWP) |
 | Lambda | **Deploy** | Redeploy containment Lambda (if needed) |
 | Scripts | **Deploy All** | Push 4 automation scripts to Cortex |
 | Playbooks | **Deploy All** | Push 3 playbooks to Cortex |
 | Policy | **Import** | Create prevention profiles via API |
 
-### 7. Cleanup
+### 8. Cleanup
 
 Click **Destroy All** — automatically cleans up K8s resources (LB, ENIs, EIPs), destroys Lambda, then destroys infrastructure.
 
 ## Dashboard Tabs
 
-| Tab | Purpose |
-|-----|---------|
-| **Overview** | Interactive architecture diagram with live attack/detection/response animations. Default view during attacks — all steps open here to watch the diagram animate in real-time |
-| **Terminal** | Command output for all operations + remote webshell. Runs in background during attacks |
-| **kubectl** | Interactive kubectl with shortcuts (nodes, pods, secrets, kill pods) |
-| **Cortex** | Playbook flow visualization + script/playbook deployment |
-| **SOC Live** | Real-time Cortex XDR alerts, MITRE ATT&CK heatmap, detection timer |
-| **Code** | Shift-left: CVE details, K8s misconfigurations, IaC findings with fixes |
-| **Security Radar** | Before/after security posture comparison (6-axis spider chart) |
-| **Architecture** | Platform architecture diagram (dashboard, toolbox, AWS, Cortex) |
+| Tab | Color | Purpose |
+|-----|-------|---------|
+| **Code to Cloud to SOC** | Green | Unified diagram showing the 3 phases (Code → Cloud → SOC) with narrative and feedback loop |
+| **Cloud / Runtime Security** | Purple | Interactive architecture diagram with live attack/detection/response animations. Default view during attacks |
+| **AppSec** | Cyan | Interactive diagram for CWP image scanning and IaC/SCA code scanning with clickable scan targets |
+| **Terminal** | — | Command output for all operations + remote webshell |
+| **kubectl** | — | Interactive kubectl with shortcuts (nodes, pods, secrets, kill pods) |
+| **Cortex** | — | Playbook flow visualization + script/playbook deployment |
+| **SOC Live** | Red | Real-time Cortex XDR alerts, MITRE ATT&CK heatmap, detection timer |
+| **Code** | Cyan | Shift-left: CVE details, K8s misconfigurations, IaC findings with fixes |
+| **Security Radar** | Cyan | Before/after security posture comparison (6-axis spider chart) |
+| **Architecture** | Cyan | Platform architecture diagram (dashboard, toolbox, AWS, Cortex) |
 
 ## Cortex XDR Issues Generated
 
@@ -142,16 +155,19 @@ The 6 attack steps generate **14+ issues** in Cortex XDR:
 
 ## Runner Toolbox
 
-The toolbox is a Docker container with all CLI tools, **auto-built at startup**:
+The toolbox is a Docker container (Ubuntu 24.04) with all CLI tools, **auto-built at startup**:
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Terraform | 1.9.8 | Infrastructure provisioning |
+| Terraform | 1.9.8 | Infrastructure provisioning (EKS, VPC, Lambda) |
 | kubectl | 1.29 | Kubernetes management |
-| AWS CLI | v2 | AWS API operations |
-| Helm | latest | Chart deployments |
-| Docker CLI | latest | Build, push, scan (via socket) |
-| CortexCLI | latest | Container image scanning (CWP) |
+| AWS CLI | v2 | AWS API operations (ECR, STS, EKS) |
+| Helm | 3.17 | Chart deployments (XDR agent) |
+| Node.js | 22 | Required by CortexCLI for code scanning |
+| Docker CLI | latest | Build, push, image scan (via mounted socket) |
+| CortexCLI | latest | CWP image scan + IaC/SCA code scanning (downloaded from tenant) |
+
+**CortexCLI** is downloaded dynamically from your Cortex tenant at runtime — no manual install needed.
 
 **Portability:**
 - macOS Apple Silicon (arm64) + Intel (amd64)
@@ -163,6 +179,23 @@ The toolbox is a Docker container with all CLI tools, **auto-built at startup**:
 - `/project` — source code + terraform state (local)
 - `/var/run/docker.sock` — Docker engine access
 - `~/.aws` — AWS credentials (read-only)
+
+## IaC Tagging (Yor)
+
+All Terraform resources are tagged with [Yor](https://github.com/bridgecrewio/yor) for traceability:
+
+| Tag | Description |
+|-----|-------------|
+| `yor_trace` | Unique resource trace ID |
+| `yor_name` | Resource name |
+| `git_repo` | Repository name |
+| `git_org` | GitHub organization |
+| `git_file` | Source file path |
+| `git_commit` | Last commit hash |
+| `git_last_modified_at` | Last modification date |
+| `git_last_modified_by` | Last author |
+
+Run `yor tag -d .` to update tags after changes.
 
 ## BYOC Mode (Bring Your Own Cluster)
 
@@ -180,30 +213,31 @@ Skip the infrastructure steps and go straight to Deploy + Attack.
 | Component | Description |
 |-----------|-------------|
 | **Dashboard** | Flask web UI — orchestrates infra, attack, response, security radar |
-| **Runner Toolbox** | Docker container with terraform, kubectl, aws, helm, cortexcli |
+| **Runner Toolbox** | Docker container with terraform, kubectl, aws, helm, cortexcli, node.js |
 | **EKS Cluster** | AWS managed K8s on AL2023 with GP3 volumes |
 | **Vulnerable App** | Spring Boot with CVE-2022-22965 on Tomcat 9 |
 | **Lambda** | Containment function — STS auth to EKS API |
 | **Cortex Scripts** | 4 automation scripts (triage, containment, forensic, threat hunt) |
 | **Cortex Playbooks** | 3 playbooks (containment, forensic analysis, search similar events) |
-| **CortexCLI** | Container image scanning (CWP) before push |
+| **CortexCLI CWP** | Container image scanning (vulnerabilities, malware, secrets) |
+| **CortexCLI Code Security** | IaC + SCA + secrets scanning for Terraform, K8s manifests, and app code |
 
 ## Project Structure
 
 ```
 .
 ├── dashboard/
-│   ├── app.py                    # Flask API + task manager
-│   ├── run.sh                    # Launch script (venv + toolbox + flask)
+│   ├── app.py                    # Flask API + task manager + toolbox routing
+│   ├── run.sh                    # Launch script (venv + toolbox build + flask)
 │   ├── requirements.txt
-│   ├── templates/index.html      # Dashboard UI (SVG diagrams, tabs)
+│   ├── templates/index.html      # Dashboard UI (SVG diagrams, 10 tabs)
 │   └── static/
 │       ├── css/style.css         # Dark/light theme
-│       └── js/app.js             # Kill chain, SOC live, architecture
+│       └── js/app.js             # Kill chain, SOC live, architecture, AppSec
 ├── Dockerfile                    # Vulnerable app (Maven + Tomcat 9)
-├── Dockerfile.toolbox            # Runner toolbox (terraform, kubectl, aws, cortexcli)
-├── terraform-infra/              # VPC, EKS, ECR, IAM (local tfstate)
-├── terraform-lambda/             # Lambda, IAM invoker, EKS access (local tfstate)
+├── Dockerfile.toolbox            # Runner toolbox (Ubuntu 24.04, all CLI tools)
+├── terraform-infra/              # VPC, EKS, ECR, IAM (local tfstate, Yor tags)
+├── terraform-lambda/             # Lambda, IAM invoker, EKS access (local tfstate, Yor tags)
 ├── lambda/containment/           # Lambda handler (STS + K8s API)
 ├── cortex-scripts/               # 4 automation scripts (.py + .yml)
 ├── cortex-policy/                # Prevention profiles exports
@@ -218,28 +252,30 @@ Skip the infrastructure steps and go straight to Deploy + Attack.
 │   ├── 05-deploy-malware.sh     # WildFire ELF, reverse shell, cryptominer
 │   ├── 06-lateral-movement.sh   # SSH, rogue pod, IMDS, cross-namespace
 │   └── remote_shell.sh
-└── docs/                         # Architecture diagrams, PowerPoint
+└── docs/                         # Architecture diagrams, pitch, PowerPoint
 ```
 
 ## Demo Features
 
 | Feature | Description |
 |---------|-------------|
-| **Run Full Demo** | One-click: execute all 6 attack steps automatically with live diagram |
-| **Live Architecture Diagram** | Interactive SVG — animated attack flows (red), detection (green), response (green) with particles traveling along paths. All steps open the Overview to watch the diagram live |
-| **Kill Chain Progress** | Header bar: 9 stages with animated dots tracking attack progression |
+| **Code to Cloud to SOC Tab** | Unified 3-phase diagram: Code (shift-left) → Cloud (attack) → SOC (response) with feedback loop |
+| **Run Full Demo / Run Attack** | One-click: execute all 6 attack steps with live diagram animation |
+| **Live Architecture Diagram** | Interactive SVG — animated attack flows (red), detection (green), particles traveling along paths |
+| **AppSec Tab** | Interactive diagram for CWP image scan + IaC/SCA code scan with clickable targets and dynamic results |
 | **SOC Live** | Real-time Cortex XDR alert feed + MITRE ATT&CK heatmap |
-| **Code (Shift-Left)** | CVE details + K8s misconfigurations with severity and fixes |
+| **Code (Shift-Left)** | CVE + K8s misconfigurations with severity and fixes |
 | **Security Radar** | Before/after spider chart (6 security axes) |
-| **CortexCLI Scan** | Pre-push container image scanning (CWP) via Runner Toolbox |
-| **Cortex Console Link** | Click on Cortex XSIAM in diagram → opens console. Post-attack CTA → opens `/cases` |
-| **Architecture Tab** | Platform architecture diagram (dashboard, toolbox, AWS, Cortex) |
+| **CortexCLI CWP** | Container image scanning with results link to Cortex Cloud inventory |
+| **CortexCLI IaC/SCA** | Terraform + K8s + app code scanning with results link to Cortex Cloud AppSec |
+| **Cortex Console Links** | Click on diagram elements to open Cortex console (Dashboard, Cases, AppSec, Container Images) |
+| **Architecture Tab** | Platform architecture (dashboard, toolbox, AWS, Cortex) |
+| **Yor IaC Tags** | Terraform resources tagged with git traceability (yor_trace, git_repo, git_commit) |
 | **Theme Toggle** | Dark / Light / Auto mode (persisted) |
 | **AWS Paste Import** | Paste `export AWS_*` commands to auto-fill credentials |
 | **BYOC Mode** | Bring Your Own Cluster — skip infra, use existing K8s |
 | **Runner Status** | Live toolbox container status indicator in header |
-| **Runner Status** | Live toolbox container status in header |
-| **Open Console** | Click Cortex/WebApp in diagram to open in browser |
+| **Credential Persistence** | Credentials saved locally and auto-loaded on restart |
 
 ## CLI Alternative
 

@@ -10,4 +10,6 @@
 .idea/
 .vscode/
 dashboard/.kubeconfig
+dashboard/.kubeconfig-byoc
 dashboard/.venv/
+dashboard/.credentials.json
