@@ -146,6 +146,7 @@ function updateStepStatus(taskName, status) {
         'Step 6: Lateral Movement':           { id: 'lateral-status',  ok: 'moved',     run: 'moving...' },
         'Undeploy from EKS':        { id: 'deploy-status',         ok: 'undeployed',  run: 'removing...' },
         'Cortex CLI: Image Scan':   { id: 'image-scan-status',     ok: 'scanned',     run: 'scanning...' },
+        'Cortex CLI: AppSec Scan':  { id: 'iac-scan-status',       ok: 'scanned',     run: 'scanning...' },
         'Deploy Lambda':            { id: 'lambda-deploy-status',  ok: 'deployed',    run: 'deploying...' },
         'Terraform Destroy':        { id: 'infra-destroy-status',  ok: 'destroyed',   run: 'destroying...' },
         'Destroy Lambda':           { id: 'lambda-destroy-status', ok: 'destroyed',   run: 'destroying...' },
@@ -2263,11 +2264,168 @@ async function refreshToolboxStatus() {
 // ─── Cortex CLI Image Scan ────────────────────────────────────────────────────
 
 function cortexImageScan(imageName) {
-    openTab('terminal');
+    openTab('appsec');
     termWriteHeader('Cortex CLI - Container Image Scan (CWP)');
-    showNotification('Cortex CLI scan started — this may take 2-5 minutes...', 'info');
+    showNotification('CWP scan started — this may take 2-5 minutes...', 'info');
+    // Animate the AppSec diagram
+    appsecResetDiagram();
+    const conn = document.getElementById('appsec-conn-reg-scan');
+    const connRes = document.getElementById('appsec-conn-cwp-results');
+    if (conn) conn.classList.add('active-attack');
+    if (connRes) connRes.classList.add('active-attack');
+    appsecSetStatus('Scanning container image...', 'scanning');
     const body = imageName ? { image: imageName } : {};
     apiCall('/api/cortex/image-scan', 'POST', body);
+    startAppsecPolling();
+}
+
+// ─── AppSec Diagram State Management ─────────────────────────────────────────
+
+let appsecPollInterval = null;
+
+function appsecResetDiagram() {
+    // Reset all connection animations
+    ['appsec-conn-git-scan', 'appsec-conn-reg-scan', 'appsec-conn-code-results', 'appsec-conn-cwp-results'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('active-detect', 'active-attack', 'done-detect', 'done-attack');
+    });
+    // Hide CTA link and digest info
+    const cta = document.getElementById('appsec-cta-link');
+    if (cta) cta.style.display = 'none';
+    const digest = document.getElementById('appsec-digest-info');
+    if (digest) digest.style.display = 'none';
+}
+
+function appsecSetStatus(text, mode) {
+    const banner = document.getElementById('appsec-status-banner');
+    const bannerText = document.getElementById('appsec-status-text');
+    if (!banner || !bannerText) return;
+    banner.style.display = '';
+    bannerText.textContent = text;
+    // Style based on mode
+    const rect = banner.querySelector('rect');
+    if (mode === 'scanning') {
+        if (rect) { rect.style.stroke = '#f97316'; rect.style.fill = 'rgba(249,115,22,0.15)'; }
+        bannerText.style.fill = '#f97316';
+    } else if (mode === 'done') {
+        if (rect) { rect.style.stroke = '#22c55e'; rect.style.fill = 'rgba(34,197,94,0.15)'; }
+        bannerText.style.fill = '#22c55e';
+    } else if (mode === 'error') {
+        if (rect) { rect.style.stroke = '#ef4444'; rect.style.fill = 'rgba(239,68,68,0.15)'; }
+        bannerText.style.fill = '#ef4444';
+    }
+}
+
+function startAppsecPolling() {
+    if (appsecPollInterval) clearInterval(appsecPollInterval);
+    appsecPollInterval = setInterval(() => {
+        const taskId = state.currentTaskId;
+        if (!taskId) return;
+        fetch('/api/tasks/' + taskId).then(r => r.json()).then(task => {
+            if (task.status === 'success' || task.status === 'error') {
+                clearInterval(appsecPollInterval);
+                appsecPollInterval = null;
+
+                // Parse output for results
+                const output = task.output || '';
+
+                // Strip ANSI color codes before parsing
+                const cleanOutput = output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+
+                // Extract Cortex link (Code Security scan)
+                const linkMatch = cleanOutput.match(/(https:\/\/[^\s]+appsec\/scans\/cicd-scans\?scan=[^\s]+)/);
+                const cortexLink = linkMatch ? linkMatch[1] : null;
+
+                // Extract image name (CWP scan)
+                const imageMatch = cleanOutput.match(/Image name:\s*([^\s]+)/);
+                const imageName = imageMatch ? imageMatch[1] : null;
+
+                // Extract image digest sha256 (CWP scan)
+                const digestMatch = cleanOutput.match(/manifest digest:\s*(sha256:[a-f0-9]+)/);
+                const imageDigest = digestMatch ? digestMatch[1] : null;
+
+                // Extract total findings (CWP scan)
+                const totalFindingsMatch = cleanOutput.match(/Total detected findings:\s*(\d+)/);
+                const totalFindings = totalFindingsMatch ? parseInt(totalFindingsMatch[1]) : null;
+
+                // Count findings uploaded (Code Security scan)
+                const findingsMatch = cleanOutput.match(/(\d+)\s+[Ff]indings?\s+were\s+uploaded/);
+                const findings = findingsMatch ? parseInt(findingsMatch[1]) : null;
+
+                // Count files scanned
+                const filesMatch = cleanOutput.match(/File\(s\)\s+scanned\s+.*?(\d+)/);
+                const filesScanned = filesMatch ? filesMatch[1] : null;
+
+                // Update diagram
+                // Switch connections to done state
+                ['appsec-conn-git-scan', 'appsec-conn-code-results', 'appsec-conn-reg-scan', 'appsec-conn-cwp-results'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        if (el.classList.contains('active-detect')) {
+                            el.classList.remove('active-detect');
+                            el.classList.add('done-detect');
+                        }
+                        if (el.classList.contains('active-attack')) {
+                            el.classList.remove('active-attack');
+                            el.classList.add('done-attack');
+                        }
+                    }
+                });
+
+                if (task.status === 'success' || (task.status === 'error' && (totalFindings || imageName))) {
+                    let statusText = 'Scan complete';
+                    if (imageName) {
+                        // Truncate long image name
+                        const shortImage = imageName.length > 40 ? '...' + imageName.slice(-35) : imageName;
+                        statusText += ' \u2014 ' + shortImage;
+                    }
+                    if (totalFindings !== null) statusText += ' \u2014 ' + totalFindings + ' finding(s)';
+                    if (filesScanned) statusText += ' \u2014 ' + filesScanned + ' files';
+                    if (findings !== null) statusText += ' \u2014 ' + findings + ' finding(s)';
+                    appsecSetStatus(statusText, totalFindings > 0 ? 'error' : 'done');
+                } else if (task.status === 'error') {
+                    appsecSetStatus('Scan failed — check Terminal for details', 'error');
+                }
+
+                // Show image name copy button (CWP scan)
+                if (imageName) {
+                    const digestContainer = document.getElementById('appsec-digest-info');
+                    if (digestContainer) {
+                        digestContainer.style.display = '';
+                        const digestText = document.getElementById('appsec-digest-text');
+                        if (digestText) digestText.textContent = imageName;
+                        digestContainer.onclick = () => {
+                            navigator.clipboard.writeText(imageName).then(() => {
+                                showNotification('Image name copied: ' + imageName, 'success');
+                            }).catch(() => {
+                                prompt('Copy image name:', imageName);
+                            });
+                        };
+                    }
+                }
+
+                // Show CTA link
+                const cta = document.getElementById('appsec-cta-link');
+                const ctaText = document.getElementById('appsec-cta-text');
+                if (cta) {
+                    if (cortexLink) {
+                        cta.style.display = '';
+                        if (ctaText) ctaText.textContent = '\u2197 Cortex Cloud AppSec \u2014 Analyze in Cortex Cloud';
+                        cta.onclick = () => window.open(cortexLink, '_blank');
+                    } else if (imageName) {
+                        cta.style.display = '';
+                        if (ctaText) ctaText.textContent = '\u2197 Cortex Cloud \u2014 View ' + imageName + ' in Container Images';
+                        cta.onclick = () => {
+                            fetch('/api/cortex/credentials').then(r => r.json()).then(data => {
+                                let consoleUrl = (data.base_url || '').replace(/\/+$/, '').replace(/^(https?:\/\/)api-/, '$1');
+                                window.open(consoleUrl + '/assets/inventory/compute/container-images', '_blank');
+                            });
+                        };
+                    }
+                }
+            }
+        }).catch(() => {});
+    }, 2000);
 }
 
 function showNotification(message, type) {
@@ -2285,10 +2443,38 @@ function showNotification(message, type) {
     setTimeout(() => { toast.classList.add('toast-fade'); setTimeout(() => toast.remove(), 500); }, 10000);
 }
 
+function cortexIacScan(target) {
+    openTab('appsec');
+    termWriteHeader('Cortex CLI - AppSec Scan (Code Security)');
+    showNotification('AppSec scan started — analyzing code...', 'info');
+    // Animate the AppSec diagram
+    appsecResetDiagram();
+    const conn = document.getElementById('appsec-conn-git-scan');
+    const connRes = document.getElementById('appsec-conn-code-results');
+    if (conn) conn.classList.add('active-detect');
+    if (connRes) connRes.classList.add('active-detect');
+    appsecSetStatus('Scanning code: ' + (target || 'all') + '...', 'scanning');
+    apiCall('/api/cortex/iac-scan', 'POST', { target: target || 'all' });
+    // Start polling for scan results
+    startAppsecPolling();
+}
+
 function cortexImageScanCustom() {
-    const imageName = prompt('Enter the Docker image to scan:', 'nginx:latest');
+    document.getElementById('cwp-custom-modal').classList.add('visible');
+}
+
+function closeCwpCustomModal() {
+    document.getElementById('cwp-custom-modal').classList.remove('visible');
+}
+
+function submitCwpCustomScan() {
+    const imageName = document.getElementById('cwp-custom-image').value.trim();
     if (imageName) {
-        cortexImageScan(imageName);
+        closeCwpCustomModal();
+        openTab('terminal');
+        termWriteHeader('Cortex CLI - Custom Image Scan (CWP): ' + imageName);
+        showNotification('CWP scan started — ' + imageName, 'info');
+        apiCall('/api/cortex/image-scan', 'POST', { image: imageName });
     }
 }
 
@@ -2312,6 +2498,18 @@ function openCortexConsole() {
     }).catch(() => {
         alert('Cannot read Cortex settings.');
     });
+}
+
+function openCortexDashboard() {
+    fetch('/api/cortex/credentials').then(r => r.json()).then(data => {
+        const apiUrl = data.base_url || '';
+        if (!apiUrl) {
+            alert('Cortex API URL not configured. Go to Settings > Cortex > Configure.');
+            return;
+        }
+        let consoleUrl = apiUrl.replace(/\/+$/, '').replace(/^(https?:\/\/)api-/, '$1');
+        window.open(consoleUrl + '/dashboard', '_blank');
+    }).catch(() => alert('Cannot read Cortex settings.'));
 }
 
 function openCortexCases() {

@@ -59,11 +59,24 @@ def toolbox_cmd(command, cwd=None):
             env_flags += f' -e {var}="${{{var}}}"'
         # Map KUBECONFIG path to container path
         env_flags += f' -e KUBECONFIG=/project/dashboard/.kubeconfig'
-        # Pass Cortex credentials for cortexcli install
+        # Write Cortex credentials to a file in the container via docker cp
+        # (avoids shell escaping issues with special chars in API keys)
         if cortex_settings.get("base_url"):
-            env_flags += f' -e CORTEX_API_URL="{cortex_settings["base_url"]}"'
-            env_flags += f' -e CORTEX_API_KEY="{cortex_settings.get("api_key", "")}"'
-            env_flags += f' -e CORTEX_API_KEY_ID="{cortex_settings.get("api_key_id", "")}"'
+            import tempfile
+            env_content = (
+                f'export CORTEX_API_URL="{cortex_settings["base_url"]}"\n'
+                f'export CORTEX_API_KEY="{cortex_settings.get("api_key", "")}"\n'
+                f'export CORTEX_API_KEY_ID="{cortex_settings.get("api_key_id", "")}"\n'
+            )
+            tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.env', delete=False)
+            tmp.write(env_content)
+            tmp.close()
+            subprocess.run(
+                f"docker cp {tmp.name} {TOOLBOX_CONTAINER}:/tmp/.cortex_env",
+                shell=True, capture_output=True, timeout=5,
+            )
+            os.unlink(tmp.name)
+            cmd = f"source /tmp/.cortex_env 2>/dev/null; {cmd}"
         # Escape single quotes in the command for bash -c '...'
         cmd_escaped = cmd.replace("'", "'\\''")
         return f"docker exec{env_flags} {TOOLBOX_CONTAINER} bash -c '{cmd_escaped}'"
@@ -71,6 +84,9 @@ def toolbox_cmd(command, cwd=None):
 
 # In-memory store for task outputs
 tasks = {}
+
+# Credentials file path (persisted locally, excluded from git)
+CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), ".credentials.json")
 
 # In-memory store for AWS credentials
 aws_credentials = {
@@ -94,6 +110,42 @@ external_cluster = {
     "app_host": "",         # LoadBalancer hostname of the vuln-app
     "image_url": "",        # Container image URL (e.g. public ECR or Docker Hub)
 }
+
+
+def save_credentials():
+    """Persist credentials to local file (excluded from git)."""
+    data = {
+        "aws": aws_credentials,
+        "cortex": cortex_settings,
+        "external_cluster": external_cluster,
+    }
+    try:
+        with open(CREDENTIALS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Warning: cannot save credentials: {e}")
+
+
+def load_credentials():
+    """Load persisted credentials from local file."""
+    if not os.path.isfile(CREDENTIALS_FILE):
+        return
+    try:
+        with open(CREDENTIALS_FILE, "r") as f:
+            data = json.load(f)
+        if "aws" in data:
+            aws_credentials.update(data["aws"])
+        if "cortex" in data:
+            cortex_settings.update(data["cortex"])
+        if "external_cluster" in data:
+            external_cluster.update(data["external_cluster"])
+        print(f"Credentials loaded from {CREDENTIALS_FILE}")
+    except Exception as e:
+        print(f"Warning: cannot load credentials: {e}")
+
+
+# Load on startup
+load_credentials()
 
 
 def get_aws_env():
@@ -325,6 +377,7 @@ def set_credentials():
         aws_credentials["aws_session_token"] = data["aws_session_token"].strip()
     if "aws_region" in data:
         aws_credentials["aws_region"] = data["aws_region"].strip()
+    save_credentials()
     return jsonify({"status": "ok"})
 
 
@@ -374,6 +427,7 @@ def set_external_cluster():
             f.write(kubeconfig_content)
         os.environ["KUBECONFIG"] = byoc_kubeconfig
 
+    save_credentials()
     return jsonify({"status": "ok", "external_cluster": external_cluster})
 
 
@@ -894,6 +948,138 @@ fi
 echo "=================================================="
 """
     task_id = create_task("Cortex CLI: Image Scan", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/cortex/iac-scan", methods=["POST"])
+def cortex_iac_scan():
+    """Scan IaC (Terraform + K8s manifests) with cortexcli code scan."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    # Scan directories
+    scan_target = request.json.get("target", "all")  # all, terraform, k8s
+
+    # Use env vars $CORTEX_API_URL, $CORTEX_API_KEY, $CORTEX_API_KEY_ID
+    # These are passed to the toolbox container by toolbox_cmd()
+    cmd = """
+echo "=================================================="
+echo "  CORTEX CLI - IaC Security Scan (Code Security)"
+echo "=================================================="
+echo ""
+echo "  API:   $CORTEX_API_URL"
+echo "  Target: """ + scan_target + """
+"
+echo ""
+
+# Check if cortexcli is installed — download from tenant if needed
+if ! command -v cortexcli > /dev/null 2>&1; then
+    echo "[*] cortexcli not found. Downloading from Cortex tenant..."
+    if command -v cortexcli-install > /dev/null 2>&1; then
+        cortexcli-install
+    else
+        ARCH=$(dpkg --print-architecture 2>/dev/null || echo amd64)
+        echo "[*] Getting signed download URL..."
+        SIGNED_URL=$(curl -sk \\
+            "$CORTEX_API_URL/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=${ARCH}" \\
+            -H "x-xdr-auth-id: $CORTEX_API_KEY_ID" \\
+            -H "Authorization: $CORTEX_API_KEY" | jq -r ".signed_url" 2>/dev/null)
+        if [ -n "$SIGNED_URL" ] && [ "$SIGNED_URL" != "null" ]; then
+            echo "[*] Downloading cortexcli for linux-${ARCH}..."
+            curl -sk -o /usr/local/bin/cortexcli "$SIGNED_URL" && chmod +x /usr/local/bin/cortexcli
+            echo "[OK] cortexcli installed: $(cortexcli --version 2>/dev/null)"
+        else
+            echo "[!] Failed to get download link."
+            exit 1
+        fi
+    fi
+fi
+
+echo "==> cortexcli version: $(cortexcli --version 2>/dev/null || echo unknown)"
+echo "==> node version: $(node --version 2>/dev/null || echo not found)"
+echo ""
+
+"""
+
+    if scan_target == "all":
+        cmd += """
+echo "=================================================="
+echo "  Full Project Scan (k8s-container-escape-demo/)"
+echo "=================================================="
+echo ""
+echo "==> Command: cortexcli code scan --directory . --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo"
+echo ""
+cortexcli \\
+    --api-base-url "$CORTEX_API_URL" \\
+    --api-key "$CORTEX_API_KEY" \\
+    --api-key-id "$CORTEX_API_KEY_ID" \\
+    code scan \\
+    --directory . \\
+    --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo 2>&1 || true
+echo ""
+"""
+
+    if scan_target == "terraform":
+        cmd += """
+echo "=================================================="
+echo "  Terraform Infrastructure (terraform-infra/)"
+echo "=================================================="
+echo ""
+echo "==> Command: cortexcli code scan --directory terraform-infra --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-terraform"
+echo ""
+cortexcli \\
+    --api-base-url "$CORTEX_API_URL" \\
+    --api-key "$CORTEX_API_KEY" \\
+    --api-key-id "$CORTEX_API_KEY_ID" \\
+    code scan \\
+    --directory terraform-infra \\
+    --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-terraform 2>&1 || true
+echo ""
+"""
+
+    if scan_target == "k8s":
+        cmd += """
+echo "=================================================="
+echo "  Kubernetes Manifests (k8s/)"
+echo "=================================================="
+echo ""
+echo "==> Command: cortexcli code scan --directory k8s --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-k8s-manifest"
+echo ""
+cortexcli \\
+    --api-base-url "$CORTEX_API_URL" \\
+    --api-key "$CORTEX_API_KEY" \\
+    --api-key-id "$CORTEX_API_KEY_ID" \\
+    code scan \\
+    --directory k8s \\
+    --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-k8s-manifest 2>&1 || true
+echo ""
+"""
+
+    if scan_target == "sca":
+        cmd += """
+echo "=================================================="
+echo "  WebApp SCA (app/)"
+echo "=================================================="
+echo ""
+echo "==> Command: cortexcli code scan --directory app --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-webapp"
+echo ""
+cortexcli \\
+    --api-base-url "$CORTEX_API_URL" \\
+    --api-key "$CORTEX_API_KEY" \\
+    --api-key-id "$CORTEX_API_KEY_ID" \\
+    code scan \\
+    --directory app \\
+    --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-webapp 2>&1 || true
+echo ""
+"""
+
+    cmd += """
+echo "=================================================="
+echo "  [OK] AppSec scan complete"
+echo "=================================================="
+"""
+
+    task_id = create_task("Cortex CLI: AppSec Scan", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -1458,7 +1644,9 @@ def set_cortex_credentials():
     if "api_key_id" in data:
         cortex_settings["api_key_id"] = data["api_key_id"].strip()
     if "api_key" in data:
-        cortex_settings["api_key"] = data["api_key"].strip()
+        # Strip non-ASCII chars that may come from copy/paste
+        cortex_settings["api_key"] = data["api_key"].encode("ascii", errors="ignore").decode("ascii").strip()
+    save_credentials()
     return jsonify({"status": "ok"})
 
 
@@ -1643,9 +1831,12 @@ def cortex_json_request(api_path, json_data, method="POST"):
 
     url = f"{base_url}{api_path}"
     body = json.dumps(json_data).encode("utf-8")
+    # Ensure API key is ASCII-safe (strip any non-ASCII chars from copy/paste)
+    safe_api_key = api_key.encode("ascii", errors="ignore").decode("ascii").strip()
+    safe_api_key_id = api_key_id.encode("ascii", errors="ignore").decode("ascii").strip()
     headers = {
-        "Authorization": api_key,
-        "x-xdr-auth-id": api_key_id,
+        "Authorization": safe_api_key,
+        "x-xdr-auth-id": safe_api_key_id,
         "Content-Type": "application/json",
         "Content-Length": str(len(body)),
     }

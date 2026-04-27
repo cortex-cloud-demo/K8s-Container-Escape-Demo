@@ -4,7 +4,11 @@
 # Multi-arch: supports amd64 (Linux/Windows) and arm64 (Apple Silicon).
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM --platform=$BUILDPLATFORM ubuntu:22.04
+FROM --platform=$BUILDPLATFORM ubuntu:24.04
+
+LABEL maintainer="chrisley75"
+LABEL purpose="Runner Toolbox - CLI tools for K8s Container Escape Demo (terraform, kubectl, aws, helm, cortexcli, node.js)"
+LABEL org.opencontainers.image.ref.name="k8s-escape-demo-toolbox"
 
 ARG TARGETPLATFORM
 ARG TARGETARCH
@@ -24,7 +28,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 # ─── Docker CLI only (not the daemon) ────────────────────────────────────────
 RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg && \
     DPKG_ARCH=$(dpkg --print-architecture) && \
-    echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" > /etc/apt/sources.list.d/docker.list && \
+    echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list && \
     apt-get update -qq && apt-get install -y -qq --no-install-recommends docker-ce-cli && \
     rm -rf /var/lib/apt/lists/*
 
@@ -43,11 +47,27 @@ RUN ARCH=$(dpkg --print-architecture) && \
 
 # ─── kubectl ─────────────────────────────────────────────────────────────────
 RUN ARCH=$(dpkg --print-architecture) && \
-    curl -sL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" -o /usr/local/bin/kubectl && \
+    curl -skL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
 
+# ─── Node.js v22 (required by cortexcli for code scan) ───────────────────────
+RUN ARCH=$(dpkg --print-architecture) && \
+    NODE_VERSION=22.15.0 && \
+    if [ "$ARCH" = "arm64" ]; then NODE_ARCH="arm64"; else NODE_ARCH="x64"; fi && \
+    curl -skL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz && \
+    tar xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 && \
+    rm /tmp/node.tar.gz && \
+    echo "Node.js $(node --version) installed"
+
 # ─── Helm ────────────────────────────────────────────────────────────────────
-RUN curl -sL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+RUN ARCH=$(dpkg --print-architecture) && \
+    HELM_VERSION=3.17.3 && \
+    curl -skL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz" -o /tmp/helm.tar.gz && \
+    tar xzf /tmp/helm.tar.gz -C /tmp && \
+    mv /tmp/linux-${ARCH}/helm /usr/local/bin/helm && \
+    chmod +x /usr/local/bin/helm && \
+    rm -rf /tmp/helm.tar.gz /tmp/linux-${ARCH} && \
+    echo "Helm $(helm version --short) installed"
 
 # ─── Cortex CLI dependencies ─────────────────────────────────────────────────
 # libhyperscan is required by cortexcli on Linux
@@ -91,6 +111,7 @@ RUN echo "=== Toolbox versions ===" && \
     (terraform --version 2>/dev/null | head -1 || echo "terraform: not available") && \
     (kubectl version --client 2>/dev/null | head -1 || echo "kubectl: not available") && \
     (helm version --short 2>/dev/null || echo "helm: not available") && \
+    (node --version 2>/dev/null || echo "node: not available") && \
     (cortexcli --version 2>/dev/null || echo "cortexcli: not available") && \
     echo "========================"
 
