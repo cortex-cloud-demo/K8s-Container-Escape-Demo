@@ -1445,7 +1445,7 @@ def test_lambda():
             f"echo '' && echo '--- Lambda Response ---' && "
             f"python3 -m json.tool /tmp/lambda_response.json"
         )
-        task_id = create_task("Test Lambda: collect_evidence", cmd)
+        task_id = create_task("Test Lambda: collect_evidence", cmd, use_toolbox=True)
         return jsonify({"task_id": task_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1616,7 +1616,7 @@ def playbook_lambda_step(step_id):
         })
 
         cmd = f'aws lambda invoke --function-name {lambda_name} --payload \'{payload}\' --cli-binary-format raw-in-base64-out /dev/stdout 2>/dev/null'
-        task_id = create_task(f"Lambda: {step_id}", cmd)
+        task_id = create_task(f"Lambda: {step_id}", cmd, use_toolbox=True)
         return jsonify({"task_id": task_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2724,7 +2724,7 @@ echo "  XDR Agent deployment complete!"
 echo "=================================================="
 """
 
-    task_id = create_task("XDR Agent: Install on K8s", cmd)
+    task_id = create_task("XDR Agent: Install on K8s", cmd, use_toolbox=True)
     return jsonify({
         "status": "ok",
         "task_id": task_id,
@@ -2802,7 +2802,7 @@ echo "=================================================="
 echo "  RESET COMPLETE - Demo ready to replay"
 echo "=================================================="
 """
-    task_id = create_task("Reset Containment", cmd)
+    task_id = create_task("Reset Containment", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 

@@ -1954,6 +1954,76 @@ function radarReset() {
 
 // ─── Live Architecture Diagram ───────────────────────────────────────────────
 
+// ─── Narration Mode ──────────────────────────────────────────────────────────
+
+const NARRATION = {
+    rce: {
+        attacker: "Exploiting Spring4Shell CVE-2022-22965...\nDeploying JSP webshell via ClassLoader manipulation",
+        defender: "Local Threat Detected!\nMalicious JSP file written to Tomcat webapps",
+    },
+    escape: {
+        attacker: "Escaping container via nsenter + mount...\nReading /etc/shadow, kubelet creds, IMDS",
+        defender: "Container Escape Protection triggered!\nPrivileged mount operation detected",
+    },
+    takeover: {
+        attacker: "Stealing cluster-admin SA token...\nFull access: all namespaces, pods, secrets",
+        defender: "kubectl execution in pod detected!\nSA token abuse — T1134 Access Token",
+    },
+    scan: {
+        attacker: "Running K8s recon tools...\ndeepce, kube-hunter, RBAC enumeration",
+        defender: "K8s vulnerability scanning detected!\nContainer image drift — tools installed",
+    },
+    malware: {
+        attacker: "Deploying malware: reverse shell,\ncryptominer, WildFire ELF sample",
+        defender: "Malware detected! Reverse shell blocked.\nCredential harvesting attempt caught",
+    },
+    lateral: {
+        attacker: "SSH scanning, deploying rogue pod\nin kube-system, stealing IMDS creds",
+        defender: "14+ issues correlated.\nFull MITRE ATT&CK kill chain mapped",
+    },
+};
+
+function updateNarration(stepId, isActive) {
+    const attackerBubble = document.getElementById('narration-attacker');
+    const defenderBubble = document.getElementById('narration-defender');
+    const attackerText = document.getElementById('narration-attacker-text');
+    const defenderText = document.getElementById('narration-defender-text');
+
+    if (!attackerBubble || !defenderBubble) return;
+
+    if (isActive && NARRATION[stepId]) {
+        const n = NARRATION[stepId];
+        attackerBubble.style.display = '';
+        defenderBubble.style.display = '';
+        if (attackerText) {
+            // Split multiline and render
+            const lines = n.attacker.split('\n');
+            attackerText.innerHTML = '';
+            lines.forEach((line, i) => {
+                const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+                tspan.setAttribute('x', '90');
+                tspan.setAttribute('dy', i === 0 ? '0' : '13');
+                tspan.textContent = line;
+                attackerText.appendChild(tspan);
+            });
+        }
+        if (defenderText) {
+            const lines = n.defender.split('\n');
+            defenderText.innerHTML = '';
+            lines.forEach((line, i) => {
+                const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+                tspan.setAttribute('x', '870');
+                tspan.setAttribute('dy', i === 0 ? '0' : '13');
+                tspan.textContent = line;
+                defenderText.appendChild(tspan);
+            });
+        }
+    } else {
+        attackerBubble.style.display = 'none';
+        defenderBubble.style.display = 'none';
+    }
+}
+
 const ARCH_STEP_MAP = {
     rce: {
         label: 'Step 1: Spring4Shell RCE (CVE-2022-22965)',
@@ -2069,6 +2139,9 @@ function updateArchDiagram() {
         stepLabel.textContent = activeStep.label;
         stepBanner.style.display = '';
     }
+
+    // Update narration bubbles
+    updateNarration(activeStepId, anyActive);
 
     // Update status indicator
     if (statusEl) {
@@ -2667,18 +2740,39 @@ async function runFullDemo() {
         step.fn();
 
         // Wait for the actual task to complete by polling task status
+        let stepFailed = false;
         await new Promise(resolve => {
             let elapsed = 0;
-            const maxWait = step.wait + 30000; // extra buffer
+            const maxWait = step.wait + 30000;
             const check = setInterval(() => {
                 elapsed += 1000;
-                // Check if task finished (status changed from running)
                 const taskId = state.currentTaskId;
                 if (taskId) {
                     fetch(`/api/tasks/${taskId}`).then(r => r.json()).then(task => {
                         if (task.status === 'success' || task.status === 'error') {
                             clearInterval(check);
-                            // Small pause between steps for readability
+                            // Check if Step 1 (RCE) failed — abort the demo
+                            const output = task.output || '';
+                            const step1Failed = (task.status === 'error' || output.includes('[FAIL]')) && i === 0;
+                            if (step1Failed) {
+                                stepFailed = true;
+                                if (output.includes('404') || output.includes('FAIL') || output.includes('not responding')) {
+                                    showNotification('Step 1 failed! Check: app deployed? VPN/GlobalProtect disabled?', 'warning');
+                                    termWrite('\n' + '!'.repeat(50) + '\n');
+                                    termWrite('  DEMO STOPPED — Step 1 (RCE) failed\n');
+                                    termWrite('  \n');
+                                    termWrite('  Possible causes:\n');
+                                    termWrite('  1. Application not deployed — click Deploy first\n');
+                                    termWrite('  2. VPN inspection (GlobalProtect) is blocking\n');
+                                    termWrite('     the Spring4Shell exploit payload\n');
+                                    termWrite('     → Disable GlobalProtect before running attacks\n');
+                                    termWrite('  3. Pod needs restart:\n');
+                                    termWrite('     → Click "kill pods" in kubectl tab\n');
+                                    termWrite('     → Wait for pod Ready, then retry\n');
+                                    termWrite('  \n');
+                                    termWrite('!' .repeat(50) + '\n');
+                                }
+                            }
                             setTimeout(resolve, 2000);
                         }
                     }).catch(() => {});
@@ -2691,6 +2785,12 @@ async function runFullDemo() {
         });
 
         progressBar.style.width = step.pct + '%';
+
+        // Stop demo if Step 1 failed
+        if (stepFailed) {
+            demoAbort = true;
+            break;
+        }
     }
 
     // Done

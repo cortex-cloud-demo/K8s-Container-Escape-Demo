@@ -1039,7 +1039,7 @@
                 <!-- Live Architecture Diagram -->
                 <div class="overview-section">
                     <div class="arch-diagram" id="arch-diagram">
-                        <svg class="arch-svg" viewBox="0 0 960 490" xmlns="http://www.w3.org/2000/svg">
+                        <svg class="arch-svg" viewBox="0 0 960 515" xmlns="http://www.w3.org/2000/svg">
                             <defs>
                                 <marker id="arrow-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
                                     <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
@@ -1227,6 +1227,18 @@
                             </g>
 
                             <!-- Dynamic particles are created by JS -->
+
+                            <!-- Narration bubbles (shown during active steps) -->
+                            <g id="narration-attacker" style="display:none;">
+                                <rect x="15" y="275" width="150" height="42" rx="6" style="fill:rgba(239,68,68,0.12);stroke:#ef4444;stroke-width:1;" />
+                                <polygon points="90,275 95,265 100,275" style="fill:rgba(239,68,68,0.12);stroke:#ef4444;stroke-width:1;" />
+                                <text id="narration-attacker-text" x="90" y="290" style="fill:#fca5a5;font-size:7px;text-anchor:middle;font-family:sans-serif;"></text>
+                            </g>
+                            <g id="narration-defender" style="display:none;">
+                                <rect x="795" y="465" width="150" height="42" rx="6" style="fill:rgba(34,197,94,0.12);stroke:#22c55e;stroke-width:1;" />
+                                <polygon points="860,465 865,455 870,465" style="fill:rgba(34,197,94,0.12);stroke:#22c55e;stroke-width:1;" />
+                                <text id="narration-defender-text" x="870" y="480" style="fill:#86efac;font-size:7px;text-anchor:middle;font-family:sans-serif;"></text>
+                            </g>
 
                             <!-- Active step banner -->
                             <g id="arch-step-banner" style="display:none;">
@@ -2401,6 +2413,6 @@ clusters:
     </div>
 </div>
 
-<script src="/static/js/app.js?v=60"></script>
+<script src="/static/js/app.js?v=63"></script>
 </body>
 </html>
