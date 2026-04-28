@@ -631,7 +631,11 @@ def main():
         # ==================================================================
 
         container_ids = get_field_with_fallback(
-            args.get('container_id'), 'container_id', 'container_id', is_array=True)
+            args.get('container_id'), 'containerid', 'container_id', is_array=True)
+        # Fallback: also try 'containerid' (XDR native field name)
+        if not container_ids:
+            container_ids = get_field_with_fallback(
+                None, 'containerid', 'containerid', is_array=True)
         namespace_list = get_field_with_fallback(
             args.get('namespace'), 'namespace', 'namespace', is_array=True)
         namespace = namespace_list[0] if namespace_list else ""
@@ -639,6 +643,16 @@ def main():
         node_fqdn_list = get_field_with_fallback(
             args.get('xdmsourcehostfqdn'), 'xdmsourcehostfqdn', 'xdmsourcehostfqdn', is_array=True)
         node_fqdn = node_fqdn_list[0] if node_fqdn_list else ""
+        # Fallback: try hostfqdn field (XDR native)
+        if not node_fqdn or node_fqdn == "eu-west-3.compute.internal":
+            hostfqdn_list = get_field_with_fallback(
+                None, 'hostfqdn', 'hostfqdn', is_array=False)
+            if hostfqdn_list:
+                node_fqdn = str(hostfqdn_list).strip()
+        # Fix duplicated FQDN (e.g. "ip-10-0-0-174.eu-west-3.compute.internal.eu-west-3.compute.internal")
+        if ".compute.internal." in node_fqdn:
+            parts = node_fqdn.split(".compute.internal")
+            node_fqdn = parts[0] + ".compute.internal"
 
         node_ips = get_field_with_fallback(
             args.get('xdmsourcehostipv4addresses'), 'xdmsourcehostipv4addresses', 'xdmsourcehostipv4addresses', is_array=True)
@@ -680,6 +694,15 @@ def main():
 
         cluster_name = get_field_with_fallback(
             args.get('cluster_name'), 'cluster_name', 'cluster_name', is_array=False)
+        # Fallback: try 'clustername' (XDR native field - no underscore, array)
+        if not cluster_name:
+            clustername_list = get_field_with_fallback(
+                None, 'clustername', 'clustername', is_array=True)
+            if clustername_list:
+                cluster_name = clustername_list[0]
+        # Default for this demo
+        if not cluster_name:
+            cluster_name = "eks-escape-demo"
 
         demisto.info("Extracted - container_ids: " + str(container_ids))
         demisto.info("Extracted - namespace: " + namespace)

@@ -25,8 +25,68 @@ ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")
 PLAYBOOK_DIR = os.path.join(PROJECT_ROOT, "playbook")
 KUBECONFIG_PATH = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig")
 
+# Toolbox container name
+TOOLBOX_CONTAINER = "k8s-escape-toolbox"
+
+
+def is_toolbox_running():
+    """Check if the toolbox container is running."""
+    try:
+        result = subprocess.run(
+            f"docker inspect -f '{{{{.State.Running}}}}' {TOOLBOX_CONTAINER}",
+            shell=True, capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip().strip("'") == "true"
+    except Exception:
+        return False
+
+
+def toolbox_cmd(command, cwd=None):
+    """Wrap a command to run inside the toolbox container.
+    If the toolbox is running, the command is executed via docker exec.
+    The project is mounted at /project in the container.
+    """
+    if is_toolbox_running():
+        # Replace local project paths with container paths
+        cmd = command.replace(PROJECT_ROOT, "/project")
+        # Determine working directory inside container
+        if cwd:
+            container_cwd = cwd.replace(PROJECT_ROOT, "/project")
+            cmd = f"cd {container_cwd} && {cmd}"
+        # Pass AWS env vars into the container
+        env_flags = ""
+        for var in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_DEFAULT_REGION", "AWS_REGION"]:
+            env_flags += f' -e {var}="${{{var}}}"'
+        # Map KUBECONFIG path to container path
+        env_flags += f' -e KUBECONFIG=/project/dashboard/.kubeconfig'
+        # Write Cortex credentials to a file in the container via docker cp
+        # (avoids shell escaping issues with special chars in API keys)
+        if cortex_settings.get("base_url"):
+            import tempfile
+            env_content = (
+                f'export CORTEX_API_URL="{cortex_settings["base_url"]}"\n'
+                f'export CORTEX_API_KEY="{cortex_settings.get("api_key", "")}"\n'
+                f'export CORTEX_API_KEY_ID="{cortex_settings.get("api_key_id", "")}"\n'
+            )
+            tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.env', delete=False)
+            tmp.write(env_content)
+            tmp.close()
+            subprocess.run(
+                f"docker cp {tmp.name} {TOOLBOX_CONTAINER}:/tmp/.cortex_env",
+                shell=True, capture_output=True, timeout=5,
+            )
+            os.unlink(tmp.name)
+            cmd = f"source /tmp/.cortex_env 2>/dev/null; {cmd}"
+        # Escape single quotes in the command for bash -c '...'
+        cmd_escaped = cmd.replace("'", "'\\''")
+        return f"docker exec{env_flags} {TOOLBOX_CONTAINER} bash -c '{cmd_escaped}'"
+    return command
+
 # In-memory store for task outputs
 tasks = {}
+
+# Credentials file path (persisted locally, excluded from git)
+CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), ".credentials.json")
 
 # In-memory store for AWS credentials
 aws_credentials = {
@@ -42,6 +102,50 @@ cortex_settings = {
     "api_key_id": "",
     "api_key": "",
 }
+
+# In-memory store for external cluster (BYOC mode)
+external_cluster = {
+    "enabled": False,
+    "kubeconfig": "",       # raw kubeconfig content or path
+    "app_host": "",         # LoadBalancer hostname of the vuln-app
+    "image_url": "",        # Container image URL (e.g. public ECR or Docker Hub)
+}
+
+
+def save_credentials():
+    """Persist credentials to local file (excluded from git)."""
+    data = {
+        "aws": aws_credentials,
+        "cortex": cortex_settings,
+        "external_cluster": external_cluster,
+    }
+    try:
+        with open(CREDENTIALS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Warning: cannot save credentials: {e}")
+
+
+def load_credentials():
+    """Load persisted credentials from local file."""
+    if not os.path.isfile(CREDENTIALS_FILE):
+        return
+    try:
+        with open(CREDENTIALS_FILE, "r") as f:
+            data = json.load(f)
+        if "aws" in data:
+            aws_credentials.update(data["aws"])
+        if "cortex" in data:
+            cortex_settings.update(data["cortex"])
+        if "external_cluster" in data:
+            external_cluster.update(data["external_cluster"])
+        print(f"Credentials loaded from {CREDENTIALS_FILE}")
+    except Exception as e:
+        print(f"Warning: cannot load credentials: {e}")
+
+
+# Load on startup
+load_credentials()
 
 
 def get_aws_env():
@@ -146,8 +250,11 @@ def generate_kubeconfig(cluster_name, region):
     return KUBECONFIG_PATH
 
 
-def run_command(task_id, command, cwd=None, env_extra=None):
-    """Run a shell command asynchronously and store streaming output."""
+def run_command(task_id, command, cwd=None, env_extra=None, use_toolbox=False):
+    """Run a shell command asynchronously and store streaming output.
+    If use_toolbox=True and the toolbox container is running, the command
+    is executed inside the container via docker exec.
+    """
     tasks[task_id]["status"] = "running"
     tasks[task_id]["start_time"] = time.time()
 
@@ -157,9 +264,15 @@ def run_command(task_id, command, cwd=None, env_extra=None):
     if env_extra:
         env.update(env_extra)
 
+    # Wrap with toolbox if requested and available
+    actual_command = command
+    if use_toolbox and is_toolbox_running():
+        actual_command = toolbox_cmd(command, cwd=cwd)
+        tasks[task_id]["output"] += "[toolbox] Running inside container\n"
+
     try:
         proc = subprocess.Popen(
-            command,
+            actual_command,
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -183,7 +296,7 @@ def run_command(task_id, command, cwd=None, env_extra=None):
     tasks[task_id]["end_time"] = time.time()
 
 
-def create_task(name, command, cwd=None, env_extra=None):
+def create_task(name, command, cwd=None, env_extra=None, use_toolbox=False):
     """Create and start a background task."""
     task_id = str(uuid.uuid4())[:8]
     tasks[task_id] = {
@@ -198,7 +311,7 @@ def create_task(name, command, cwd=None, env_extra=None):
         "pid": None,
     }
     t = threading.Thread(
-        target=run_command, args=(task_id, command, cwd, env_extra), daemon=True
+        target=run_command, args=(task_id, command, cwd, env_extra, use_toolbox), daemon=True
     )
     t.start()
     return task_id
@@ -210,6 +323,32 @@ def create_task(name, command, cwd=None, env_extra=None):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/toolbox/status", methods=["GET"])
+def toolbox_status():
+    """Check if the toolbox container is running and return tool versions."""
+    running = is_toolbox_running()
+    if not running:
+        return jsonify({"status": "stopped", "running": False})
+
+    try:
+        result = subprocess.run(
+            f"docker exec {TOOLBOX_CONTAINER} bash -c '"
+            "echo terraform=$(terraform --version 2>/dev/null | head -1); "
+            "echo kubectl=$(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -1); "
+            "echo aws=$(aws --version 2>/dev/null); "
+            "echo cortexcli=$(cortexcli --version 2>/dev/null)'",
+            shell=True, capture_output=True, text=True, timeout=10,
+        )
+        versions = {}
+        for line in result.stdout.strip().split("\n"):
+            if "=" in line:
+                k, v = line.split("=", 1)
+                versions[k.strip()] = v.strip()
+        return jsonify({"status": "running", "running": True, "versions": versions})
+    except Exception as e:
+        return jsonify({"status": "error", "running": running, "message": str(e)})
 
 
 # ─── AWS Credentials ────────────────────────────────────────────────────────
@@ -238,6 +377,7 @@ def set_credentials():
         aws_credentials["aws_session_token"] = data["aws_session_token"].strip()
     if "aws_region" in data:
         aws_credentials["aws_region"] = data["aws_region"].strip()
+    save_credentials()
     return jsonify({"status": "ok"})
 
 
@@ -257,6 +397,57 @@ def test_credentials():
         if result.returncode == 0:
             return jsonify({"status": "ok", "identity": json.loads(result.stdout)})
         return jsonify({"status": "error", "message": result.stderr.strip()}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ─── External Cluster (BYOC) ───────────────────────────────────────────────
+
+
+@app.route("/api/external-cluster", methods=["GET"])
+def get_external_cluster():
+    """Return current external cluster config."""
+    return jsonify(external_cluster)
+
+
+@app.route("/api/external-cluster", methods=["POST"])
+def set_external_cluster():
+    """Configure an external cluster (BYOC mode)."""
+    data = request.json
+    external_cluster["enabled"] = data.get("enabled", False)
+    external_cluster["app_host"] = data.get("app_host", "").strip()
+    external_cluster["image_url"] = data.get("image_url", "").strip()
+
+    kubeconfig_content = data.get("kubeconfig", "").strip()
+    if kubeconfig_content:
+        external_cluster["kubeconfig"] = kubeconfig_content
+        # Write kubeconfig to file
+        byoc_kubeconfig = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig-byoc")
+        with open(byoc_kubeconfig, "w") as f:
+            f.write(kubeconfig_content)
+        os.environ["KUBECONFIG"] = byoc_kubeconfig
+
+    save_credentials()
+    return jsonify({"status": "ok", "external_cluster": external_cluster})
+
+
+@app.route("/api/external-cluster/test", methods=["POST"])
+def test_external_cluster():
+    """Test connectivity to the external cluster."""
+    if not external_cluster.get("enabled"):
+        return jsonify({"status": "error", "message": "External cluster not configured"}), 400
+
+    try:
+        env = os.environ.copy()
+        if external_cluster.get("kubeconfig"):
+            byoc_kubeconfig = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig-byoc")
+            env["KUBECONFIG"] = byoc_kubeconfig
+
+        result = subprocess.run(
+            "kubectl cluster-info 2>&1 && echo '---' && kubectl get nodes -o wide 2>&1",
+            shell=True, capture_output=True, text=True, env=env, timeout=15,
+        )
+        return jsonify({"status": "ok", "output": result.stdout + result.stderr})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -439,20 +630,62 @@ def tf_output(tf_dir, output_name, env=None):
 
 @app.route("/api/infra/plan", methods=["POST"])
 def infra_plan():
+    lambda_dir = TERRAFORM_LAMBDA_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    infra_dir = TERRAFORM_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo "=================================================="
+echo "  PHASE 1: Infrastructure Plan"
+echo "=================================================="
+cd {infra_dir}
+{tf_init_cmd()}
+terraform plan -no-color {tf_var_region()}
+
+echo ""
+echo "=================================================="
+echo "  PHASE 2: Lambda Plan"
+echo "=================================================="
+cd ../{lambda_dir}
+{tf_init_cmd()}
+terraform plan -no-color {tf_var_region()}
+"""
     task_id = create_task(
         "Terraform Plan",
-        f"{tf_init_cmd()} && terraform plan -no-color {tf_var_region()}",
-        cwd=TERRAFORM_DIR,
+        cmd,
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
 
 @app.route("/api/infra/apply", methods=["POST"])
 def infra_apply():
+    # Deploy infra + lambda in one shot
+    lambda_dir = TERRAFORM_LAMBDA_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    infra_dir = TERRAFORM_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo "=================================================="
+echo "  PHASE 1: Infrastructure (EKS + VPC + IAM)"
+echo "=================================================="
+cd {infra_dir}
+{tf_init_cmd()}
+terraform apply -auto-approve -no-color {tf_var_region()}
+
+echo ""
+echo "=================================================="
+echo "  PHASE 2: Lambda Containment"
+echo "=================================================="
+cd ../{lambda_dir}
+{tf_init_cmd()}
+terraform apply -auto-approve -no-color {tf_var_region()}
+
+echo ""
+echo "=================================================="
+echo "  [OK] Infrastructure + Lambda deployed successfully"
+echo "=================================================="
+"""
     task_id = create_task(
         "Terraform Apply",
-        f"{tf_init_cmd()} && terraform apply -auto-approve -no-color {tf_var_region()}",
-        cwd=TERRAFORM_DIR,
+        cmd,
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
@@ -479,7 +712,7 @@ if [ -n "$VPC_ID" ]; then
   # Delete Classic ELBs in the VPC
   echo '==> Checking Classic Load Balancers...'
   ELBS=$(aws elb describe-load-balancers --region {region} \
-    --query "LoadBalancerDescriptions[?VPCId==\`$VPC_ID\`].LoadBalancerName" --output text 2>/dev/null || echo '')
+    --query "LoadBalancerDescriptions[?VPCId==\\`$VPC_ID\\`].LoadBalancerName" --output text 2>/dev/null || echo '')
   for ELB in $ELBS; do
     echo "    Deleting Classic ELB: $ELB"
     aws elb delete-load-balancer --load-balancer-name "$ELB" --region {region} 2>/dev/null || true
@@ -488,7 +721,7 @@ if [ -n "$VPC_ID" ]; then
   # Delete ALB/NLBs in the VPC
   echo '==> Checking ALB/NLB Load Balancers...'
   LB_ARNS=$(aws elbv2 describe-load-balancers --region {region} \
-    --query "LoadBalancers[?VpcId==\`$VPC_ID\`].LoadBalancerArn" --output text 2>/dev/null || echo '')
+    --query "LoadBalancers[?VpcId==\\`$VPC_ID\\`].LoadBalancerArn" --output text 2>/dev/null || echo '')
   for LB_ARN in $LB_ARNS; do
     echo "    Deleting ALB/NLB: $LB_ARN"
     aws elbv2 delete-load-balancer --load-balancer-arn "$LB_ARN" --region {region} 2>/dev/null || true
@@ -508,7 +741,7 @@ if [ -n "$VPC_ID" ]; then
   echo '==> Checking orphaned ENIs...'
   ENI_IDS=$(aws ec2 describe-network-interfaces --region {region} \
     --filters Name=vpc-id,Values=$VPC_ID \
-    --query "NetworkInterfaces[?Attachment.DeviceIndex!=\`0\` || Attachment.InstanceId==null].NetworkInterfaceId" \
+    --query "NetworkInterfaces[?Attachment.DeviceIndex!=\\`0\\` || Attachment.InstanceId==null].NetworkInterfaceId" \
     --output text 2>/dev/null || echo '')
   for ENI in $ENI_IDS; do
     ATTACH_ID=$(aws ec2 describe-network-interfaces --region {region} \
@@ -540,11 +773,24 @@ fi
 
 echo ''
 echo '=================================================='
-echo '  TERRAFORM DESTROY'
+echo '  PHASE 1: DESTROY LAMBDA'
 echo '=================================================='
+cd {TERRAFORM_LAMBDA_DIR}
+{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()} || echo 'Lambda destroy skipped (not deployed?)'
+
+echo ''
+echo '=================================================='
+echo '  PHASE 2: DESTROY INFRASTRUCTURE'
+echo '=================================================='
+cd {TERRAFORM_DIR}
 {tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()}
+
+echo ''
+echo '=================================================='
+echo '  [OK] All infrastructure destroyed'
+echo '=================================================='
 """
-    task_id = create_task("Terraform Destroy", cmd, cwd=TERRAFORM_DIR)
+    task_id = create_task("Terraform Destroy", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -566,6 +812,275 @@ def infra_outputs():
         return jsonify({"error": result.stderr}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─── Cortex CLI Image Scan ──────────────────────────────────────────────────
+
+
+@app.route("/api/cortex/image-scan", methods=["POST"])
+def cortex_image_scan():
+    """Scan a Docker image with cortexcli (CWP) before push."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    # Derive the cortexcli API base URL from the Cortex API URL
+    api_base_url = cortex_settings["base_url"].rstrip("/")
+    api_key = cortex_settings["api_key"]
+    api_key_id = cortex_settings["api_key_id"]
+
+    # Get the image name to scan
+    image_name = request.json.get("image", "")
+    if not image_name:
+        # Try to get from terraform output (ECR URL)
+        env = os.environ.copy()
+        env.update(get_aws_env())
+        ecr_url = tf_output(TERRAFORM_DIR, "ecr_repository_url", env)
+        if ecr_url:
+            image_name = f"{ecr_url}:latest"
+        else:
+            return jsonify({"status": "error", "message": "No image specified and ECR URL not found"}), 400
+
+    # Extract region from image name for ECR login
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+
+    cmd = f"""
+echo "=================================================="
+echo "  CORTEX CLI - Container Image Scan (CWP)"
+echo "=================================================="
+echo ""
+echo "  Image: {image_name}"
+echo "  API:   {api_base_url}"
+echo ""
+
+# Check if cortexcli is installed — download from tenant if needed
+if ! command -v cortexcli &> /dev/null; then
+    echo "[*] cortexcli not found. Downloading from Cortex tenant..."
+    if command -v cortexcli-install &> /dev/null; then
+        export CORTEX_API_URL="{api_base_url}"
+        export CORTEX_API_KEY="{api_key}"
+        export CORTEX_API_KEY_ID="{api_key_id}"
+        cortexcli-install
+    else
+        ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+        echo "[*] Getting signed download URL..."
+        SIGNED_URL=$(curl -sk \\
+            "{api_base_url}/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=${{ARCH}}" \\
+            -H "x-xdr-auth-id: {api_key_id}" \\
+            -H "Authorization: {api_key}" | jq -r ".signed_url" 2>/dev/null)
+        if [ -n "$SIGNED_URL" ] && [ "$SIGNED_URL" != "null" ]; then
+            echo "[*] Downloading cortexcli for linux-${{ARCH}}..."
+            curl -sk -o /usr/local/bin/cortexcli "$SIGNED_URL" && chmod +x /usr/local/bin/cortexcli
+        else
+            echo "[!] Failed to get download link. Install cortexcli manually."
+            echo "    brew tap paloaltonetworks/cortexcli && brew install cortexcli"
+        fi
+    fi
+fi
+
+echo "==> cortexcli version: $(cortexcli --version 2>/dev/null || echo 'unknown')"
+echo ""
+
+# Check if image exists locally
+echo "==> Checking if image exists locally..."
+if docker image inspect "{image_name}" > /dev/null 2>&1; then
+    echo "  [OK] Image found locally"
+else
+    echo "  [!] Image not found locally. Pulling from registry..."
+    # Login to ECR if image is from ECR
+    if echo "{image_name}" | grep -q "dkr.ecr"; then
+        ACCOUNT_ID=$(echo "{image_name}" | cut -d. -f1)
+        ECR_REGION=$(echo "{image_name}" | grep -oP 'ecr\\.\\K[^.]+')
+        echo "  [*] Logging in to ECR (account: $ACCOUNT_ID, region: ${{ECR_REGION:-{region}}})..."
+        aws ecr get-login-password --region ${{ECR_REGION:-{region}}} | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.${{ECR_REGION:-{region}}}.amazonaws.com 2>&1
+    fi
+    echo "  [*] Pulling image: {image_name}..."
+    docker pull "{image_name}" 2>&1
+    if [ $? -ne 0 ]; then
+        echo "  [FAIL] Cannot pull image. Make sure you have access to the registry."
+        exit 1
+    fi
+    echo "  [OK] Image pulled successfully"
+fi
+echo ""
+
+echo "==> Scanning image: {image_name}"
+echo "    (this may take 2-5 minutes — cortexcli is analyzing layers...)"
+echo ""
+
+# Progress indicator in background (prints dots while scan runs)
+(
+    while true; do
+        sleep 5
+        printf "." >&2
+    done
+) &
+PROGRESS_PID=$!
+trap "kill $PROGRESS_PID 2>/dev/null" EXIT
+echo "==> Command:"
+echo "    cortexcli --api-base-url {api_base_url} --api-key ****{api_key[-4:]} --api-key-id {api_key_id} image scan {image_name} --timeout 300"
+echo ""
+
+# Run the CWP image scan (timeout 5 min)
+cortexcli \\
+    --api-base-url "{api_base_url}" \\
+    --api-key "{api_key}" \\
+    --api-key-id "{api_key_id}" \\
+    image scan "{image_name}" \\
+    --timeout 300 2>&1
+
+SCAN_EXIT=$?
+
+# Stop progress indicator
+kill $PROGRESS_PID 2>/dev/null
+echo ""
+
+echo ""
+echo "=================================================="
+if [ $SCAN_EXIT -eq 0 ]; then
+    echo "  [OK] Image scan completed - no policy violations"
+elif [ $SCAN_EXIT -eq 1 ]; then
+    echo "  [!] Image scan completed - POLICY VIOLATIONS FOUND"
+    echo "      Vulnerabilities or compliance issues detected."
+else
+    echo "  [!] Image scan failed (exit code $SCAN_EXIT)"
+    echo "      Check the output above for details."
+fi
+echo "=================================================="
+"""
+    task_id = create_task("Cortex CLI: Image Scan", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/cortex/iac-scan", methods=["POST"])
+def cortex_iac_scan():
+    """Scan IaC (Terraform + K8s manifests) with cortexcli code scan."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    # Scan directories
+    scan_target = request.json.get("target", "all")  # all, terraform, k8s
+
+    # Use env vars $CORTEX_API_URL, $CORTEX_API_KEY, $CORTEX_API_KEY_ID
+    # These are passed to the toolbox container by toolbox_cmd()
+    cmd = """
+echo "=================================================="
+echo "  CORTEX CLI - IaC Security Scan (Code Security)"
+echo "=================================================="
+echo ""
+echo "  API:   $CORTEX_API_URL"
+echo "  Target: """ + scan_target + """
+"
+echo ""
+
+# Check if cortexcli is installed — download from tenant if needed
+if ! command -v cortexcli > /dev/null 2>&1; then
+    echo "[*] cortexcli not found. Downloading from Cortex tenant..."
+    if command -v cortexcli-install > /dev/null 2>&1; then
+        cortexcli-install
+    else
+        ARCH=$(dpkg --print-architecture 2>/dev/null || echo amd64)
+        echo "[*] Getting signed download URL..."
+        SIGNED_URL=$(curl -sk \\
+            "$CORTEX_API_URL/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=${ARCH}" \\
+            -H "x-xdr-auth-id: $CORTEX_API_KEY_ID" \\
+            -H "Authorization: $CORTEX_API_KEY" | jq -r ".signed_url" 2>/dev/null)
+        if [ -n "$SIGNED_URL" ] && [ "$SIGNED_URL" != "null" ]; then
+            echo "[*] Downloading cortexcli for linux-${ARCH}..."
+            curl -sk -o /usr/local/bin/cortexcli "$SIGNED_URL" && chmod +x /usr/local/bin/cortexcli
+            echo "[OK] cortexcli installed: $(cortexcli --version 2>/dev/null)"
+        else
+            echo "[!] Failed to get download link."
+            exit 1
+        fi
+    fi
+fi
+
+echo "==> cortexcli version: $(cortexcli --version 2>/dev/null || echo unknown)"
+echo "==> node version: $(node --version 2>/dev/null || echo not found)"
+echo ""
+
+"""
+
+    if scan_target == "all":
+        cmd += """
+echo "=================================================="
+echo "  Full Project Scan (k8s-container-escape-demo/)"
+echo "=================================================="
+echo ""
+echo "==> Command: cortexcli code scan --directory . --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo"
+echo ""
+cortexcli \\
+    --api-base-url "$CORTEX_API_URL" \\
+    --api-key "$CORTEX_API_KEY" \\
+    --api-key-id "$CORTEX_API_KEY_ID" \\
+    code scan \\
+    --directory . \\
+    --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo 2>&1 || true
+echo ""
+"""
+
+    if scan_target == "terraform":
+        cmd += """
+echo "=================================================="
+echo "  Terraform Infrastructure (terraform-infra/)"
+echo "=================================================="
+echo ""
+echo "==> Command: cortexcli code scan --directory terraform-infra --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-terraform"
+echo ""
+cortexcli \\
+    --api-base-url "$CORTEX_API_URL" \\
+    --api-key "$CORTEX_API_KEY" \\
+    --api-key-id "$CORTEX_API_KEY_ID" \\
+    code scan \\
+    --directory terraform-infra \\
+    --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-terraform 2>&1 || true
+echo ""
+"""
+
+    if scan_target == "k8s":
+        cmd += """
+echo "=================================================="
+echo "  Kubernetes Manifests (k8s/)"
+echo "=================================================="
+echo ""
+echo "==> Command: cortexcli code scan --directory k8s --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-k8s-manifest"
+echo ""
+cortexcli \\
+    --api-base-url "$CORTEX_API_URL" \\
+    --api-key "$CORTEX_API_KEY" \\
+    --api-key-id "$CORTEX_API_KEY_ID" \\
+    code scan \\
+    --directory k8s \\
+    --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-k8s-manifest 2>&1 || true
+echo ""
+"""
+
+    if scan_target == "sca":
+        cmd += """
+echo "=================================================="
+echo "  WebApp SCA (app/)"
+echo "=================================================="
+echo ""
+echo "==> Command: cortexcli code scan --directory app --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-webapp"
+echo ""
+cortexcli \\
+    --api-base-url "$CORTEX_API_URL" \\
+    --api-key "$CORTEX_API_KEY" \\
+    --api-key-id "$CORTEX_API_KEY_ID" \\
+    code scan \\
+    --directory app \\
+    --repo-id cortex-cloud-demo/K8s-Container-Escape-Demo-webapp 2>&1 || true
+echo ""
+"""
+
+    cmd += """
+echo "=================================================="
+echo "  [OK] AppSec scan complete"
+echo "=================================================="
+"""
+
+    task_id = create_task("Cortex CLI: AppSec Scan", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
 
 
 # ─── Docker Build & Push ────────────────────────────────────────────────────
@@ -590,7 +1105,7 @@ docker push ${{ECR_URL}}:latest
 
 echo "==> Done! Image pushed to ${{ECR_URL}}:latest"
 """
-    task_id = create_task("Build & Push Image", cmd)
+    task_id = create_task("Build & Push Image", cmd, use_toolbox=False)
     return jsonify({"task_id": task_id})
 
 
@@ -609,7 +1124,40 @@ def k8s_deploy():
     except Exception as e:
         return jsonify({"error": f"Failed to generate kubeconfig: {e}"}), 500
 
-    cmd = f"""
+    # Determine image URL
+    if external_cluster.get("enabled") and external_cluster.get("image_url"):
+        image_url = external_cluster["image_url"]
+    else:
+        image_url = None  # Will be resolved from terraform output
+
+    if image_url:
+        # BYOC mode: use provided image URL
+        cmd = f"""
+set -e
+echo "==> BYOC Mode: Deploying to external cluster"
+echo "==> Testing cluster access..."
+kubectl cluster-info
+
+echo "==> Applying manifests..."
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/service-account.yaml
+
+echo "==> Setting image: {image_url}"
+sed "s|ECR_IMAGE_PLACEHOLDER|{image_url}|g" k8s/deployment.yaml | kubectl apply -f -
+
+echo "==> Waiting for deployment rollout..."
+kubectl rollout status deployment/vuln-app -n vuln-app --timeout=300s
+
+echo "==> Waiting for LoadBalancer..."
+sleep 15
+HOST=$(kubectl get svc vuln-app-service -n vuln-app -o jsonpath='{{.status.loadBalancer.ingress[0].hostname}}' 2>/dev/null || echo "pending")
+echo ""
+echo "==> Application deployed!"
+echo "==> HOST=${{HOST}}"
+echo "==> URL: http://${{HOST}}/app"
+"""
+    else:
+        cmd = f"""
 set -e
 REGION=$(cd terraform-infra && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
 ECR_URL=$(cd terraform-infra && terraform output -raw ecr_repository_url 2>/dev/null)
@@ -636,7 +1184,7 @@ echo "==> Application deployed!"
 echo "==> HOST=${{HOST}}"
 echo "==> URL: http://${{HOST}}/app"
 """
-    task_id = create_task("Deploy to EKS", cmd)
+    task_id = create_task("Deploy to EKS", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -651,7 +1199,7 @@ echo "==> Waiting for namespace deletion..."
 kubectl wait --for=delete namespace/vuln-app --timeout=60s 2>/dev/null || true
 echo "==> Undeploy complete"
 """
-    task_id = create_task("Undeploy from EKS", cmd)
+    task_id = create_task("Undeploy from EKS", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -717,7 +1265,11 @@ def kubectl_exec():
 
 
 def get_host():
-    """Get the LoadBalancer hostname."""
+    """Get the LoadBalancer hostname (or external cluster host if BYOC)."""
+    # BYOC mode: use manually configured host
+    if external_cluster.get("enabled") and external_cluster.get("app_host"):
+        return external_cluster["app_host"]
+
     env = os.environ.copy()
     env.update(get_aws_env())
     result = subprocess.run(
@@ -782,6 +1334,32 @@ def attack_step4():
     return jsonify({"task_id": task_id})
 
 
+@app.route("/api/attack/step5", methods=["POST"])
+def attack_step5():
+    host = get_host()
+    if not host:
+        return jsonify({"error": "No HOST found. Deploy the app first."}), 400
+    task_id = create_task(
+        "Step 5: Deploy Malware",
+        f"bash {ATTACK_DIR}/05-deploy-malware.sh",
+        env_extra={"HOST": host},
+    )
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/attack/step6", methods=["POST"])
+def attack_step6():
+    host = get_host()
+    if not host:
+        return jsonify({"error": "No HOST found. Deploy the app first."}), 400
+    task_id = create_task(
+        "Step 6: Lateral Movement",
+        f"bash {ATTACK_DIR}/06-lateral-movement.sh",
+        env_extra={"HOST": host},
+    )
+    return jsonify({"task_id": task_id})
+
+
 @app.route("/api/attack/shell", methods=["POST"])
 def attack_shell():
     """Execute a custom command on the compromised pod via webshell."""
@@ -810,6 +1388,7 @@ def lambda_apply():
         "Deploy Lambda",
         f"echo '>>> Terraform Lambda Deploy starting...' && {tf_init_cmd()} 2>&1 && terraform apply -auto-approve -no-color {tf_var_region()} 2>&1",
         cwd=TERRAFORM_LAMBDA_DIR,
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
@@ -821,6 +1400,7 @@ def lambda_destroy():
         "Destroy Lambda",
         f"{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_region()}",
         cwd=TERRAFORM_LAMBDA_DIR,
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
@@ -1064,7 +1644,9 @@ def set_cortex_credentials():
     if "api_key_id" in data:
         cortex_settings["api_key_id"] = data["api_key_id"].strip()
     if "api_key" in data:
-        cortex_settings["api_key"] = data["api_key"].strip()
+        # Strip non-ASCII chars that may come from copy/paste
+        cortex_settings["api_key"] = data["api_key"].encode("ascii", errors="ignore").decode("ascii").strip()
+    save_credentials()
     return jsonify({"status": "ok"})
 
 
@@ -1249,9 +1831,12 @@ def cortex_json_request(api_path, json_data, method="POST"):
 
     url = f"{base_url}{api_path}"
     body = json.dumps(json_data).encode("utf-8")
+    # Ensure API key is ASCII-safe (strip any non-ASCII chars from copy/paste)
+    safe_api_key = api_key.encode("ascii", errors="ignore").decode("ascii").strip()
+    safe_api_key_id = api_key_id.encode("ascii", errors="ignore").decode("ascii").strip()
     headers = {
-        "Authorization": api_key,
-        "x-xdr-auth-id": api_key_id,
+        "Authorization": safe_api_key,
+        "x-xdr-auth-id": safe_api_key_id,
         "Content-Type": "application/json",
         "Content-Length": str(len(body)),
     }
@@ -1588,6 +2173,88 @@ CORTEX_PREVENTION_PROFILES = [
         "modules": {},
     },
 ]
+
+
+@app.route("/api/cortex/playbook-runs", methods=["GET"])
+def cortex_playbook_runs():
+    """Fetch recent playbook run statuses from Cortex."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    api_path = "/public_api/v1/inv_playbook/get_playbook_runs"
+    import time as _time
+    now_ms = int(_time.time() * 1000)
+    day_ago_ms = now_ms - (24 * 60 * 60 * 1000)
+
+    payload = {
+        "request_data": {
+            "search_from": 0,
+            "search_to": 10,
+            "sort": {"field": "start_time", "keyword": "desc"},
+            "filters": [
+                {"field": "start_time", "operator": "gte", "value": day_ago_ms}
+            ],
+        }
+    }
+
+    result, status_code = cortex_json_request(api_path, payload)
+    if result.get("status") != "ok":
+        return jsonify(result), status_code
+
+    try:
+        data = json.loads(result.get("response", "{}"))
+        runs = data.get("reply", {}).get("playbook_runs", [])
+        return jsonify({"status": "ok", "runs": runs, "total": len(runs)})
+    except Exception as e:
+        return jsonify({"status": "ok", "runs": [], "raw": result.get("response", "")[:500]})
+
+
+@app.route("/api/cortex/soc-alerts", methods=["GET"])
+def cortex_soc_alerts():
+    """Fetch recent XDR incidents/alerts for the SOC Live dashboard."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+
+    # Get incidents from last 24 hours
+    api_path = "/public_api/v1/incidents/get_incidents"
+    import time as _time
+    now_ms = int(_time.time() * 1000)
+    day_ago_ms = now_ms - (24 * 60 * 60 * 1000)
+
+    payload = {
+        "request_data": {
+            "search_from": 0,
+            "search_to": 50,
+            "sort": {"field": "creation_time", "keyword": "desc"},
+            "filters": [
+                {"field": "creation_time", "operator": "gte", "value": day_ago_ms}
+            ],
+        }
+    }
+
+    result, status_code = cortex_json_request(api_path, payload)
+    if result.get("status") != "ok":
+        return jsonify(result), status_code
+
+    try:
+        data = json.loads(result.get("response", "{}"))
+        incidents = data.get("reply", {}).get("incidents", [])
+        alerts = []
+        for inc in incidents:
+            alerts.append({
+                "id": inc.get("incident_id"),
+                "name": inc.get("description", inc.get("incident_name", "Unknown")),
+                "severity": inc.get("severity", "unknown"),
+                "status": inc.get("status", ""),
+                "created": inc.get("creation_time"),
+                "host": inc.get("hosts", [""])[0] if inc.get("hosts") else "",
+                "mitre": inc.get("mitre_techniques_ids_and_names", []),
+                "alert_count": inc.get("alert_count", 0),
+                "category": inc.get("alert_categories", []),
+            })
+        return jsonify({"status": "ok", "alerts": alerts, "total": len(alerts)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/cortex/policy-check", methods=["GET"])

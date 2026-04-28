@@ -41,8 +41,17 @@ resource "aws_iam_role" "dashboard_operator" {
   max_session_duration = 14400 # 4 hours for long demo sessions
 
   tags = {
-    Name    = "${var.project_name}-dashboard-operator"
-    Purpose = "Demo dashboard operator role"
+    Name                 = "${var.project_name}-dashboard-operator"
+    Purpose              = "Demo dashboard operator role"
+    git_commit           = "9e5d9a119a382e50dfaca29a8f6225d8242e423f"
+    git_file             = "terraform-infra/iam-dashboard.tf"
+    git_last_modified_at = "2026-04-02 07:07:56"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "dashboard_operator"
+    yor_trace            = "ab917617-c5a0-4d58-9cec-24e9444b812b"
   }
 }
 
@@ -460,8 +469,17 @@ resource "aws_iam_user" "dashboard" {
   name = "${var.project_name}-dashboard-user"
 
   tags = {
-    Name    = "${var.project_name}-dashboard-user"
-    Purpose = "Dashboard operator - permanent credentials for AssumeRole"
+    Name                 = "${var.project_name}-dashboard-user"
+    Purpose              = "Dashboard operator - permanent credentials for AssumeRole"
+    git_commit           = "9e5d9a119a382e50dfaca29a8f6225d8242e423f"
+    git_file             = "terraform-infra/iam-dashboard.tf"
+    git_last_modified_at = "2026-04-02 07:07:56"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "dashboard"
+    yor_trace            = "26170fdb-0a86-42c5-88e4-ec98edd23a4f"
   }
 }
 

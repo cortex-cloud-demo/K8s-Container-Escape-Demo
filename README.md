@@ -1,32 +1,52 @@
-# Kubernetes Container Escape Demo
+# Code-to-Cloud-to-SOC — K8s Container Escape Demo
 
-Full attack chain demo on AWS EKS — from Spring4Shell RCE to container escape to cluster takeover — with automated detection by Cortex XDR and incident response via Cortex playbook + AWS Lambda containment.
+Full attack chain demo on AWS EKS — from Spring4Shell RCE to container escape to cluster takeover — with automated detection by Cortex XDR and incident response via Cortex playbooks + AWS Lambda containment.
 
-Everything is orchestrated from a **web dashboard**: infrastructure provisioning, attack execution, and automated remediation.
+6 attack steps, 14+ Cortex XDR issues generated, automated containment via playbooks. Shift-left scanning with CortexCLI (CWP + IaC/SCA).
 
-## Architecture Diagram
+Everything is orchestrated from a **web dashboard** with a **Docker toolbox container** for portability (no local tool install required).
 
-![Architecture Diagram](docs/architecture.png)
+## Demo Video
 
-## Attack & Response Chain
+https://github.com/user-attachments/assets/be352d10-b865-4da2-a20d-8689d79344bd
 
-![Attack & Response Chain](docs/attack-response-chain.png)
+## Architecture
+
+```
+┌─────────────────────────── LOCAL MACHINE ──────────────────────────┐
+│                                                                     │
+│  Flask Dashboard (app.py)  <── run.sh ──>  Browser :5555            │
+│       │                                                             │
+│       │ docker exec                                                 │
+│       v                                                             │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │  Runner Toolbox Container (Ubuntu 24.04)                       │ │
+│  │  Terraform │ kubectl │ AWS CLI │ Helm │ Docker │ CortexCLI │ Node.js │ │
+│  │  /project mounted │ Docker socket │ tfstate local              │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+         │                    │                      │
+         v                    v                      v
+   ┌── AWS Cloud ──┐   ┌── Cortex Cloud ──┐   ┌── Attack ──┐
+   │ EKS + Lambda  │   │ XSIAM + Agent    │   │ Steps 1-6  │
+   │ ECR + IAM     │   │ Playbooks + XQL  │   │ via webshell│
+   └───────────────┘   └──────────────────┘   └────────────┘
+```
 
 ## Quick Start
 
 ### Prerequisites
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| **AWS CLI** | v2+ | AWS API access |
-| **Terraform** | >= 1.5 | Infrastructure provisioning |
-| **kubectl** | latest | Kubernetes management |
-| **Docker** | with buildx | Image build (cross-compilation ARM → AMD64) |
-| **Python** | 3.9+ | Dashboard application |
-| **AWS Account** | admin access | Initial bootstrap (one-time) |
-| **Cortex Instance** | XSIAM/XSOAR | Playbook deployment (optional) |
+| Tool | Purpose |
+|------|---------|
+| **Docker Desktop** | Toolbox container + image build (only requirement) |
+| **Python 3.9+** | Dashboard application |
+| **AWS Account** | Infrastructure provisioning (admin for bootstrap) |
+| **Cortex XSIAM** | Detection, playbooks, CWP/IaC scanning (optional) |
 
-### 1. Clone & Launch Dashboard
+> All CLI tools (terraform, kubectl, aws, helm, cortexcli, node.js) run inside the toolbox container — no local installation needed.
+
+### 1. Clone & Launch
 
 ```bash
 git clone https://github.com/cortex-cloud-demo/K8s-Container-Escape-Demo.git
@@ -34,376 +54,241 @@ cd K8s-Container-Escape-Demo/dashboard
 ./run.sh
 ```
 
-This creates a Python virtual environment, installs dependencies, and starts the dashboard.
+This will:
+1. Create a Python virtual environment and install dependencies
+2. Detect your OS/arch (macOS arm64/Intel, Linux, Windows WSL2)
+3. Build the **Runner Toolbox** Docker container (background)
+4. Start the dashboard on **http://localhost:5555**
 
-Open **http://localhost:5555**
+### 2. Configure Credentials
 
-### 2. Configure AWS Credentials
+**AWS** — Click **AWS > Configure** and enter credentials (or paste `export AWS_*` commands):
+- Access Key ID, Secret Access Key, Session Token (optional), Region
 
-In the dashboard, click **AWS > Configure** and enter your admin credentials:
-- **Access Key ID**
-- **Secret Access Key**
-- **Session Token** (if using SSO/temporary credentials)
-- **Region** (e.g. `eu-west-2`)
+**Cortex** — Click **CORTEX > Configure**:
+- API Base URL, API Key ID, API Key
 
-Click **Test** to verify connectivity.
+### 3. Deploy Infrastructure
 
-> Credentials are stored in-memory only and never persisted to disk.
+Click **INFRA > Apply** — deploys in 2 phases via the Runner Toolbox:
+1. **Infrastructure**: VPC, EKS cluster (AL2023), ECR, IAM users/roles
+2. **Lambda**: Containment function, IAM invoker role, EKS access entry
 
-### 3. Deploy Infrastructure (~15 min)
+### 4. Build & Deploy
 
-Click **INFRA > Apply** — Terraform provisions:
-- VPC (2 public subnets, Internet Gateway, route tables)
-- EKS cluster (AL2023 nodes, GP3 volumes)
-- ECR repository
-- Dashboard IAM User + Operator Role
-- EKS access entries
+| Step | Button | Action |
+|------|--------|--------|
+| Connect | **Connect** | Generate kubeconfig for EKS |
+| Build | **Build & Push** | Docker build (linux/amd64) + push to ECR |
+| Deploy | **Deploy** | K8s manifests: privileged pod + LoadBalancer |
 
-### 4. Switch to Dashboard User (permanent credentials)
+### 5. AppSec — Shift-Left Scanning
 
-After infra is deployed, retrieve the dedicated dashboard user credentials:
+| Scan | Button | Target | What it detects |
+|------|--------|--------|-----------------|
+| **CWP Image** | Scan Image | Container image | Vulnerabilities, malware, secrets, SBOM |
+| **IaC** | Terraform | terraform-infra/ | Terraform misconfigurations |
+| **K8s** | K8s | k8s/ | K8s manifest security issues |
+| **SCA** | SCA | app/ | Vulnerable dependencies (Spring4Shell) |
+| **Full** | Scan All | Entire repo | All of the above + secrets detection |
 
-```bash
-cd terraform-infra
-terraform output dashboard_user_access_key_id
-terraform output -raw dashboard_user_secret_access_key
-```
+All scans run via **CortexCLI** inside the Runner Toolbox container (downloaded dynamically from Cortex tenant).
 
-Paste these in **AWS > Configure** (Access Key + Secret Key, no Session Token needed). These credentials never expire.
+### 6. Run Attack Chain
 
-### 5. Build, Deploy & Attack
+| Step | Button | MITRE | What it does |
+|------|--------|-------|-------------|
+| Step 1 | **Exploit** | T1190, T1505 | Spring4Shell RCE — deploy JSP webshell |
+| Step 2 | **Escape** | T1611, T1552 | Container escape — nsenter, mount, chroot, IMDS |
+| Step 3 | **Takeover** | T1078, T1552 | Cluster takeover — SA token, all secrets/pods/nodes |
+| Step 4 | **Scan** | T1610, T1613 | K8s scanning — deepce, kube-hunter, RBAC enum |
+| Step 5 | **Deploy** | T1105, T1059 | Malware — WildFire ELF, reverse shell, cryptominer |
+| Step 6 | **Move** | T1021, T1550 | Lateral movement — SSH, rogue pod, IMDS theft |
 
-| Step | Card/Button | Action |
-|------|-------------|--------|
-| Connect | **Connect** | Generates kubeconfig |
-| Build | **Build Image** | Docker build (linux/amd64) + push to ECR |
-| Deploy | **Deploy** | K8s manifests: namespace, SA, privileged deployment, LB |
-| RCE | **Step 1: Exploit** | Spring4Shell webshell |
-| Escape | **Step 2: Escape** | Container escape via nsenter, host fs, IMDS |
-| Takeover | **Step 3: Takeover** | cluster-admin SA token, secrets, AWS creds |
-| Scanning | **Step 4: Scan** | K8s vulnerability scanning (T1610/T1613) |
+Or use **Run Full Demo** (or click **Run Attack** in the diagram) to execute all 6 steps automatically. The Overview diagram animates in real-time — red flows show the attack path, green flows show Cortex detection and response.
 
-### 6. Deploy Cortex Response
+After completion, click **"Analyze / Forensic and take action in Cortex XSIAM"** to open the Cortex console directly on the Cases page.
 
-| Step | Card | Action |
-|------|------|--------|
-| Lambda | **LAMBDA > Apply** | Terraform: Lambda function, IAM, EKS access entry, Cortex IAM user |
-| Scripts | **CORTEX > Deploy** (per script) | Push individual automation scripts to Cortex (triage, containment, forensic, threat hunt) |
-| Playbooks | **CORTEX > Deploy** (per playbook) | Push individual playbooks to Cortex (containment, forensic, search similar events) |
-| All | **CORTEX > Deploy All** | Push all 4 scripts + 3 playbooks at once |
-| Policy | **POLICY > Import** | Import prevention policy rules + profiles (BETA) |
+### 7. Deploy Cortex Response
 
-### 7. Cleanup
+| Step | Button | Action |
+|------|--------|--------|
+| Lambda | **Deploy** | Redeploy containment Lambda (if needed) |
+| Scripts | **Deploy All** | Push 4 automation scripts to Cortex |
+| Playbooks | **Deploy All** | Push 3 playbooks to Cortex |
+| Policy | **Import** | Create prevention profiles via API |
 
-Click **Destroy Lambda** then **Destroy All** in the Cleanup section. The dashboard automatically cleans up K8s resources (LoadBalancer, ENIs, EIPs) before running `terraform destroy`.
+### 8. Cleanup
+
+Click **Destroy All** — automatically cleans up K8s resources (LB, ENIs, EIPs), destroys Lambda, then destroys infrastructure.
+
+## Dashboard Tabs
+
+| Tab | Color | Purpose |
+|-----|-------|---------|
+| **Code to Cloud to SOC** | Green | Unified diagram showing the 3 phases (Code → Cloud → SOC) with narrative and feedback loop |
+| **Cloud / Runtime Security** | Purple | Interactive architecture diagram with live attack/detection/response animations. Default view during attacks |
+| **AppSec** | Cyan | Interactive diagram for CWP image scanning and IaC/SCA code scanning with clickable scan targets |
+| **Terminal** | — | Command output for all operations + remote webshell |
+| **kubectl** | — | Interactive kubectl with shortcuts (nodes, pods, secrets, kill pods) |
+| **Cortex** | — | Playbook flow visualization + script/playbook deployment |
+| **SOC Live** | Red | Real-time Cortex XDR alerts, MITRE ATT&CK heatmap, detection timer |
+| **Code** | Cyan | Shift-left: CVE details, K8s misconfigurations, IaC findings with fixes |
+| **Security Radar** | Cyan | Before/after security posture comparison (6-axis spider chart) |
+| **Architecture** | Cyan | Platform architecture diagram (dashboard, toolbox, AWS, Cortex) |
+
+## Cortex XDR Issues Generated
+
+The 6 attack steps generate **14+ issues** in Cortex XDR:
+
+| Issue | Severity | MITRE | Triggered by |
+|-------|----------|-------|-------------|
+| Local Threat Detected (x3) | HIGH | — | Webshell JSP creation |
+| Evasion Technique | HIGH | T1059.004 | Base64 script decode + exec |
+| Local Analysis Malware | HIGH | — | Malicious file detected |
+| Container Image immutability (x2) | MEDIUM | T1118 | curl/kubectl installed (drift) |
+| Kubernetes nsenter escape | LOW | T1611 | nsenter container escape |
+| Possible data obfuscation (x3) | LOW | T1140 | Base64 usage in pod |
+| kubectl execution in pod | LOW | T1134 | kubectl with SA token |
+| UNIX LOLBIN rare host | LOW | T1071 | curl to dl.k8s.io |
+| Uncommon service started | LOW | T1543 | Service via nsenter |
+
+## Runner Toolbox
+
+The toolbox is a Docker container (Ubuntu 24.04) with all CLI tools, **auto-built at startup**:
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Terraform | 1.9.8 | Infrastructure provisioning (EKS, VPC, Lambda) |
+| kubectl | 1.29 | Kubernetes management |
+| AWS CLI | v2 | AWS API operations (ECR, STS, EKS) |
+| Helm | 3.17 | Chart deployments (XDR agent) |
+| Node.js | 22 | Required by CortexCLI for code scanning |
+| Docker CLI | latest | Build, push, image scan (via mounted socket) |
+| CortexCLI | latest | CWP image scan + IaC/SCA code scanning (downloaded from tenant) |
+
+**CortexCLI** is downloaded dynamically from your Cortex tenant at runtime — no manual install needed.
+
+**Portability:**
+- macOS Apple Silicon (arm64) + Intel (amd64)
+- Linux (amd64/arm64)
+- Windows (WSL2)
+- Fallback: runs without Docker (tools must be installed locally)
+
+**Volumes mounted:**
+- `/project` — source code + terraform state (local)
+- `/var/run/docker.sock` — Docker engine access
+- `~/.aws` — AWS credentials (read-only)
+
+## IaC Tagging (Yor)
+
+All Terraform resources are tagged with [Yor](https://github.com/bridgecrewio/yor) for traceability:
+
+| Tag | Description |
+|-----|-------------|
+| `yor_trace` | Unique resource trace ID |
+| `yor_name` | Resource name |
+| `git_repo` | Repository name |
+| `git_org` | GitHub organization |
+| `git_file` | Source file path |
+| `git_commit` | Last commit hash |
+| `git_last_modified_at` | Last modification date |
+| `git_last_modified_by` | Last author |
+
+Run `yor tag -d .` to update tags after changes.
+
+## BYOC Mode (Bring Your Own Cluster)
+
+Use an existing Kubernetes cluster instead of deploying one:
+
+1. **Settings > BYOC > Configure**
+2. Paste kubeconfig content
+3. Set the LoadBalancer hostname
+4. Optionally provide a container image URL
+
+Skip the infrastructure steps and go straight to Deploy + Attack.
 
 ## Components
 
 | Component | Description |
 |-----------|-------------|
-| **Dashboard** | Web UI to orchestrate the full demo (infra, attack, response, security radar) |
-| **EKS Cluster** | AWS managed Kubernetes on AL2023 with GP3 volumes |
-| **ECR** | Container registry for the vulnerable image |
-| **Vulnerable App** | Spring Boot app with CVE-2022-22965 (Spring4Shell) on Tomcat 9 |
-| **Pod Misconfigs** | `privileged`, `hostPID`, `hostNetwork`, `hostPath: /`, SA `cluster-admin` |
-| **Lambda** | Containment function authenticating to EKS via STS (x-k8s-aws-id) |
-| **Cortex Scripts** | `ExtractK8sContainerEscapeIOCs` (triage) + `InvokeK8sContainmentLambda` (containment) + `K8sForensicAnalysis` (CVE/MITRE/XQL) + `K8sSearchSimilarEvents` (threat hunt) |
-| **Cortex Playbooks** | 3 playbooks: Containment (10 tasks), Forensic Analysis (9 tasks, 5 XQL auto-exec), Search Similar Events (8 tasks, 3 XQL auto-exec) |
-| **Prevention Policy** | Prevention rules, profiles & endpoint group for K8s nodes (BETA) |
-
-## IAM Architecture
-
-The project uses **dedicated IAM Users with permanent Access Keys** and **scoped IAM Roles** (least-privilege). No admin credentials are needed after the initial bootstrap.
-
-### Authentication Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  BOOTSTRAP (one-time, admin credentials)                            │
-│                                                                     │
-│  Admin credentials ──► terraform apply (terraform-infra/ + terraform-lambda/)
-│                          ├── VPC, EKS, ECR, Lambda                  │
-│                          ├── Dashboard IAM User + Operator Role     │
-│                          └── Cortex IAM User + Lambda Invoker Role  │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│  DASHBOARD (permanent credentials, no expiration)                   │
-│                                                                     │
-│  dashboard-user (Access Key) ──► AssumeRole ──► dashboard-operator  │
-│                                                   ├── EKS, ECR      │
-│                                                   ├── Lambda, IAM   │
-│                                                   └── VPC, Logs     │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│  CORTEX PLAYBOOK (permanent credentials, no expiration)             │
-│                                                                     │
-│  cortex-playbook-user (Access Key) ──► AssumeRole ──► lambda-invoker│
-│                                                        └── lambda:  │
-│                                                         InvokeFunction│
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### IAM Users & Roles
-
-| Resource | Module | Purpose |
-|----------|--------|---------|
-| `k8s-escape-demo-dashboard-user` | `terraform-infra/` | Permanent Access Key → AssumeRole on operator role |
-| `k8s-escape-demo-dashboard-operator` | `terraform-infra/` | Scoped permissions (EKS, ECR, Lambda, IAM, VPC, Logs, ELB) |
-| `k8s-escape-demo-cortex-playbook-user` | `terraform-lambda/` | Permanent Access Key → AssumeRole on invoker role |
-| `k8s-escape-demo-lambda-invoker` | `terraform-lambda/` | `lambda:InvokeFunction` on containment Lambda only |
-
-### Getting Credentials
-
-```bash
-# Dashboard user
-cd terraform-infra
-terraform output dashboard_user_access_key_id
-terraform output -raw dashboard_user_secret_access_key
-
-# Cortex playbook user
-cd terraform-lambda
-terraform output cortex_user_access_key_id
-terraform output -raw cortex_user_secret_access_key
-terraform output lambda_invoker_role_arn
-```
-
-## Dashboard Tabs
-
-| Tab | Purpose |
-|-----|---------|
-| **Overview** | Architecture overview, attack chain, MITRE techniques, auth flow |
-| **Terminal** | Main output for all operations + webshell command execution |
-| **kubectl** | Interactive kubectl with shortcut buttons |
-| **Cortex** | Cortex playbook flow visualization + deployment output (scripts, playbooks) |
-| **Security Radar** | Before/after security posture comparison |
-
-### Security Radar
-
-Visual security posture assessment — 6 axes scored 0-100:
-
-| Axis | Vulnerable (10) | Secure (95) |
-|------|-----------------|-------------|
-| Network Isolation | No NetworkPolicy | deny-all applied |
-| RBAC Security | cluster-admin bound | ClusterRoleBinding deleted |
-| Pod Security | Privileged pods | No pods running |
-| Node Security | Nodes schedulable | Node(s) cordoned |
-| Deployment Control | Replicas > 0 | Scaled to 0 |
-| Evidence | No forensic data | Events + logs collected |
-
-**Usage:** Snapshot Before (red) → Run containment → Scan Current (green overlay)
-
-## Cortex Integration
-
-### Automation Scripts
-
-#### `ExtractK8sContainerEscapeIOCs` — Triage & IOC Extraction
-
-Analyzes XDR issue fields to extract Indicators of Compromise: container ID, namespace, node FQDN, process name/SHA256, container image ID. Determines incident severity (Critical/High/Medium/Low) based on attack indicators — Spring4Shell exploitation, webshell deployment, container escape techniques, and credential theft. Detects Spring4Shell patterns (ClassLoader manipulation, `class.module` parameters) and webshell indicators (`.jsp` file drops, `Runtime.getRuntime`, `ProcessBuilder`). Populates `K8sEscape.*` context keys used by all downstream scripts and playbooks. Writes a formatted triage report to the `k8scontainerescapeiocs` issue field.
-
-**Outputs:** `K8sEscape.ContainerID`, `K8sEscape.Namespace`, `K8sEscape.ClusterName`, `K8sEscape.NodeFQDN`, `K8sEscape.ProcessName`, `K8sEscape.ProcessImageSHA256`, `K8sEscape.ContainerImageID`, `K8sEscape.Severity`, `K8sEscape.Details`
-
-#### `InvokeK8sContainmentLambda` — Lambda Containment (SigV4)
-
-Invokes the AWS Lambda containment function from Cortex XSIAM (GCP-hosted — no boto3/AWS SDK available). Uses pure SigV4 signing (`hmac`/`hashlib`) for all AWS API calls: first STS AssumeRole to obtain temporary credentials scoped to the `lambda-invoker` IAM role, then Lambda Invoke with the containment action payload. Supports 7 containment actions: `collect_evidence`, `network_isolate`, `revoke_rbac`, `scale_down`, `cordon_node`, `delete_pod`, `full_containment`. Dual-mode: if `assume_role_arn` is omitted, STS AssumeRole is skipped and Lambda is invoked directly with the operator credentials.
-
-**Outputs:** `K8sContainment.Action`, `K8sContainment.Status`, `K8sContainment.LambdaResponse`, `k8scontainmentenrichment` issue field
-
-#### `K8sForensicAnalysis` — CVE Enrichment, MITRE Mapping & XQL
-
-Performs deep forensic analysis on a container escape incident. CVE enrichment covers Spring4Shell (CVE-2022-22965, CVSS 9.8) and Spring Cloud Function SpEL Injection (CVE-2022-22963, CVSS 9.8) with severity, description, and affected versions. MITRE ATT&CK kill chain mapping covers 9 techniques: T1190 (Exploit Public-Facing Application), T1059.004 (Unix Shell), T1505.003 (Web Shell), T1611 (Escape to Host), T1610 (Deploy Container), T1552.007 (Container API), T1613 (Container and Resource Discovery), T1550.001 (Application Access Token), T1530 (Data from Cloud Storage). Detects container escape indicators (nsenter, mount, chroot, `/proc/1/root`, IMDS, `docker.sock`, `/var/run/secrets`, etc.). Generates 5 XQL forensic queries stored in `K8sForensic.XQLQueries` array for automatic execution by the Forensic Analysis playbook.
-
-**Outputs:** `K8sForensic.DetectedCVEs`, `K8sForensic.AttackPhases`, `K8sForensic.EscapeIndicators`, `K8sForensic.XQLQueries[]`, `k8sforensicanalysis` issue field
-
-#### `K8sSearchSimilarEvents` — Cross-Tenant Threat Hunting
-
-Generates XQL threat hunting queries to determine blast radius and detect lateral movement across the Cortex XDR tenant. Produces two categories of queries:
-
-- **Targeted searches** (require specific IOCs from `K8sEscape` context): same process executing on other nodes (lateral movement detection), same binary SHA256 across all endpoints (shared tooling/supply chain), same container image on other K8s nodes (blast radius), other XDR alerts in the same namespace (correlation).
-- **Broad threat hunts** (always generated): webshell file drops (`.jsp`, `.php`) across all K8s nodes, container escape patterns (`nsenter`, `chroot`, `/proc/1/root`, suspicious mounts) on all endpoints, IMDS credential theft (`169.254.169.254`) from containers.
-
-Targeted queries are written to the `k8ssearchsimilarevents` issue field for manual execution in Query Center. Broad hunts are executed automatically by the Search Similar Events playbook via `xdr-xql-generic-query`.
-
-**Outputs:** `K8sSimilar.QueriesGenerated`, `K8sSimilar.SearchCriteria`, `K8sSimilar.Queries[]`, `k8ssearchsimilarevents` issue field
-
-### Playbook Authentication Flow
-
-Cortex XSIAM runs on GCP — no AWS SDK available. The script uses **pure SigV4 signing** (`hmac`/`hashlib`):
-
-```
-cortex-playbook-user (permanent Access Key)
-    │
-    ├── 1. STS AssumeRole (SigV4-signed POST)
-    │      → sts.<region>.amazonaws.com
-    │      → Returns temporary credentials
-    │
-    ├── 2. Lambda Invoke (SigV4-signed POST)
-    │      → lambda.<region>.amazonaws.com
-    │      → Containment action payload
-    │
-    └── 3. Lambda → EKS API
-           → STS presigned URL (x-k8s-aws-id)
-           → K8s API calls (NetworkPolicy, RBAC, scale, cordon...)
-```
-
-**Dual-mode:** if `assume_role_arn` is omitted, STS AssumeRole is skipped and Lambda is invoked directly.
-
-### Playbooks
-
-**3 playbooks** are available, deployable from the dashboard:
-
-#### Containment Playbook (10 tasks)
-
-Automated incident response for K8s container escape. Triages the XDR issue to extract IOCs, collects forensic evidence via Lambda (pod details, logs, events, RBAC audit, node status), then gates on severity: Critical/High with Spring4Shell indicators proceeds automatically to containment, otherwise requests operator approval. Executes full containment sequence via Lambda: deny-all NetworkPolicy, cluster-admin ClusterRoleBinding deletion, deployment scale-down to 0, node cordoning, force pod deletion. Final verification step re-collects evidence to confirm all containment actions succeeded.
-
-```
-Start → #1 Triage (ExtractK8sContainerEscapeIOCs)
-      → #2 Collect Evidence (Lambda)
-      → #3 Severity Check (Critical + SpringShell?)
-      → #31 Operator Approval
-      → #4 Network Isolation (Lambda: deny-all NetworkPolicy)
-      → #5 Revoke RBAC (Lambda: delete cluster-admin ClusterRoleBinding)
-      → #6 Scale Down (Lambda: replicas → 0)
-      → #7 Cordon Node (Lambda: mark unschedulable)
-      → #8 Kill Pods (Lambda: force delete all pods)
-      → #9 Verify Containment (Lambda: re-collect evidence)
-      → #10 Complete
-```
-
-#### Forensic Analysis Playbook (9 tasks)
-
-Deep investigation of a container escape incident. Triages the issue, then runs K8sForensicAnalysis for CVE enrichment (Spring4Shell CVSS 9.8), MITRE ATT&CK kill chain mapping (T1190 → T1611 → T1530), and XQL query generation. Automatically executes 5 XQL queries via `xdr-xql-generic-query` to collect forensic evidence directly from the XDR data lake: process causality chain reconstruction, suspicious file operations (webshell drops, config reads), network connections (IMDS access, C2 channels, K8s API calls), container escape patterns (nsenter, chroot, mount, docker.sock), and credential access attempts (SA tokens, AWS IMDS, kubeconfig). Concludes with live evidence collection via Lambda. All XQL results are available in the playbook context for analyst review.
-
-```
-Start → #1 Triage (ExtractK8sContainerEscapeIOCs)
-      → #2 Forensic Analysis (K8sForensicAnalysis)
-           CVE enrichment, MITRE ATT&CK mapping, XQL query generation
-      → #3 XQL: Causality Chain (xdr-xql-generic-query)
-      → #4 XQL: File Operations (xdr-xql-generic-query)
-      → #5 XQL: Network Connections (xdr-xql-generic-query)
-      → #6 XQL: Container Escape Patterns (xdr-xql-generic-query)
-      → #7 XQL: Credential Access (xdr-xql-generic-query)
-      → #8 Collect Live Evidence (Lambda)
-      → #9 Complete
-```
-
-#### Search Similar Events Playbook (8 tasks)
-
-Threat hunting playbook to determine if the attack has spread beyond the initially compromised node/container. Generates targeted and broad XQL search queries via K8sSearchSimilarEvents. Automatically executes 3 broad threat hunts via `xdr-xql-generic-query` for immediate visibility: webshell file drops (`.jsp`, `.php`) across all monitored K8s nodes, container escape patterns (`nsenter`, `/proc/1/root`, `chroot`, suspicious mounts) on all endpoints, and IMDS credential theft (`169.254.169.254`) from containers. Targeted IOC queries (same process on other nodes for lateral movement detection, same binary SHA256 across endpoints, same container image for blast radius assessment, namespace alert correlation) are stored in the issue field for manual execution in Query Center. Analyst reviews all automated and manual results, then decides: escalate if similar events found on other nodes, or close if no spread detected.
-
-```
-Start → #1 Triage (ExtractK8sContainerEscapeIOCs)
-      → #2 Generate Search Queries (K8sSearchSimilarEvents)
-      → #3 XQL: Webshell Hunt - all K8s nodes (xdr-xql-generic-query)
-      → #4 XQL: Container Escape Hunt - all nodes (xdr-xql-generic-query)
-      → #5 XQL: IMDS Credential Theft Hunt - all nodes (xdr-xql-generic-query)
-      → #6 Analyst Review
-      → #7 Escalate / #8 Close
-```
-
-### Lambda Actions
-
-| Action | Effect |
-|--------|--------|
-| `collect_evidence` | Pod details, logs, events, RBAC audit, node status |
-| `network_isolate` | Apply deny-all NetworkPolicy |
-| `revoke_rbac` | Delete cluster-admin ClusterRoleBinding |
-| `scale_down` | Scale deployment to 0 replicas |
-| `cordon_node` | Mark node as unschedulable |
-| `delete_pod` | Force delete all pods |
-| `full_containment` | Run all steps in sequence |
-
-## Misconfigurations Exploited
-
-| Misconfiguration | Impact | Remediation |
-|---|---|---|
-| `privileged: true` | Full host kernel access | `allowPrivilegeEscalation: false` |
-| `hostPID: true` | Host process visibility, `nsenter` escape | Disable hostPID |
-| `hostNetwork: true` | Node network access, IMDS | Disable hostNetwork, IMDSv2 hop limit=1 |
-| `hostPath: /` | Read/write entire host filesystem | PVCs, restrict via PSA |
-| SA `cluster-admin` | Full K8s API control | Least privilege RBAC |
-| EC2FullAccess on nodes | Lateral movement to AWS | Minimal IAM, IRSA |
-| No Pod Security Standards | All misconfigs allowed | Enforce `restricted` PSA |
-| No Network Policies | Unrestricted pod communication | Implement NetworkPolicies |
-
-## Terraform State
-
-Local state in each module directory (excluded from git):
-
-| Module | Resources |
-|--------|-----------|
-| `terraform-infra/` | VPC, EKS, ECR, IAM, Dashboard user + operator role |
-| `terraform-lambda/` | Lambda, IAM, EKS access entry, Cortex user + lambda invoker role |
+| **Dashboard** | Flask web UI — orchestrates infra, attack, response, security radar |
+| **Runner Toolbox** | Docker container with terraform, kubectl, aws, helm, cortexcli, node.js |
+| **EKS Cluster** | AWS managed K8s on AL2023 with GP3 volumes |
+| **Vulnerable App** | Spring Boot with CVE-2022-22965 on Tomcat 9 |
+| **Lambda** | Containment function — STS auth to EKS API |
+| **Cortex Scripts** | 4 automation scripts (triage, containment, forensic, threat hunt) |
+| **Cortex Playbooks** | 3 playbooks (containment, forensic analysis, search similar events) |
+| **CortexCLI CWP** | Container image scanning (vulnerabilities, malware, secrets) |
+| **CortexCLI Code Security** | IaC + SCA + secrets scanning for Terraform, K8s manifests, and app code |
 
 ## Project Structure
 
 ```
 .
 ├── dashboard/
-│   ├── app.py                    # Dashboard backend (Flask API)
-│   ├── run.sh                    # Launch script (venv + install + run)
-│   ├── requirements.txt          # flask, pyyaml
-│   ├── templates/index.html      # Dashboard UI
+│   ├── app.py                    # Flask API + task manager + toolbox routing
+│   ├── run.sh                    # Launch script (venv + toolbox build + flask)
+│   ├── requirements.txt
+│   ├── templates/index.html      # Dashboard UI (SVG diagrams, 10 tabs)
 │   └── static/
-│       ├── css/style.css
-│       └── js/app.js
-├── terraform-infra/
-│   ├── main.tf                   # VPC, EKS, ECR, IAM, node group
-│   ├── iam-dashboard.tf          # Dashboard IAM User + Operator Role
-│   ├── backend.tf                # Provider config
-│   ├── outputs.tf                # Cluster, ECR, dashboard credentials
-│   └── variables.tf
-├── terraform-lambda/
-│   ├── main.tf                   # Lambda, IAM, EKS access, Cortex user + invoker role
-│   ├── backend.tf                # Provider config
-│   ├── outputs.tf                # Lambda, Cortex credentials
-│   └── variables.tf
-├── lambda/containment/
-│   ├── handler.py                # Lambda: EKS auth + K8s API containment
-│   └── requirements.txt
-├── cortex-scripts/
-│   ├── ExtractK8sContainerEscapeIOCs.py      # Triage: IOC extraction + severity
-│   ├── automation-ExtractK8sContainerEscapeIOCs.yml
-│   ├── InvokeK8sContainmentLambda.py         # Containment: Lambda invocation
-│   ├── automation-InvokeK8sContainmentLambda.yml
-│   ├── K8sForensicAnalysis.py                # Forensic: CVE/MITRE/XQL analysis
-│   ├── automation-K8sForensicAnalysis.yml
-│   ├── K8sSearchSimilarEvents.py             # Threat hunt: cross-search
-│   └── automation-K8sSearchSimilarEvents.yml
-├── cortex-policy/
-│   ├── policy_rules_*.export     # Prevention policy rules
-│   ├── profiles_*.export         # Prevention profiles
-│   └── XDR_Group_*.tsv           # Endpoint group definition
-├── playbook/
-│   ├── K8s_Container_Escape_Spring4Shell_Containment.yml  # Containment
-│   ├── K8s_Container_Escape_Forensic_Analysis.yml         # Forensic
-│   └── K8s_Container_Escape_Search_Similar_Events.yml     # Threat hunt
+│       ├── css/style.css         # Dark/light theme
+│       └── js/app.js             # Kill chain, SOC live, architecture, AppSec
+├── Dockerfile                    # Vulnerable app (Maven + Tomcat 9)
+├── Dockerfile.toolbox            # Runner toolbox (Ubuntu 24.04, all CLI tools)
+├── terraform-infra/              # VPC, EKS, ECR, IAM (local tfstate, Yor tags)
+├── terraform-lambda/             # Lambda, IAM invoker, EKS access (local tfstate, Yor tags)
+├── lambda/containment/           # Lambda handler (STS + K8s API)
+├── cortex-scripts/               # 4 automation scripts (.py + .yml)
+├── cortex-policy/                # Prevention profiles exports
+├── playbook/                     # 3 playbook YAMLs
 ├── app/                          # Spring4Shell vulnerable app (Java/Maven)
-├── k8s/
-│   ├── namespace.yaml
-│   ├── service-account.yaml
-│   └── deployment.yaml           # Privileged pod + LoadBalancer
-├── attack/
-│   ├── 01-exploit-rce.sh         # Spring4Shell RCE
-│   ├── 02-container-escape.sh    # nsenter, host fs, IMDS
-│   ├── 03-cluster-takeover.sh    # SA token, secrets, AWS creds
-│   ├── 04-k8s-scanning.sh       # K8s vuln scanning (T1610/T1613)
+├── k8s/                          # K8s manifests (namespace, SA, deployment)
+├── attack/                       # 6 attack scripts + remote shell
+│   ├── 01-exploit-rce.sh         # Spring4Shell RCE (/bin/sh -c webshell)
+│   ├── 02-container-escape.sh    # nsenter, mount, chroot, IMDS
+│   ├── 03-cluster-takeover.sh    # SA token, kubectl via upload
+│   ├── 04-k8s-scanning.sh       # deepce, kube-hunter, peirates sim
+│   ├── 05-deploy-malware.sh     # WildFire ELF, reverse shell, cryptominer
+│   ├── 06-lateral-movement.sh   # SSH, rogue pod, IMDS, cross-namespace
 │   └── remote_shell.sh
-├── Dockerfile                    # Multi-stage: Maven build + Tomcat 9
-├── .gitignore
-└── README.md
+└── docs/                         # Architecture diagrams, pitch, PowerPoint
 ```
+
+## Demo Features
+
+| Feature | Description |
+|---------|-------------|
+| **Code to Cloud to SOC Tab** | Unified 3-phase diagram: Code (shift-left) → Cloud (attack) → SOC (response) with feedback loop |
+| **Run Full Demo / Run Attack** | One-click: execute all 6 attack steps with live diagram animation |
+| **Live Architecture Diagram** | Interactive SVG — animated attack flows (red), detection (green), particles traveling along paths |
+| **AppSec Tab** | Interactive diagram for CWP image scan + IaC/SCA code scan with clickable targets and dynamic results |
+| **SOC Live** | Real-time Cortex XDR alert feed + MITRE ATT&CK heatmap |
+| **Code (Shift-Left)** | CVE + K8s misconfigurations with severity and fixes |
+| **Security Radar** | Before/after spider chart (6 security axes) |
+| **CortexCLI CWP** | Container image scanning with results link to Cortex Cloud inventory |
+| **CortexCLI IaC/SCA** | Terraform + K8s + app code scanning with results link to Cortex Cloud AppSec |
+| **Cortex Console Links** | Click on diagram elements to open Cortex console (Dashboard, Cases, AppSec, Container Images) |
+| **Architecture Tab** | Platform architecture (dashboard, toolbox, AWS, Cortex) |
+| **Yor IaC Tags** | Terraform resources tagged with git traceability (yor_trace, git_repo, git_commit) |
+| **Theme Toggle** | Dark / Light / Auto mode (persisted) |
+| **AWS Paste Import** | Paste `export AWS_*` commands to auto-fill credentials |
+| **BYOC Mode** | Bring Your Own Cluster — skip infra, use existing K8s |
+| **Runner Status** | Live toolbox container status indicator in header |
+| **Credential Persistence** | Credentials saved locally and auto-loaded on restart |
 
 ## CLI Alternative
 
 ```bash
-# Attack scripts (without dashboard)
+export HOST=<LB_HOSTNAME>
 ./attack/01-exploit-rce.sh
 ./attack/02-container-escape.sh
 ./attack/03-cluster-takeover.sh
+./attack/04-k8s-scanning.sh
+./attack/05-deploy-malware.sh
+./attack/06-lateral-movement.sh
 
-# Manual cleanup
+# Cleanup
 kubectl delete namespace vuln-app
 kubectl delete clusterrolebinding vuln-app-cluster-admin
 cd terraform-lambda && terraform destroy -auto-approve

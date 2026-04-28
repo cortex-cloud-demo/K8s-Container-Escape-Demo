@@ -1,0 +1,119 @@
+# ─── K8s Escape Demo Toolbox ─────────────────────────────────────────────────
+# Contains all CLI tools needed for the demo.
+# Rebuilt at app startup. Commands are executed via docker exec.
+# Multi-arch: supports amd64 (Linux/Windows) and arm64 (Apple Silicon).
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM --platform=$BUILDPLATFORM ubuntu:24.04
+
+LABEL maintainer="chrisley75"
+LABEL purpose="Runner Toolbox - CLI tools for K8s Container Escape Demo (terraform, kubectl, aws, helm, cortexcli, node.js)"
+LABEL org.opencontainers.image.ref.name="k8s-escape-demo-toolbox"
+
+ARG TARGETPLATFORM
+ARG TARGETARCH
+ARG TERRAFORM_VERSION=1.9.8
+ARG KUBECTL_VERSION=1.29.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/root
+
+# ─── Base packages ───────────────────────────────────────────────────────────
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+    curl unzip jq git ca-certificates gnupg \
+    python3 python3-pip \
+    openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# ─── Docker CLI only (not the daemon) ────────────────────────────────────────
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg && \
+    DPKG_ARCH=$(dpkg --print-architecture) && \
+    echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list && \
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends docker-ce-cli && \
+    rm -rf /var/lib/apt/lists/*
+
+# ─── AWS CLI v2 ──────────────────────────────────────────────────────────────
+RUN ARCH=$(uname -m) && \
+    curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip" -o /tmp/awscliv2.zip && \
+    unzip -q /tmp/awscliv2.zip -d /tmp && \
+    /tmp/aws/install && \
+    rm -rf /tmp/aws /tmp/awscliv2.zip
+
+# ─── Terraform ───────────────────────────────────────────────────────────────
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -sL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip" -o /tmp/terraform.zip && \
+    unzip -q /tmp/terraform.zip -d /usr/local/bin/ && \
+    rm /tmp/terraform.zip
+
+# ─── kubectl ─────────────────────────────────────────────────────────────────
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -skL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" -o /usr/local/bin/kubectl && \
+    chmod +x /usr/local/bin/kubectl
+
+# ─── Node.js v22 (required by cortexcli for code scan) ───────────────────────
+RUN ARCH=$(dpkg --print-architecture) && \
+    NODE_VERSION=22.15.0 && \
+    if [ "$ARCH" = "arm64" ]; then NODE_ARCH="arm64"; else NODE_ARCH="x64"; fi && \
+    curl -skL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz && \
+    tar xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 && \
+    rm /tmp/node.tar.gz && \
+    echo "Node.js $(node --version) installed"
+
+# ─── Helm ────────────────────────────────────────────────────────────────────
+RUN ARCH=$(dpkg --print-architecture) && \
+    HELM_VERSION=3.17.3 && \
+    curl -skL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz" -o /tmp/helm.tar.gz && \
+    tar xzf /tmp/helm.tar.gz -C /tmp && \
+    mv /tmp/linux-${ARCH}/helm /usr/local/bin/helm && \
+    chmod +x /usr/local/bin/helm && \
+    rm -rf /tmp/helm.tar.gz /tmp/linux-${ARCH} && \
+    echo "Helm $(helm version --short) installed"
+
+# ─── Cortex CLI dependencies ─────────────────────────────────────────────────
+# libhyperscan is required by cortexcli on Linux
+RUN apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends libhyperscan5 2>/dev/null || \
+    apt-get install -y -qq --no-install-recommends libhyperscan-dev 2>/dev/null || true && \
+    rm -rf /var/lib/apt/lists/*
+
+# ─── Cortex CLI install script ───────────────────────────────────────────────
+# cortexcli is downloaded at runtime from the Cortex tenant via signed URL.
+# Usage: CORTEX_API_URL=... CORTEX_API_KEY=... CORTEX_API_KEY_ID=... cortexcli-install
+RUN printf '#!/bin/bash\n\
+if [ -x /usr/local/bin/cortexcli ]; then\n\
+    echo "[OK] cortexcli already installed: $(cortexcli --version 2>/dev/null)"\n\
+    exit 0\n\
+fi\n\
+if [ -z "$CORTEX_API_URL" ] || [ -z "$CORTEX_API_KEY" ] || [ -z "$CORTEX_API_KEY_ID" ]; then\n\
+    echo "[!] Set CORTEX_API_URL, CORTEX_API_KEY, CORTEX_API_KEY_ID"\n\
+    exit 1\n\
+fi\n\
+ARCH=$(dpkg --print-architecture)\n\
+echo "[*] Getting download link from Cortex tenant..."\n\
+SIGNED_URL=$(curl -sk \\\n\
+    "${CORTEX_API_URL}/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=${ARCH}" \\\n\
+    -H "x-xdr-auth-id: ${CORTEX_API_KEY_ID}" \\\n\
+    -H "Authorization: ${CORTEX_API_KEY}" | jq -r ".signed_url")\n\
+if [ -z "$SIGNED_URL" ] || [ "$SIGNED_URL" = "null" ]; then\n\
+    echo "[!] Failed to get download link"\n\
+    exit 1\n\
+fi\n\
+echo "[*] Downloading cortexcli for linux-${ARCH}..."\n\
+curl -sk -o /usr/local/bin/cortexcli "$SIGNED_URL"\n\
+chmod +x /usr/local/bin/cortexcli\n\
+echo "[OK] cortexcli installed: $(cortexcli --version 2>/dev/null)"\n\
+' > /usr/local/bin/cortexcli-install && chmod +x /usr/local/bin/cortexcli-install
+
+# ─── Verify ──────────────────────────────────────────────────────────────────
+RUN echo "=== Toolbox versions ===" && \
+    echo "platform: $(uname -m) / $(dpkg --print-architecture)" && \
+    (aws --version 2>/dev/null || echo "aws: not available") && \
+    (terraform --version 2>/dev/null | head -1 || echo "terraform: not available") && \
+    (kubectl version --client 2>/dev/null | head -1 || echo "kubectl: not available") && \
+    (helm version --short 2>/dev/null || echo "helm: not available") && \
+    (node --version 2>/dev/null || echo "node: not available") && \
+    (cortexcli --version 2>/dev/null || echo "cortexcli: not available") && \
+    echo "========================"
+
+WORKDIR /project
+CMD ["sleep", "infinity"]
