@@ -338,7 +338,12 @@ def toolbox_status():
             "echo terraform=$(terraform --version 2>/dev/null | head -1); "
             "echo kubectl=$(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -1); "
             "echo aws=$(aws --version 2>/dev/null); "
-            "echo cortexcli=$(cortexcli --version 2>/dev/null)'",
+            "echo helm=$(helm version --short 2>/dev/null); "
+            "echo node=$(node --version 2>/dev/null); "
+            "echo docker=$(docker --version 2>/dev/null); "
+            "echo cortexcli=$(cortexcli --version 2>/dev/null || echo not installed); "
+            "echo platform=$(uname -m); "
+            "echo os=$(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d \\\")'",
             shell=True, capture_output=True, text=True, timeout=10,
         )
         versions = {}
@@ -2574,21 +2579,30 @@ def xdr_k8s_agent_status():
     env.update(get_aws_env())
 
     try:
-        # Check for XDR daemonset/pods across all namespaces
+        # Check for Cortex agent pods in cortex-xdr namespace
         result = subprocess.run(
-            ["kubectl", "get", "pods", "-A", "-l", "app=cortex-xdr",
+            ["kubectl", "get", "pods", "-n", "cortex-xdr",
              "-o", "jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.phase}{'\\n'}{end}"],
             capture_output=True, text=True, env=env, timeout=15
         )
         pods_output = result.stdout.strip()
 
         if not pods_output:
-            # Try broader search
+            # Try broader search with label
             result2 = subprocess.run(
+                ["kubectl", "get", "pods", "-A", "-l", "app.kubernetes.io/name=cortex-agent",
+                 "-o", "jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.phase}{'\\n'}{end}"],
+                capture_output=True, text=True, env=env, timeout=15
+            )
+            pods_output = result2.stdout.strip()
+
+        if not pods_output:
+            # Last resort: search for any cortex/xdr pod
+            result3 = subprocess.run(
                 ["kubectl", "get", "pods", "-A", "--no-headers"],
                 capture_output=True, text=True, env=env, timeout=15
             )
-            xdr_lines = [l for l in result2.stdout.strip().split("\n") if l and "xdr" in l.lower()]
+            xdr_lines = [l for l in result3.stdout.strip().split("\n") if l and ("cortex" in l.lower() or "xdr" in l.lower())]
             pods_output = "\n".join(xdr_lines) if xdr_lines else ""
 
         if not pods_output:
@@ -2615,6 +2629,40 @@ def xdr_k8s_agent_status():
         return jsonify({"status": "error", "message": "kubectl timed out"}), 504
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/cortex/xdr-k8s-agent-pods", methods=["POST"])
+def xdr_k8s_agent_pods():
+    """Show detailed agent status on the cluster."""
+    cmd = """set -e
+echo "=================================================="
+echo "  Cortex Cloud Security Agent - Cluster Status"
+echo "=================================================="
+echo ""
+
+echo "==> Agent DaemonSet:"
+kubectl get daemonset -A -l app=cortex-xdr -o wide 2>/dev/null || \
+kubectl get daemonset -n cortex-xdr -o wide 2>/dev/null || \
+echo "  No DaemonSet found"
+echo ""
+
+echo "==> Agent Pods:"
+kubectl get pods -A -l app=cortex-xdr -o wide 2>/dev/null || \
+kubectl get pods -n cortex-xdr -o wide 2>/dev/null || \
+echo "  No agent pods found"
+echo ""
+
+echo "==> All DaemonSets:"
+kubectl get daemonset -A -o wide 2>/dev/null
+echo ""
+
+echo "==> Namespace cortex-xdr:"
+kubectl get all -n cortex-xdr 2>/dev/null || echo "  Namespace not found"
+echo ""
+echo "=================================================="
+"""
+    task_id = create_task("XDR Agent: Status Check", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
 
 
 @app.route("/api/cortex/xdr-k8s-install", methods=["POST"])

@@ -1464,6 +1464,12 @@ async function xdrCheckAgentInstall() {
     }
 }
 
+async function xdrAgentStatus() {
+    openTab('terminal');
+    termWriteHeader('Cortex Cloud Security Agent - Cluster Status');
+    apiCall('/api/cortex/xdr-k8s-agent-pods', 'POST');
+}
+
 async function xdrInstallK8s() {
     const deployBadge = document.getElementById('xdr-deploy-status');
     if (deployBadge) { deployBadge.textContent = 'deploying...'; deployBadge.style.color = '#f97316'; }
@@ -1494,12 +1500,26 @@ async function xdrInstallK8s() {
         if (data.status === 'ok' && data.task_id) {
             state.currentTaskId = data.task_id;
             startPolling(data.task_id);
-            if (deployBadge) { deployBadge.textContent = 'deploying'; deployBadge.style.color = '#f97316'; }
-            // Check agent status after install completes (~30s)
-            setTimeout(() => {
-                xdrCheckAgentInstall();
-                if (deployBadge) { deployBadge.textContent = 'deployed'; deployBadge.style.color = '#22c55e'; }
-            }, 30000);
+            if (deployBadge) { deployBadge.textContent = 'deploying...'; deployBadge.style.color = '#f97316'; }
+            // Poll agent status until pods are running
+            let agentPollCount = 0;
+            const agentPoll = setInterval(async () => {
+                agentPollCount++;
+                try {
+                    const statusResp = await fetch('/api/cortex/xdr-k8s-agent-status');
+                    const statusData = await statusResp.json();
+                    if (statusData.status === 'ok' && statusData.installed) {
+                        if (statusData.agent_status === 'Running') {
+                            clearInterval(agentPoll);
+                            if (deployBadge) { deployBadge.textContent = 'deployed'; deployBadge.style.color = '#22c55e'; }
+                            xdrCheckAgentInstall();
+                        } else if (deployBadge) {
+                            deployBadge.textContent = `${statusData.agent_status} (${statusData.pods_running}/${statusData.pods_total})`;
+                        }
+                    }
+                } catch(e) {}
+                if (agentPollCount > 20) clearInterval(agentPoll); // Stop after ~2min
+            }, 6000);
         } else {
             termWrite(`[FAIL] ${data.message || 'Unknown error'}\n`);
             if (deployBadge) { deployBadge.textContent = 'error'; deployBadge.style.color = '#ef4444'; }
@@ -2334,6 +2354,39 @@ async function refreshToolboxStatus() {
     }
 }
 
+function refreshToolboxVersions() {
+    fetch('/api/toolbox/status').then(r => r.json()).then(data => {
+        const body = document.getElementById('toolbox-versions-body');
+        if (!body) return;
+
+        if (!data.running) {
+            body.innerHTML = '<tr><td colspan="2" class="tool-missing">Toolbox not running</td></tr>';
+            return;
+        }
+
+        const v = data.versions || {};
+        const tools = [
+            { name: 'OS', value: v.os || '—' },
+            { name: 'Platform', value: v.platform || '—' },
+            { name: 'Terraform', value: v.terraform || '—' },
+            { name: 'kubectl', value: v.kubectl || '—' },
+            { name: 'AWS CLI', value: v.aws || '—' },
+            { name: 'Helm', value: v.helm || '—' },
+            { name: 'Node.js', value: v.node || '—' },
+            { name: 'Docker', value: v.docker || '—' },
+            { name: 'CortexCLI', value: v.cortexcli || '—' },
+        ];
+
+        body.innerHTML = tools.map(t => {
+            const cls = (t.value === '—' || t.value.includes('not installed')) ? 'tool-missing' : 'tool-ok';
+            return `<tr><td>${t.name}</td><td class="${cls}">${t.value}</td></tr>`;
+        }).join('');
+    }).catch(() => {
+        const body = document.getElementById('toolbox-versions-body');
+        if (body) body.innerHTML = '<tr><td colspan="2" class="tool-missing">Cannot reach toolbox</td></tr>';
+    });
+}
+
 // ─── Cortex CLI Image Scan ────────────────────────────────────────────────────
 
 function cortexImageScan(imageName) {
@@ -2946,6 +2999,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Poll toolbox status
     refreshToolboxStatus();
+    refreshToolboxVersions();
     setInterval(refreshToolboxStatus, 10000);
     // Shell input enter key
     document.getElementById('shell-input').addEventListener('keydown', (e) => {

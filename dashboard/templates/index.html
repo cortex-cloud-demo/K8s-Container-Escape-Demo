@@ -506,7 +506,8 @@
                 <div class="step-actions">
                     <button class="btn btn-cortex" onclick="xdrDeployK8s()">Create</button>
                     <button class="btn btn-primary" onclick="xdrInstallK8s()" id="xdr-install-btn">Install on Cluster</button>
-                    <button class="btn btn-ghost" onclick="xdrCheckStatus()">Status</button>
+                    <button class="btn btn-ghost" onclick="xdrCheckStatus()">Dist Status</button>
+                    <button class="btn btn-ghost" onclick="xdrAgentStatus()">Agent Status</button>
                 </div>
                 <!-- XDR distribution info -->
                 <div class="cluster-info" id="xdr-info-panel" style="display:none;">
@@ -747,6 +748,20 @@
                 <span class="repo-link-text">GitHub Repository</span>
                 <span class="repo-link-arrow">&#x2197;</span>
             </a>
+        </div>
+
+        <!-- Runner Toolbox Versions -->
+        <div class="section">
+            <div class="section-title" style="border-left-color:var(--text-dim);color:var(--text-dim);background:none;cursor:pointer;" onclick="refreshToolboxVersions()">
+                <span class="section-icon">&#128295;</span> Runner Toolbox
+            </div>
+            <div class="toolbox-versions" id="toolbox-versions-table">
+                <table class="toolbox-table">
+                    <tbody id="toolbox-versions-body">
+                        <tr><td colspan="2" style="color:var(--text-dim);font-size:0.7rem;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
     </aside>
@@ -2413,6 +2428,6 @@ clusters:
     </div>
 </div>
 
-<script src="/static/js/app.js?v=63"></script>
+<script src="/static/js/app.js?v=65"></script>
 </body>
 </html>

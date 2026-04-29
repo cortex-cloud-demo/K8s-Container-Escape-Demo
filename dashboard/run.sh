@@ -87,13 +87,41 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
 
         echo "  [toolbox] Building for $BUILD_PLATFORM..."
 
-        # Build the toolbox image
-        docker build \
-            --platform "$BUILD_PLATFORM" \
-            -f Dockerfile.toolbox \
-            -t "$TOOLBOX_IMAGE" . 2>&1 | while read line; do
-            echo "  [toolbox] $line"
-        done
+        # Check if image already exists (skip build if so)
+        if docker image inspect "$TOOLBOX_IMAGE" > /dev/null 2>&1; then
+            echo "  [toolbox] Image already exists, skipping build (delete image to force rebuild)"
+        else
+            # Build with retry (Docker Hub can be temporarily unavailable)
+            BUILD_OK=false
+            for attempt in 1 2 3; do
+                echo "  [toolbox] Build attempt $attempt/3..."
+                if docker build \
+                    --platform "$BUILD_PLATFORM" \
+                    -f Dockerfile.toolbox \
+                    -t "$TOOLBOX_IMAGE" . 2>&1 | while read line; do
+                    echo "  [toolbox] $line"
+                done; then
+                    BUILD_OK=true
+                    break
+                else
+                    echo "  [toolbox] Build failed (attempt $attempt/3)"
+                    if [ $attempt -lt 3 ]; then
+                        echo "  [toolbox] Retrying in 10s... (Docker Hub may be temporarily unavailable)"
+                        sleep 10
+                    fi
+                fi
+            done
+
+            if [ "$BUILD_OK" = false ]; then
+                echo "  [toolbox] ERROR: Failed to build toolbox after 3 attempts"
+                echo "  [toolbox] Possible causes:"
+                echo "  [toolbox]   - Docker Hub temporarily unavailable (503)"
+                echo "  [toolbox]   - Network/proxy/firewall blocking Docker Hub"
+                echo "  [toolbox]   - VPN (GlobalProtect) inspection blocking downloads"
+                echo "  [toolbox] The dashboard will run without the toolbox (tools must be installed locally)"
+                exit 0
+            fi
+        fi
 
         # Stop existing container if running
         docker rm -f "$TOOLBOX_CONTAINER" 2>/dev/null || true
@@ -123,8 +151,9 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
             echo "    kubectl: $(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -1)"
             echo "    aws: $(aws --version 2>/dev/null)"
             echo "    helm: $(helm version --short 2>/dev/null)"
-            echo "    cortexcli: $(cortexcli --version 2>/dev/null || echo "not available")"
+            echo "    node: $(node --version 2>/dev/null)"
             echo "    docker: $(docker --version 2>/dev/null)"
+            echo "    cortexcli: $(cortexcli --version 2>/dev/null || echo "downloaded at runtime from Cortex tenant")"
         ' 2>/dev/null || echo "  [toolbox] Warning: could not verify tools"
 
         echo "  [toolbox] Ready!"
