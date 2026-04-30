@@ -404,6 +404,7 @@ body {
 .step-number.attack { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
 .step-number.cortex { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 .step-number.destroy { background: rgba(249, 115, 22, 0.2); color: var(--accent-orange); }
+.step-number.onboard { background: rgba(6, 182, 212, 0.2); color: var(--accent-cyan); }
 
 .warning-banner {
     display: flex;
@@ -1053,6 +1054,46 @@ body {
     color: white;
 }
 .btn-cortex:hover:not(:disabled) { background: #15803d; }
+
+.btn-onboard {
+    background: #0891b2;
+    color: white;
+}
+.btn-onboard:hover:not(:disabled) { background: #0e7490; }
+
+/* ─── AWS Onboarding Modal ────────────────────── */
+.onboarding-info-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid #1e293b;
+}
+.onboarding-info-label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    width: 90px;
+    flex-shrink: 0;
+}
+.onboarding-info-value {
+    font-size: 0.8rem;
+    color: var(--accent-cyan);
+    font-family: monospace;
+    word-break: break-all;
+}
+.onboarding-log {
+    background: #0d1117;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    padding: 0.75rem;
+    max-height: 200px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    margin: 0.75rem 0;
+    white-space: pre-wrap;
+}
 
 /* ─── Playbook Steps List (sidebar) ───────────── */
 

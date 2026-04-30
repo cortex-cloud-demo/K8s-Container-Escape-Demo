@@ -11,6 +11,7 @@ import yaml
 import zipfile
 import urllib.request
 import urllib.error
+import urllib.parse
 
 from flask import Flask, jsonify, render_template, request
 
@@ -3018,6 +3019,138 @@ def security_posture():
     posture["overall_score"] = int(sum(scores) / len(scores))
 
     return jsonify(posture)
+
+
+@app.route("/api/onboarding/aws", methods=["POST"])
+def onboarding_aws():
+    """Onboard AWS to Cortex Cloud Security via CloudFormation deployed with the AWS CLI."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex credentials not configured."}), 400
+
+    # Resolve AWS account ID and region
+    env = os.environ.copy()
+    env.update(get_aws_env())
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+
+    try:
+        sts = subprocess.run(
+            "aws sts get-caller-identity --output json",
+            shell=True, capture_output=True, text=True, env=env,
+        )
+        if sts.returncode != 0:
+            return jsonify({"status": "error", "message": f"AWS STS failed: {sts.stderr.strip()}"}), 400
+        identity = json.loads(sts.stdout)
+        account_id = identity.get("Account", "unknown")
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Failed to get AWS identity: {e}"}), 500
+
+    instance_name = f"AWS-{account_id}"
+
+    payload = {
+        "request_data": {
+            "scope": "ACCOUNT",
+            "scan_mode": "MANAGED",
+            "instance_name": instance_name,
+            "cloud_provider": "AWS",
+            "cloud_partition": "COMMERCIAL",
+            "custom_resources_tags": [],
+            "collection_configuration": {
+                "audit_logs": {
+                    "enabled": True,
+                    "collection_method": "AUTOMATED",
+                    "data_events": True,
+                }
+            },
+            "scope_modifications": {
+                "regions": {"enabled": False},
+            },
+            "additional_capabilities": {
+                "xsiam_analytics": True,
+                "data_security_posture_management": True,
+                "registry_scanning": True,
+                "registry_scanning_options": {"type": "ECR"},
+                "serverless_scanning": True,
+                "agentless_disk_scanning": True,
+            },
+        }
+    }
+
+    result, status_code = cortex_json_request(
+        "/public_api/v1/cloud_onboarding/create_instance_template", payload
+    )
+
+    if status_code != 200:
+        return jsonify(result), status_code
+
+    # Parse CloudFormation parameters from the console link fragment
+    # Link format: https://console.aws.amazon.com/cloudformation/home?region=X#/stacks/create/review?templateURL=...&stackName=...&param_Foo=Bar
+    try:
+        resp_data = json.loads(result.get("response", "{}"))
+        cf_link = resp_data.get("reply", {}).get("automated", {}).get("link", "")
+        tracking_guid = resp_data.get("reply", {}).get("automated", {}).get("tracking_guid", "")
+    except Exception:
+        return jsonify({"status": "error", "message": "Failed to parse Cortex API response."}), 500
+
+    if not cf_link:
+        return jsonify({"status": "error", "message": "Cortex API returned no CloudFormation link."}), 500
+
+    parsed = urllib.parse.urlparse(cf_link)
+    fragment = parsed.fragment  # e.g. /stacks/create/review?templateURL=...&stackName=...
+    qs = fragment.split("?", 1)[1] if "?" in fragment else ""
+    params = urllib.parse.parse_qs(qs, keep_blank_values=True)
+
+    template_url = params.get("templateURL", [""])[0]
+    stack_name = params.get("stackName", [f"CortexCloud-{account_id}"])[0]
+
+    # Collect param_* entries as CloudFormation --parameters
+    cf_params = []
+    for key, values in params.items():
+        if key.startswith("param_"):
+            cf_params.append(f"ParameterKey={key[6:]},ParameterValue={values[0]}")
+
+    params_arg = ""
+    if cf_params:
+        params_arg = "--parameters " + " ".join(f'"{p}"' for p in cf_params)
+
+    script = f"""
+set -e
+echo "=== Cortex Cloud Onboarding ==="
+echo "Account   : {account_id}"
+echo "Region    : {region}"
+echo "Stack     : {stack_name}"
+echo "Tracking  : {tracking_guid}"
+echo ""
+
+echo "Creating CloudFormation stack..."
+aws cloudformation create-stack \\
+  --stack-name "{stack_name}" \\
+  --template-url "{template_url}" \\
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \\
+  {params_arg} \\
+  --region "{region}" \\
+  --output json
+
+echo ""
+echo "Waiting for stack to complete (this may take a few minutes)..."
+aws cloudformation wait stack-create-complete \\
+  --stack-name "{stack_name}" \\
+  --region "{region}"
+
+echo ""
+echo "Stack creation complete."
+aws cloudformation describe-stacks \\
+  --stack-name "{stack_name}" \\
+  --region "{region}" \\
+  --query "Stacks[0].StackStatus" \\
+  --output text
+"""
+
+    task_id = create_task(
+        name="AWS Onboarding — Cortex Cloud Security",
+        command=script,
+        env_extra=get_aws_env(),
+    )
+    return jsonify({"status": "ok", "task_id": task_id})
 
 
 @app.route("/api/tasks/<task_id>", methods=["GET"])

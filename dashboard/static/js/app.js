@@ -2674,6 +2674,54 @@ function openWebApp() {
 
 // ─── External Cluster (BYOC) ─────────────────────────────────────────────────
 
+// ─── AWS Onboarding Cortex ───────────────────────────────────────────────────
+
+async function runAwsOnboarding() {
+    openTab('terminal');
+    termWriteHeader('AWS Onboarding — Cortex Cloud Security');
+    termWrite('Generating onboarding template from Cortex API...\n\n');
+
+    const statusEl = document.getElementById('onboarding-status');
+    statusEl.textContent = 'running...';
+    statusEl.style.color = '#f97316';
+
+    try {
+        const res = await fetch('/api/onboarding/aws', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        const data = await res.json();
+
+        if (data.task_id) {
+            startPolling(data.task_id);
+            const poll = setInterval(async () => {
+                try {
+                    const tr = await fetch(`/api/tasks/${data.task_id}`);
+                    const task = await tr.json();
+                    if (task.status === 'success') {
+                        clearInterval(poll);
+                        statusEl.textContent = 'done';
+                        statusEl.style.color = '#22c55e';
+                    } else if (task.status === 'error') {
+                        clearInterval(poll);
+                        statusEl.textContent = 'error';
+                        statusEl.style.color = '#ef4444';
+                    }
+                } catch (e) { clearInterval(poll); }
+            }, 2000);
+        } else {
+            termWrite(`ERROR: ${data.message || 'Unknown error'}\n`);
+            statusEl.textContent = 'error';
+            statusEl.style.color = '#ef4444';
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        statusEl.textContent = 'error';
+        statusEl.style.color = '#ef4444';
+    }
+}
+
 function openByocSettings() {
     document.getElementById('byoc-modal').classList.add('visible');
     // Load current settings

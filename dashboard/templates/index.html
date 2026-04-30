@@ -141,6 +141,17 @@
                     <button class="btn btn-ghost" onclick="testByocCluster()">Test</button>
                 </div>
             </div>
+            <div class="step-card" id="card-onboarding-settings">
+                <div class="step-header">
+                    <span class="step-number onboard">ONBOARD</span>
+                    <span class="step-status" id="onboarding-status"></span>
+                </div>
+                <div class="step-name">AWS Onboarding Cortex</div>
+                <div class="step-desc">Connect AWS account to Cortex Cloud Security</div>
+                <div class="step-actions">
+                    <button class="btn btn-onboard" onclick="runAwsOnboarding()">Onboard</button>
+                </div>
+            </div>
         </div>
 
         <!-- Infrastructure -->
@@ -2385,6 +2396,7 @@ clusters:
         </div>
     </div>
 </div>
+
 
 <!-- ─── Destroy Modal ──────────────────────────── -->
 <div class="modal-overlay" id="destroy-modal">
