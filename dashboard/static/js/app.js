@@ -2676,6 +2676,54 @@ function openWebApp() {
 
 // ─── AWS Onboarding Cortex ───────────────────────────────────────────────────
 
+async function testAwsOnboarding() {
+    openTab('terminal');
+    termWriteHeader('AWS Onboarding — Status Check');
+    termWrite('Querying Cortex Cloud for existing AWS instances...\n\n');
+
+    const statusEl = document.getElementById('onboarding-status');
+
+    try {
+        const res = await fetch('/api/onboarding/aws/status');
+        const data = await res.json();
+
+        if (data.status !== 'ok') {
+            termWrite(`ERROR: ${data.message}\n`);
+            statusEl.textContent = 'error';
+            statusEl.style.color = '#ef4444';
+            return;
+        }
+
+        termWrite(`AWS Account : ${data.account_id}\n\n`);
+
+        if (data.onboarded && data.instance && data.account) {
+            const inst = data.instance;
+            const acc = data.account;
+            termWrite(`✓ Account is onboarded\n\n`);
+            termWrite(`  Instance  : ${inst.instance_name}\n`);
+            termWrite(`  Status    : ${inst.status}\n`);
+            termWrite(`  Scope     : ${inst.scope}\n`);
+            termWrite(`  Scan Mode : ${inst.scan_mode}\n`);
+            if (inst.update_status) termWrite(`  Update    : ${inst.update_status}\n`);
+            termWrite(`\n  Account ID   : ${acc.cloud_account_id}\n`);
+            termWrite(`  Account Name : ${acc.account_name || '—'}\n`);
+            termWrite(`  Account Type : ${acc.account_type || '—'}\n`);
+            termWrite(`  Account Status : ${acc.status}\n`);
+            statusEl.textContent = 'done';
+            statusEl.style.color = '#22c55e';
+        } else {
+            termWrite(`✗ Account ${data.account_id} not found in any Cortex Cloud instance.\n`);
+            termWrite(`  Total AWS instances checked: ${data.total_aws_instances}\n`);
+            statusEl.textContent = 'not onboarded';
+            statusEl.style.color = '#f97316';
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        statusEl.textContent = 'error';
+        statusEl.style.color = '#ef4444';
+    }
+}
+
 async function runAwsOnboarding() {
     openTab('terminal');
     termWriteHeader('AWS Onboarding — Cortex Cloud Security');

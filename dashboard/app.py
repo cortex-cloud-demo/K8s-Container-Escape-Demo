@@ -3021,6 +3021,95 @@ def security_posture():
     return jsonify(posture)
 
 
+@app.route("/api/onboarding/aws/status", methods=["GET"])
+def onboarding_aws_status():
+    """Check if the current AWS account is already onboarded in Cortex Cloud."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex credentials not configured."}), 400
+
+    # Get current AWS account ID
+    env = os.environ.copy()
+    env.update(get_aws_env())
+    try:
+        sts = subprocess.run(
+            "aws sts get-caller-identity --output json",
+            shell=True, capture_output=True, text=True, env=env,
+        )
+        if sts.returncode != 0:
+            return jsonify({"status": "error", "message": f"AWS STS failed: {sts.stderr.strip()}"}), 400
+        account_id = json.loads(sts.stdout).get("Account", "")
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+    # Step 1: get all non-pending AWS instances
+    list_payload = {
+        "request_data": {
+            "filter_data": {
+                "sort": [{"FIELD": "STATUS", "ORDER": "DESC"}],
+                "paging": {"from": 0, "to": 50},
+                "filter": {
+                    "AND": [
+                        {"SEARCH_FIELD": "CLOUD_PROVIDER", "SEARCH_TYPE": "EQ", "SEARCH_VALUE": "AWS"}
+                    ]
+                },
+            }
+        }
+    }
+    list_result, list_code = cortex_json_request("/public_api/v1/cloud_onboarding/get_instances", list_payload)
+    if list_code != 200:
+        return jsonify(list_result), list_code
+
+    try:
+        instances = json.loads(list_result.get("response", "{}")).get("reply", {}).get("DATA", [])
+    except Exception:
+        return jsonify({"status": "error", "message": "Failed to parse get_instances response."}), 500
+
+    # Step 2: for each instance call get_accounts filtered by the current AWS account ID
+    matched_instance = None
+    matched_account = None
+
+    for inst in instances:
+        inst_id = inst.get("instance_id", "")
+        if not inst_id:
+            continue
+
+        accounts_payload = {
+            "request_data": {
+                "instance_id": inst_id,
+                "filter_data": {
+                    "sort": [{"FIELD": "STATUS", "ORDER": "DESC"}],
+                    "paging": {"from": 0, "to": 50},
+                    "filter": {
+                        "AND": [
+                            {"SEARCH_FIELD": "CLOUD_ACCOUNT_ID", "SEARCH_TYPE": "EQ", "SEARCH_VALUE": account_id}
+                        ]
+                    },
+                },
+            }
+        }
+        acc_result, acc_code = cortex_json_request("/public_api/v1/cloud_onboarding/get_accounts", accounts_payload)
+        if acc_code != 200:
+            continue
+        try:
+            accounts_data = json.loads(acc_result.get("response", "{}")).get("reply", {}).get("DATA", [])
+        except Exception:
+            continue
+
+        if accounts_data:
+            matched_instance = inst
+            matched_account = accounts_data[0]
+            break
+
+    return jsonify({
+        "status": "ok",
+        "account_id": account_id,
+        "onboarded": matched_instance is not None,
+        "instance": matched_instance,
+        "account": matched_account,
+        "total_aws_instances": len(instances),
+    })
+
+
 @app.route("/api/onboarding/aws", methods=["POST"])
 def onboarding_aws():
     """Onboard AWS to Cortex Cloud Security via CloudFormation deployed with the AWS CLI."""
@@ -3071,6 +3160,7 @@ def onboarding_aws():
                 "registry_scanning_options": {"type": "ECR"},
                 "serverless_scanning": True,
                 "agentless_disk_scanning": True,
+                "kubernetes_security": True,
             },
         }
     }
