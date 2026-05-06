@@ -164,8 +164,8 @@
                     <span class="step-number infra">INFRA</span>
                     <span class="step-status" id="infra-status"></span>
                 </div>
-                <div class="step-name">EKS + ECR + VPC + Lambda</div>
-                <div class="step-desc">Terraform: EKS cluster, ECR, VPC, IAM + Containment Lambda</div>
+                <div class="step-name">EKS + ECR + VPC + S3 + Lambda</div>
+                <div class="step-desc">Terraform: EKS cluster, ECR, VPC, IAM, Vulnerable S3 bucket + Containment Lambda</div>
                 <div class="step-actions">
                     <button class="btn btn-ghost" onclick="infraPlan()">Plan</button>
                     <button class="btn btn-primary" onclick="infraApply()">Apply</button>
@@ -240,6 +240,7 @@
                     <button class="btn btn-ghost" onclick="k8sStatus()">Status</button>
                 </div>
             </div>
+
         </div>
 
         <!-- Attack -->

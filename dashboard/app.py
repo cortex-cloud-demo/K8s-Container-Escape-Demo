@@ -677,6 +677,23 @@ terraform apply -auto-approve -no-color {tf_var_region()}
 
 echo ""
 echo "=================================================="
+echo "  PHASE 1b: Upload sensitive data to S3 bucket"
+echo "=================================================="
+BUCKET=$(terraform output -raw vuln_data_bucket_name 2>/dev/null || echo '')
+if [ -n "$BUCKET" ]; then
+  echo "Uploading to s3://$BUCKET"
+  cd {PROJECT_ROOT}
+  aws s3 cp s3-data/credentials.txt     "s3://$BUCKET/credentials.txt"
+  aws s3 cp s3-data/customers.csv       "s3://$BUCKET/customers.csv"
+  aws s3 cp s3-data/internal-report.pdf "s3://$BUCKET/internal-report.pdf"
+  echo "Files uploaded. Public URL: https://$BUCKET.s3.amazonaws.com"
+  cd {infra_dir}
+else
+  echo "WARNING: Could not determine bucket name, skipping file upload"
+fi
+
+echo ""
+echo "=================================================="
 echo "  PHASE 2: Lambda Containment"
 echo "=================================================="
 cd ../{lambda_dir}

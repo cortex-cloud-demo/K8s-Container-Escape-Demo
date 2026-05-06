@@ -54,3 +54,7 @@ output "dashboard_user_secret_access_key" {
   description = "Secret Access Key for the dashboard user (use: terraform output -raw dashboard_user_secret_access_key)"
 }
 
+output "vuln_data_bucket_name" {
+  value = aws_s3_bucket.vuln_data.bucket
+}
+
