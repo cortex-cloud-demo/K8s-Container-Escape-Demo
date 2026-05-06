@@ -1,0 +1,410 @@
+args:
+- description: You aws credentials in the ~/.aws/credentials format
+  name: aws_credentials
+  required: true
+  supportedModules: []
+commonfields:
+  id: 51a35543-295f-4ca8-82ed-a2a546d541f2
+  version: -1
+dockerimage: demisto/boto3py3:1.0.0.3654321
+enabled: true
+engineinfo: {}
+mainengineinfo: {}
+name: aws-add-internet-exposed-tag-to-s3-bucket
+pswd: ""
+restrictioncenter: {}
+runas: DBotWeakRole
+runonce: false
+script: |
+  import boto3
+  from botocore.exceptions import ClientError
+  import json
+  from typing import Dict, Any
+
+  def main():
+      """
+      Main function to add internet-exposed:true tag to AWS resources.
+      This script tags AWS resources directly using boto3 based on asset information from Cortex context.
+      """
+      try:
+          # 1. Get AWS credentials from script parameter
+          args = demisto.args()
+          aws_credentials = args.get('aws_credentials')
+
+          if not aws_credentials:
+              return_error("Missing required 'aws_credentials' parameter. "
+                           "Please provide AWS credentials in the specified format.")
+              return
+
+          # 2. Parse AWS credentials from the parameter format
+          # Expected format:
+          # [ACCOUNTIDAWSAdministratorAccess]
+          # aws_access_key_id=__REDACTED__
+          # aws_secret_access_key=__REDACTED__
+          # aws_session_token=__REDACTED__
+
+          access_key = None
+          secret_key = None
+          session_token = None
+          region = None
+
+          for line in aws_credentials.strip().split('\n'):
+              line = line.strip()
+              if line.startswith('[') and line.endswith(']'):
+                  # Extract region from account ID if possible
+                  # Format: [ACCOUNTIDAWSAdministratorAccess]
+                  continue
+              elif '=' in line:
+                  key, value = line.split('=', 1)
+                  key = key.strip()
+                  value = value.strip()
+
+                  if key == 'aws_access_key_id':
+                      access_key = value
+                  elif key == 'aws_secret_access_key':
+                      secret_key = value
+                  elif key == 'aws_session_token':
+                      session_token = value
+                  elif key == 'region':
+                      region = value
+
+          # 3. Set default region if not provided
+          if not region:
+              region = 'us-east-1'  # Default region
+
+          # 4. Validate that you received all the required AWS credentials
+          if not all([access_key, secret_key]):
+              return_error("Missing required AWS credentials (aws_access_key_id, aws_secret_access_key). "
+                           "Please ensure the aws_credentials parameter is properly formatted.")
+              return
+
+          # 5. Retrieve the entire incident context
+          context = demisto.context()
+
+          # Ensure context is a dictionary
+          if not isinstance(context, dict):
+              return_error("Invalid context format. Expected dictionary.")
+              return
+
+          # 5. Get Core.CoreAsset data
+          core_data = context.get('Core', {})
+          if not isinstance(core_data, dict):
+              return_error("Core context not found or invalid format.")
+              return
+
+          core_asset = core_data.get('CoreAsset')
+          if not core_asset:
+              return_error("CoreAsset not found in context. Please ensure the Get Asset Details task was completed.")
+              return
+
+          # Handle both list and dict formats for CoreAsset
+          assets_to_tag = []
+          if isinstance(core_asset, list):
+              assets_to_tag = [asset for asset in core_asset if isinstance(asset, dict)]
+          elif isinstance(core_asset, dict):
+              assets_to_tag = [core_asset]
+
+          if not assets_to_tag:
+              return_error("No valid assets found to tag.")
+              return
+
+          demisto.results(f"Attempting to tag {len(assets_to_tag)} asset(s) in AWS region: {region}...")
+
+          # 6. Initialize boto3 session with credentials
+          session_kwargs = {
+              'aws_access_key_id': access_key,
+              'aws_secret_access_key': secret_key,
+              'region_name': region
+          }
+          if session_token:
+              session_kwargs['aws_session_token'] = session_token
+
+          session = boto3.Session(**session_kwargs)
+
+          # 7. Process each asset and tag accordingly
+          tagged_resources = []
+          errors = []
+
+          for asset in assets_to_tag:
+              try:
+                  resource_arn = asset.get('xdm__asset__strong_id')
+                  asset_name = asset.get('xdm__asset__name', 'Unknown')
+                  asset_type = asset.get('xdm__asset__type__name', 'Unknown')
+
+                  if not resource_arn:
+                      errors.append(f"No resource ARN found for asset: {asset_name}")
+                      continue
+
+                  # Determine the AWS service and create appropriate client
+                  service_name = determine_aws_service(resource_arn, asset_type)
+                  if not service_name:
+                      errors.append(f"Could not determine AWS service for asset: {asset_name} (ARN: {resource_arn})")
+                      continue
+
+                  # Tag the resource based on service type
+                  success = tag_aws_resource(session, service_name, resource_arn, asset_name)
+                  if success:
+                      tagged_resources.append({
+                          'asset_name': asset_name,
+                          'resource_arn': resource_arn,
+                          'service': service_name
+                      })
+                  else:
+                      errors.append(f"Failed to tag resource: {asset_name}")
+
+              except Exception as e:
+                  errors.append(f"Error processing asset {asset.get('xdm__asset__name', 'Unknown')}: {str(e)}")
+
+          # 8. Prepare results
+          success_count = len(tagged_resources)
+          error_count = len(errors)
+
+          # Prepare readable output
+          readable_output = f"""**AWS Resource Tagging Results**
+
+  **Summary:**
+  - Resources Successfully Tagged: {success_count}
+  - Errors Encountered: {error_count}
+  - AWS Region: {region}
+
+  **Tagged Resources:**
+  """
+
+          if tagged_resources:
+              for resource in tagged_resources:
+                  readable_output += f"  ✅ {resource['asset_name']} ({resource['service']})\n"
+
+          if errors:
+              readable_output += "\n**Errors:**\n"
+              for error in errors:
+                  readable_output += f"  ❌ {error}\n"
+
+          readable_output += f"\n**Tag Applied:** internet-exposed = true"
+
+          # Prepare output data
+          outputs = {
+              "tagged_resources": tagged_resources,
+              "success_count": success_count,
+              "error_count": error_count,
+              "errors": errors,
+              "region": region,
+              "tag_key": "internet-exposed",
+              "tag_value": "true"
+          }
+
+          # Return results to XSOAR War Room
+          command_results = CommandResults(
+              readable_output=readable_output,
+              outputs_prefix="AWSResourceTagging",
+              outputs=outputs,
+              outputs_key_field="tagged_resources"
+          )
+          return_results(command_results)
+
+      except ClientError as e:
+          # Handle Boto3-specific errors (e.g., authentication failure)
+          return_error(f"AWS Client Error: {e}. Check the provided credentials and permissions.")
+      except Exception as e:
+          # Handle any other unexpected errors
+          return_error(f"An unexpected error occurred while tagging AWS resources: {str(e)}")
+
+
+  def determine_aws_service(resource_arn, asset_type):
+      """
+      Determine the AWS service based on resource ARN or asset type.
+      Returns the service name for boto3 client creation.
+      """
+      if not resource_arn:
+          return None
+
+      # Parse ARN format: arn:aws:service:region:account:resource
+      try:
+          arn_parts = resource_arn.split(':')
+          if len(arn_parts) >= 3 and arn_parts[0] == 'arn' and arn_parts[1] == 'aws':
+              service = arn_parts[2]
+
+              # Map ARN services to boto3 client names
+              service_mapping = {
+                  's3': 's3',
+                  'ec2': 'ec2',
+                  'rds': 'rds',
+                  'lambda': 'lambda',
+                  'iam': 'iam',
+                  'elasticloadbalancing': 'elbv2',
+                  'elb': 'elbv2',
+                  'cloudfront': 'cloudfront',
+                  'apigateway': 'apigateway',
+                  'dynamodb': 'dynamodb',
+                  'sns': 'sns',
+                  'sqs': 'sqs',
+                  'kms': 'kms',
+                  'secretsmanager': 'secretsmanager',
+                  'ssm': 'ssm'
+              }
+
+              return service_mapping.get(service, service)
+      except:
+          pass
+
+      # Fallback: try to determine from asset type
+      asset_type_lower = asset_type.lower() if asset_type else ''
+      if 's3' in asset_type_lower or 'bucket' in asset_type_lower:
+          return 's3'
+      elif 'ec2' in asset_type_lower or 'instance' in asset_type_lower:
+          return 'ec2'
+      elif 'rds' in asset_type_lower or 'database' in asset_type_lower:
+          return 'rds'
+      elif 'lambda' in asset_type_lower or 'function' in asset_type_lower:
+          return 'lambda'
+
+      return None
+
+
+  def tag_aws_resource(session, service_name, resource_arn, asset_name):
+      """
+      Tag an AWS resource with internet-exposed:true tag.
+      Returns True if successful, False otherwise.
+      """
+      try:
+          client = session.client(service_name)
+
+          # Define the tag to apply
+          tag_key = 'internet-exposed'
+          tag_value = 'true'
+
+          # Handle different services with their specific tagging methods
+          if service_name == 's3':
+              # For S3, extract bucket name from ARN or use resource_arn directly
+              bucket_name = resource_arn
+              if resource_arn.startswith('arn:aws:s3:::'):
+                  bucket_name = resource_arn.split(':::')[1].split('/')[0]
+
+              client.put_bucket_tagging(
+                  Bucket=bucket_name,
+                  Tagging={
+                      'TagSet': [
+                          {
+                              'Key': tag_key,
+                              'Value': tag_value
+                          }
+                      ]
+                  }
+              )
+
+          elif service_name == 'ec2':
+              # For EC2, extract instance ID from ARN
+              if '/i-' in resource_arn:
+                  instance_id = resource_arn.split('/i-')[1].split('/')[0]
+                  instance_id = 'i-' + instance_id
+              else:
+                  # Assume resource_arn is the instance ID
+                  instance_id = resource_arn
+
+              client.create_tags(
+                  Resources=[instance_id],
+                  Tags=[
+                      {
+                          'Key': tag_key,
+                          'Value': tag_value
+                      }
+                  ]
+              )
+
+          elif service_name == 'rds':
+              # For RDS, use the full ARN
+              client.add_tags_to_resource(
+                  ResourceName=resource_arn,
+                  Tags=[
+                      {
+                          'Key': tag_key,
+                          'Value': tag_value
+                      }
+                  ]
+              )
+
+          elif service_name == 'lambda':
+              # For Lambda, use the full ARN
+              client.tag_resource(
+                  Resource=resource_arn,
+                  Tags={
+                      tag_key: tag_value
+                  }
+              )
+
+          elif service_name == 'elbv2':
+              # For ELB v2 (ALB/NLB), use the full ARN
+              client.add_tags(
+                  ResourceArns=[resource_arn],
+                  Tags=[
+                      {
+                          'Key': tag_key,
+                          'Value': tag_value
+                      }
+                  ]
+              )
+
+          else:
+              # Generic tagging for other services (may not work for all)
+              demisto.results(f"Warning: Generic tagging attempted for {service_name}. May not be supported.")
+              return False
+
+          demisto.results(f"Successfully tagged {asset_name} ({service_name})")
+          return True
+
+      except ClientError as e:
+          error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+          demisto.results(f"Failed to tag {asset_name}: {error_code} - {str(e)}")
+          return False
+      except Exception as e:
+          demisto.results(f"Unexpected error tagging {asset_name}: {str(e)}")
+          return False
+
+
+  def test_module():
+      """
+      Test function to validate AWS credentials and connectivity.
+      """
+      try:
+          context = demisto.context()
+          aws_creds = context.get('AWS', {}).get('Credentials', {})
+
+          access_key = aws_creds.get('AccessKeyID')
+          secret_key = aws_creds.get('SecretAccessKey')
+          region = aws_creds.get('Region')
+          session_token = aws_creds.get('SessionToken')
+
+          if not all([access_key, secret_key, region]):
+              return_error("Missing AWS credentials for testing")
+              return
+
+          # Test AWS connection
+          session_kwargs = {
+              'aws_access_key_id': access_key,
+              'aws_secret_access_key': secret_key,
+              'region_name': region
+          }
+          if session_token:
+              session_kwargs['aws_session_token'] = session_token
+
+          session = boto3.Session(**session_kwargs)
+          sts_client = session.client('sts')
+
+          # Simple test - get caller identity
+          response = sts_client.get_caller_identity()
+          account_id = response.get('Account', 'Unknown')
+
+          return_results(f"✅ AWS connection test successful. Account ID: {account_id}")
+
+      except ClientError as e:
+          return_error(f"AWS connection test failed: {e}")
+      except Exception as e:
+          return_error(f"Test failed with error: {str(e)}")
+
+
+  if __name__ in ('__main__', '__builtin__', 'builtins'):
+      main()
+scripttarget: 0
+signature: ""
+subtype: python3
+tags: []
+type: python

@@ -1952,6 +1952,12 @@ def deploy_script_to_cortex():
         "K8sSearchSimilarEvents": os.path.join(
             PROJECT_ROOT, "cortex-scripts", "automation-K8sSearchSimilarEvents.yml"
         ),
+        "AwsAddInternetExposedTagToS3Bucket": os.path.join(
+            PROJECT_ROOT, "cortex-scripts", "aws-add-internet-exposed-tag-to-s3-bucket.yml"
+        ),
+        "AwsRemoveS3PublicAccess": os.path.join(
+            PROJECT_ROOT, "cortex-scripts", "aws-remove-s3-public-access.yml"
+        ),
     }
 
     if script_name not in scripts_map:
@@ -2029,6 +2035,7 @@ def publish_playbook_to_cortex():
         "containment": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Spring4Shell_Containment.yml"),
         "forensic": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Forensic_Analysis.yml"),
         "search": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Search_Similar_Events.yml"),
+        "s3-remediation": os.path.join(PLAYBOOK_DIR, "Public_S3_Bucket_Auto_Remediation.yml"),
     }
 
     playbook_path = playbooks_map.get(playbook_name)
@@ -2069,6 +2076,10 @@ def deploy_all_to_cortex():
          os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-K8sForensicAnalysis.yml")),
         ("K8sSearchSimilarEvents",
          os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-K8sSearchSimilarEvents.yml")),
+        ("AwsAddInternetExposedTagToS3Bucket",
+         os.path.join(PROJECT_ROOT, "cortex-scripts", "aws-add-internet-exposed-tag-to-s3-bucket.yml")),
+        ("AwsRemoveS3PublicAccess",
+         os.path.join(PROJECT_ROOT, "cortex-scripts", "aws-remove-s3-public-access.yml")),
     ]
 
     for script_name, yaml_path in scripts:
@@ -2134,6 +2145,8 @@ def deploy_all_to_cortex():
          os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Forensic_Analysis.yml")),
         ("K8s Container Escape Search Similar Events",
          os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Search_Similar_Events.yml")),
+        ("Public S3 Bucket Auto Remediation",
+         os.path.join(PLAYBOOK_DIR, "Public_S3_Bucket_Auto_Remediation.yml")),
     ]
 
     playbook_api_paths = [
