@@ -1,0 +1,653 @@
+id: 6d4540b8-9802-472c-8695-4028c3ead631
+version: 30
+vcShouldKeepItemLegacyProdMachine: false
+aclrelations: []
+aclowner:
+  id: ""
+  type: ""
+  name: ""
+name: Public S3 Bucket Auto Remediation
+description: This playbook will check for a specific tag on public buckets. If the
+  tag is missing, it will ask for a decision via email and then either tag the bucket
+  as approved or remove public access.
+tags:
+- demo
+- smelotte
+starttaskid: "0"
+tasks:
+  "0":
+    id: "0"
+    taskid: 6acc3770-8ef7-4f67-8f53-ccc96c78b00a
+    type: start
+    task:
+      id: 6acc3770-8ef7-4f67-8f53-ccc96c78b00a
+      version: -1
+      name: ""
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "6"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 50
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "2":
+    id: "2"
+    taskid: cdfc0081-2489-4d89-bf9a-15a4f7624552
+    type: regular
+    task:
+      id: cdfc0081-2489-4d89-bf9a-15a4f7624552
+      version: -1
+      name: Print Asset Name
+      description: Prints text to war room (Markdown supported)
+      scriptName: Print
+      type: regular
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "4"
+    scriptarguments:
+      value:
+        simple: ${Core.CoreAsset.xdm__asset__name}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 400
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "4":
+    id: "4"
+    taskid: 770dcfa8-2bb4-47a5-828f-5609a59b520e
+    type: condition
+    task:
+      id: 770dcfa8-2bb4-47a5-828f-5609a59b520e
+      version: -1
+      name: Check if it should be internet-exposed
+      type: condition
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#default#':
+      - "7"
+      "yes":
+      - "5"
+    separatecontext: false
+    conditions:
+    - label: "yes"
+      condition:
+      - - operator: isEqualString
+          left:
+            value:
+              simple: ${Core.CoreAsset.xdm__asset__tags.internet-exposed}
+            iscontext: true
+          right:
+            value:
+              simple: "true"
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 580
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "5":
+    id: "5"
+    taskid: 6c227943-dfb1-4f9e-ae2d-8ba35e4ed326
+    type: regular
+    task:
+      id: 6c227943-dfb1-4f9e-ae2d-8ba35e4ed326
+      version: -1
+      name: END
+      description: Prints text to war room (Markdown supported)
+      scriptName: Print
+      type: regular
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    scriptarguments:
+      value:
+        simple: This S3 bucket is intentionally public.
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 50,
+          "y": 760
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "6":
+    id: "6"
+    taskid: 4cb9214c-3d11-465e-a5a4-3b927d8588f3
+    type: regular
+    task:
+      id: 4cb9214c-3d11-465e-a5a4-3b927d8588f3
+      version: -1
+      name: Get Asset Detail
+      description: Get asset information.
+      script: '|||core-get-asset-details'
+      type: regular
+      iscommand: true
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "2"
+    scriptarguments:
+      asset_id:
+        simple: ${issue.asset_ids.[0]}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 220
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    formDisplay:
+      headerbackgroundcolor: ""
+      headerfontcolor: ""
+      sender: ""
+      bodybackgroundcolor: ""
+      bodyfontcolor: ""
+      submitbuttonbackgroundcolor: ""
+      submitbuttonfontcolor: ""
+      submittext: ""
+      isexternalrtl: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "7":
+    id: "7"
+    taskid: ad19f77e-4214-4b2a-bedc-fc141d4b3cf5
+    type: condition
+    task:
+      id: ad19f77e-4214-4b2a-bedc-fc141d4b3cf5
+      version: -1
+      name: Ask the operator if this should be public or private.
+      type: condition
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      Add Tag → This will add an Internet Exposure – Intentional tag to the resource.:
+      - "12"
+      Remove public access → This will disable public exposure on the resource.:
+      - "11"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 480,
+          "y": 760
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    message:
+      to:
+        simple: ${issue.assigned_to}
+      subject:
+        simple: Action Required – Public S3 Bucket Detected
+      body:
+        simple: "<div style=\"font-family: Arial, sans-serif; line-height: 1.6; color:
+          #333;\">\n    <div style=\"background: #ff4444; color: white; padding: 15px;
+          text-align: center; border-radius: 5px; margin-bottom: 20px;\">\n        <h2
+          style=\"margin: 0;\">\U0001F6A8 SECURITY ALERT: Publicly Accessible S3 Bucket
+          Detected</h2>\n    </div>\n    \n    <p>Hello,</p>\n    \n    <p><strong>\U0001F50D
+          Our Cortex Cloud security monitoring has identified an S3 bucket with public
+          access permissions that may pose a data exposure risk.</strong></p>\n    \n
+          \   <div style=\"background: #f0f8ff; padding: 15px; border-left: 4px solid
+          #007cba; margin: 15px 0;\">\n        <h3 style=\"margin-top: 0;\">\U0001F4CB
+          Asset Details:</h3>\n        <ul style=\"list-style: none; padding-left:
+          0;\">\n            <li><strong>\U0001FAA3 Bucket Name:</strong> ${Core.CoreAsset.xdm__asset__name}</li>\n
+          \           <li><strong>\U0001F30D AWS Region:</strong> ${Core.CoreAsset.xdm__asset__cloud__region}</li>\n
+          \           <li><strong>☁️ AWS Account ID:</strong> ${Core.CoreAsset.xdm__asset__realm}</li>\n
+          \           <li><strong>⏰ Detection Time:</strong> ${incident.created}</li>\n
+          \           <li><strong>⚠️ Risk Level:</strong> <span style=\"color: #ff4444;
+          font-weight: bold;\">HIGH</span></li>\n        </ul>\n    </div>\n    \n
+          \   <div style=\"background: #fff3cd; padding: 15px; border-radius: 5px;
+          margin: 15px 0;\">\n        <h3 style=\"margin-top: 0;\">⚠️ Security Impact:</h3>\n
+          \       <p>This bucket is currently accessible to anyone on the internet,
+          potentially exposing sensitive data and violating security policies.</p>\n
+          \   </div>\n    \n    <h3>\U0001F527 Recommended Actions:</h3>\n    <p>Please
+          select one of the following options:</p>\n    \n    <div style=\"border:
+          2px solid #28a745; border-radius: 8px; padding: 15px; margin: 15px 0; background:
+          #f8fff8;\">\n        <h4 style=\"color: #28a745; margin-top: 0;\">✅ <strong>SECURE
+          BUCKET</strong> - Remove Public Access</h4>\n        <ul style=\"margin:
+          10px 0; padding-left: 20px;\">\n            <li>→ Automatically applies
+          AWS Public Access Block</li>\n            <li>→ Removes public bucket policies
+          and ACLs</li>\n            <li>→ <strong>Recommended for most cases</strong></li>\n
+          \       </ul>\n    </div>\n    \n    <div style=\"border: 2px solid #ffc107;
+          border-radius: 8px; padding: 15px; margin: 15px 0; background: #fffef0;\">\n
+          \       <h4 style=\"color: #e68900; margin-top: 0;\">\U0001F3F7️ <strong>MARK
+          AS INTENTIONAL</strong> - Add Exception Tag</h4>\n        <ul style=\"margin:
+          10px 0; padding-left: 20px;\">\n            <li>→ Tags bucket as \"internet-exposed:
+          true\"</li>\n            <li>→ Use only if public access is business-required</li>\n
+          \       </ul>\n    </div>\n    \n    <div style=\"background: #ffe6e6; padding:
+          15px; border-radius: 5px; margin: 20px 0; text-align: center;\">\n        <p
+          style=\"margin: 0; font-size: 16px;\"><strong>⏰ Action Required:</strong>
+          <span style=\"color: #ff4444;\">Please respond within 2 hours</span> to
+          maintain security compliance. Select one of the two actions below: </p>\n
+          \   </div>\n</div>"
+      methods:
+      - email
+      format: html
+      bcc: null
+      cc: null
+      timings:
+        retriescount: 2
+        retriesinterval: 360
+        completeafterreplies: 1
+        completeafterv2: true
+        completeaftersla: false
+      replyOptions:
+      - Add Tag → This will add an Internet Exposure – Intentional tag to the resource.
+      - Remove public access → This will disable public exposure on the resource.
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "8":
+    id: "8"
+    taskid: d251cce3-ea5e-4f02-840d-c63cb919851d
+    type: regular
+    task:
+      id: d251cce3-ea5e-4f02-840d-c63cb919851d
+      version: -1
+      name: Add internet-exposed tag
+      scriptName: aws-add-internet-exposed-tag-to-s3-bucket
+      type: regular
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "14"
+    scriptarguments:
+      aws_credentials:
+        simple: ${AWS_Credentials.Answers.0}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 1120
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "9":
+    id: "9"
+    taskid: 73de84ab-84e1-4c1a-a2ff-2d1433cfd69f
+    type: regular
+    task:
+      id: 73de84ab-84e1-4c1a-a2ff-2d1433cfd69f
+      version: -1
+      name: Remove Public Access
+      scriptName: aws-remove-s3-public-access
+      type: regular
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "15"
+    scriptarguments:
+      aws_credentials:
+        simple: ${AWS_Credentials.Answers.0}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 695,
+          "y": 1120
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "11":
+    id: "11"
+    taskid: 85d3d2ef-0ec7-43cf-b583-9e01b79809a5
+    type: collection
+    task:
+      id: 85d3d2ef-0ec7-43cf-b583-9e01b79809a5
+      version: -1
+      name: Ask for AWS Credentials
+      type: collection
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "9"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 695,
+          "y": 940
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    message:
+      to: null
+      subject: null
+      body: null
+      methods: []
+      format: ""
+      bcc: null
+      cc: null
+      timings:
+        retriescount: 2
+        retriesinterval: 360
+        completeafterreplies: 1
+        completeafterv2: true
+        completeaftersla: false
+    form:
+      questions:
+      - id: 845630d7-5dc7-4f6c-89be-e8aca26379f9
+        label: ""
+        labelarg:
+          simple: aws_credentials
+        required: true
+        gridcolumns: []
+        defaultrows: []
+        type: longText
+        options: []
+        optionsarg: []
+        fieldassociated: ""
+        placeholder: ""
+        tooltip: It should be in ~/.aws/credentials format
+        readonly: false
+      title: AWS_Credentials
+      description: Provide AWS Credentials
+      sender: ""
+      expired: false
+      totalanswers: 0
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "12":
+    id: "12"
+    taskid: 36d7bff7-4a8a-4bd5-a6d4-f628316aa14d
+    type: collection
+    task:
+      id: 36d7bff7-4a8a-4bd5-a6d4-f628316aa14d
+      version: -1
+      name: Ask for AWS Credentials
+      type: collection
+      iscommand: false
+      brand: ""
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "8"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 940
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    message:
+      to: null
+      subject: null
+      body: null
+      methods: []
+      format: ""
+      bcc: null
+      cc: null
+      timings:
+        retriescount: 2
+        retriesinterval: 360
+        completeafterreplies: 1
+        completeafterv2: true
+        completeaftersla: false
+    form:
+      questions:
+      - id: "0"
+        label: ""
+        labelarg:
+          simple: aws_credentials
+        required: true
+        gridcolumns: []
+        defaultrows: []
+        type: longText
+        options: []
+        optionsarg: []
+        fieldassociated: ""
+        placeholder: ""
+        tooltip: It should be in ~/.aws/credentials format
+        readonly: false
+      title: AWS_Credentials
+      description: Provide AWS Credentials
+      sender: ""
+      expired: false
+      totalanswers: 0
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "13":
+    id: "13"
+    taskid: 2c280467-5306-4b38-9c14-ba558c40b8db
+    type: regular
+    task:
+      id: 2c280467-5306-4b38-9c14-ba558c40b8db
+      version: -1
+      name: Send notification
+      description: commands.server.mail.sendsummary
+      script: Builtin|||sendIssueSummaryEmail
+      type: regular
+      iscommand: true
+      brand: Builtin
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    scriptarguments:
+      to:
+        simple: ${issue.assigned_to}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 480,
+          "y": 1480
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "14":
+    id: "14"
+    taskid: e9f86217-d7b6-4322-b61e-eb1e58c38a3e
+    type: regular
+    task:
+      id: e9f86217-d7b6-4322-b61e-eb1e58c38a3e
+      version: -1
+      name: Close IssueIssue resolved – asset correctly tagged as internet-exposed.Issue
+        resolved – asset correctly tagged as internet-exposed.
+      description: commands.local.cmd.close.inv
+      script: Builtin|||closeInvestigation
+      type: regular
+      iscommand: true
+      brand: Builtin
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "13"
+    scriptarguments:
+      closeNotes:
+        simple: Successfully added internet-exposed tag to ${Core.CoreAsset.xdm__asset__name}.
+      closeReason:
+        simple: Issue resolved – asset correctly tagged as internet-exposed.
+      id:
+        simple: ${issue.internal_id}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 1300
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "15":
+    id: "15"
+    taskid: d727f79b-342f-447a-a8b2-bff576e991f7
+    type: regular
+    task:
+      id: d727f79b-342f-447a-a8b2-bff576e991f7
+      version: -1
+      name: Close Issue
+      description: commands.local.cmd.close.inv
+      script: Builtin|||closeInvestigation
+      type: regular
+      iscommand: true
+      brand: Builtin
+      playbooktaskmissingcomponent: null
+      istaskmissingcomponenterrordismissed: false
+    nexttasks:
+      '#none#':
+      - "13"
+    scriptarguments:
+      closeNotes:
+        simple: |-
+          The internet exposure of the S3 bucket ${Core.CoreAsset.xdm__asset__name} was successfully removed by applying the AWS S3 PublicAccessBlockConfiguration:
+          - BlockPublicAcls = True
+          - IgnorePublicAcls = True
+          - BlockPublicPolicy = True
+          - RestrictPublicBuckets = True
+      closeReason:
+        simple: Resolved
+      id:
+        simple: ${issue.internal_id}
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 695,
+          "y": 1300
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+outlinetasks: {}
+view: |-
+  {
+    "linkLabelsPosition": {
+      "7_11_Remove public access → This will disable public exposure on the resource.": 0.9,
+      "7_12_Add Tag → This will add an Internet Exposure – Intentional tag to the resource.": 0.2
+    },
+    "paper": {
+      "dimensions": {
+        "height": 1500,
+        "width": 1025,
+        "x": 50,
+        "y": 50
+      }
+    }
+  }
+inputs: []
+outputs: []
+adopted: true
+possibleresponses: []

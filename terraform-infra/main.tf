@@ -210,6 +210,75 @@ resource "aws_iam_role_policy_attachment" "eks_node_ec2_full" {
 }
 
 #######################
+# VULNERABLE S3 BUCKET
+#######################
+# Intentionally misconfigured - public access, no encryption, no versioning
+
+resource "aws_s3_bucket" "vuln_data" {
+  bucket        = "${var.project_name}-vuln-data-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+
+  tags = {
+    Name    = "${var.project_name}-vuln-data"
+    Purpose = "Intentionally vulnerable bucket for demo"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "vuln_data" {
+  bucket = aws_s3_bucket.vuln_data.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_ownership_controls" "vuln_data" {
+  bucket = aws_s3_bucket.vuln_data.id
+
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_policy" "vuln_data_public_read" {
+  bucket = aws_s3_bucket.vuln_data.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "PublicReadGetObject"
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = "s3:GetObject"
+      Resource  = "${aws_s3_bucket.vuln_data.arn}/*"
+    }]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.vuln_data]
+}
+
+# Intentionally dangerous S3 permissions on EKS nodes (public EC2s) - triggers Cortex CSPM rule
+resource "aws_iam_role_policy" "eks_node_s3_dangerous" {
+  name = "${var.project_name}-eks-node-s3-dangerous"
+  role = aws_iam_role.eks_nodes.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = [
+        "s3:PutObjectRetention",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketVersioning",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
+#######################
 # EKS CLUSTER
 #######################
 

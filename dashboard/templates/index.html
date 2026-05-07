@@ -149,6 +149,7 @@
                 <div class="step-name">AWS Onboarding Cortex</div>
                 <div class="step-desc">Connect AWS account to Cortex Cloud Security</div>
                 <div class="step-actions">
+                    <button class="btn btn-ghost" onclick="testAwsOnboarding()">Test</button>
                     <button class="btn btn-onboard" onclick="runAwsOnboarding()">Onboard</button>
                 </div>
             </div>
@@ -163,8 +164,8 @@
                     <span class="step-number infra">INFRA</span>
                     <span class="step-status" id="infra-status"></span>
                 </div>
-                <div class="step-name">EKS + ECR + VPC + Lambda</div>
-                <div class="step-desc">Terraform: EKS cluster, ECR, VPC, IAM + Containment Lambda</div>
+                <div class="step-name">EKS + ECR + VPC + S3 + Lambda</div>
+                <div class="step-desc">Terraform: EKS cluster, ECR, VPC, IAM, Vulnerable S3 bucket + Containment Lambda</div>
                 <div class="step-actions">
                     <button class="btn btn-ghost" onclick="infraPlan()">Plan</button>
                     <button class="btn btn-primary" onclick="infraApply()">Apply</button>
@@ -239,6 +240,7 @@
                     <button class="btn btn-ghost" onclick="k8sStatus()">Status</button>
                 </div>
             </div>
+
         </div>
 
         <!-- Attack -->
@@ -438,6 +440,28 @@
                         </div>
                     </div>
 
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('AwsAddInternetExposedTagToS3Bucket')" style="cursor:pointer;">
+                            <span class="cortex-object-name">AwsAddInternetExposedTagToS3Bucket</span>
+                            <span class="cortex-object-desc">Add internet-exposed tag to a public S3 bucket</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-script-s3-tag"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployScript('AwsAddInternetExposedTagToS3Bucket')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('AwsRemoveS3PublicAccess')" style="cursor:pointer;">
+                            <span class="cortex-object-name">AwsRemoveS3PublicAccess</span>
+                            <span class="cortex-object-desc">Remove public access block on an S3 bucket</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-script-s3-remediate"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployScript('AwsRemoveS3PublicAccess')">Deploy</button>
+                        </div>
+                    </div>
+
                     <div class="cortex-object-title" style="font-size: 0.7rem; color: #22c55e; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.6rem; margin-bottom: 0.4rem; font-weight: 600;">Playbooks</div>
 
                     <div class="cortex-object-item">
@@ -470,6 +494,17 @@
                         <div class="cortex-object-actions">
                             <span class="cortex-object-status" id="deploy-status-pb-search"></span>
                             <button class="btn btn-ghost btn-xs" onclick="cortexDeployPlaybook('search')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('pb-s3-remediation')" style="cursor:pointer;">
+                            <span class="cortex-object-name">Public S3 Bucket Auto Remediation</span>
+                            <span class="cortex-object-desc">Check tag &rarr; Email operator &rarr; Tag as approved or remove public access</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-pb-s3-remediation"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployPlaybook('s3-remediation')">Deploy</button>
                         </div>
                     </div>
                 </div>

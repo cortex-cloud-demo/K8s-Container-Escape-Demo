@@ -1,0 +1,13 @@
+first_name,last_name,email,phone,ssn,credit_card_number,credit_card_expiry,credit_card_cvv,credit_card_type,date_of_birth,address,city,country,account_balance
+James,Morrison,james.morrison@gmail.com,+1-202-555-0147,532-88-4791,4532015112830366,09/27,812,Visa,1985-03-22,"1234 Oak Street, Apt 4B",New York,US,12450.75
+Sarah,Thompson,sarah.thompson@outlook.com,+1-415-555-0182,218-46-9037,5425233430109903,11/26,234,Mastercard,1990-07-14,"789 Pine Avenue",San Francisco,US,3820.00
+Mohammed,Al-Rashid,m.alrashid@protonmail.com,+44-7911-123456,,,4916338506082832,03/28,521,Visa,1978-11-30,"22 Baker Street",London,UK,98200.50
+Emily,Chen,emily.chen@yahoo.com,+1-312-555-0193,401-67-2983,374251018720180,07/25,4829,Amex,1995-01-08,"456 Maple Drive",Chicago,US,560.25
+Carlos,Rodriguez,carlos.r@empresa.mx,+52-55-5555-1234,,3714496353984312,01/27,234,Amex,1982-09-19,"Calle Reforma 88",Mexico City,MX,15300.00
+Fatima,Nkosi,fatima.nkosi@company.co.za,+27-82-555-7890,,,5500005555555559,06/26,892,Mastercard,1988-04-25,"12 Mandela Road",Cape Town,ZA,4100.80
+David,Kim,david.kim@kakao.com,+82-10-5555-6789,,,4111111111111111,12/27,342,Visa,1993-12-03,"456 Gangnam-daero",Seoul,KR,7650.00
+Lisa,Müller,lisa.mueller@gmx.de,+49-30-555-9876,,,5105105105105100,08/26,671,Mastercard,1980-06-17,"Hauptstrasse 12",Berlin,DE,22400.00
+Ahmed,Hassan,ahmed.hassan@hotmail.com,+971-50-555-4321,,,4012888888881881,10/25,456,Visa,1975-08-09,"Al Wasl Road 301",Dubai,AE,183000.00
+Jessica,Williams,jessica.w@corp.com,+1-646-555-0167,089-34-7612,5425233430109903,04/28,789,Mastercard,1997-02-28,"88 Wall Street",New York,US,250.00
+Raj,Patel,raj.patel@infosys.in,+91-98765-43210,,,6011111111111117,02/27,123,Discover,1986-10-15,"MG Road 200",Bangalore,IN,9800.00
+Anna,Kowalski,anna.kowalski@wp.pl,+48-600-555-123,,,4532015112830366,05/26,654,Visa,1991-03-31,"ul. Marszalkowska 10",Warsaw,PL,3200.00
