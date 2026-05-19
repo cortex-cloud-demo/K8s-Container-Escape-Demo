@@ -25,9 +25,24 @@ K8S_DIR = os.path.join(PROJECT_ROOT, "k8s")
 ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")
 PLAYBOOK_DIR = os.path.join(PROJECT_ROOT, "playbook")
 KUBECONFIG_PATH = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig")
+KUBECONFIG_BYOC_PATH = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig-byoc")
 
 # Toolbox container name
 TOOLBOX_CONTAINER = "k8s-escape-toolbox"
+
+
+def active_kubeconfig_path():
+    """Return the kubeconfig path to use based on current mode (BYOC vs EKS)."""
+    if external_cluster.get("enabled") and external_cluster.get("kubeconfig"):
+        return KUBECONFIG_BYOC_PATH
+    return KUBECONFIG_PATH
+
+
+def active_kubeconfig_container_path():
+    """Same as active_kubeconfig_path() but mapped to the toolbox container path."""
+    if external_cluster.get("enabled") and external_cluster.get("kubeconfig"):
+        return "/project/dashboard/.kubeconfig-byoc"
+    return "/project/dashboard/.kubeconfig"
 
 
 def is_toolbox_running():
@@ -58,8 +73,8 @@ def toolbox_cmd(command, cwd=None):
         env_flags = ""
         for var in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_DEFAULT_REGION", "AWS_REGION"]:
             env_flags += f' -e {var}="${{{var}}}"'
-        # Map KUBECONFIG path to container path
-        env_flags += f' -e KUBECONFIG=/project/dashboard/.kubeconfig'
+        # Map KUBECONFIG path to container path (BYOC-aware)
+        env_flags += f' -e KUBECONFIG={active_kubeconfig_container_path()}'
         # Write Cortex credentials to a file in the container via docker cp
         # (avoids shell escaping issues with special chars in API keys)
         if cortex_settings.get("base_url"):
@@ -156,7 +171,7 @@ def get_aws_env():
     or ~/.aws/config which can cause credential mixing between accounts.
     """
     env = {
-        "KUBECONFIG": KUBECONFIG_PATH,
+        "KUBECONFIG": active_kubeconfig_path(),
         # Prevent AWS SDK from reading ~/.aws/credentials and ~/.aws/config
         "AWS_SHARED_CREDENTIALS_FILE": "/dev/null",
         "AWS_CONFIG_FILE": "/dev/null",
@@ -1146,15 +1161,20 @@ echo "==> Done! Image pushed to ${{ECR_URL}}:latest"
 
 @app.route("/api/k8s/deploy", methods=["POST"])
 def k8s_deploy():
-    # Generate kubeconfig with embedded AWS credentials before deploying
-    try:
-        env = os.environ.copy()
-        env.update(get_aws_env())
-        region = tf_output(TERRAFORM_DIR, "region", env) or aws_credentials["aws_region"] or "eu-west-3"
-        cluster = tf_output(TERRAFORM_DIR, "cluster_name", env) or "eks-escape-demo"
-        generate_kubeconfig(cluster, region)
-    except Exception as e:
-        return jsonify({"error": f"Failed to generate kubeconfig: {e}"}), 500
+    # BYOC mode: skip EKS kubeconfig generation, use the user-provided one
+    if external_cluster.get("enabled") and external_cluster.get("kubeconfig"):
+        if not os.path.isfile(KUBECONFIG_BYOC_PATH):
+            return jsonify({"error": "BYOC kubeconfig not found on disk — re-save it in Settings"}), 400
+    else:
+        # EKS mode: regenerate kubeconfig with embedded AWS credentials
+        try:
+            env = os.environ.copy()
+            env.update(get_aws_env())
+            region = tf_output(TERRAFORM_DIR, "region", env) or aws_credentials["aws_region"] or "eu-west-3"
+            cluster = tf_output(TERRAFORM_DIR, "cluster_name", env) or "eks-escape-demo"
+            generate_kubeconfig(cluster, region)
+        except Exception as e:
+            return jsonify({"error": f"Failed to generate kubeconfig: {e}"}), 500
 
     # Determine image URL
     if external_cluster.get("enabled") and external_cluster.get("image_url"):
@@ -1163,7 +1183,10 @@ def k8s_deploy():
         image_url = None  # Will be resolved from terraform output
 
     if image_url:
-        # BYOC mode: use provided image URL
+        # BYOC mode: use provided image URL.
+        # 1. Patch Service from LoadBalancer to NodePort (no cloud LB controller on RKE2/vanilla).
+        # 2. Try to create an Ingress on the existing ingress-nginx controller (the
+        #    common pattern: NodePort 30080 is open in the SG and reaches the controller).
         cmd = f"""
 set -e
 echo "==> BYOC Mode: Deploying to external cluster"
@@ -1174,19 +1197,79 @@ echo "==> Applying manifests..."
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/service-account.yaml
 
-echo "==> Setting image: {image_url}"
-sed "s|ECR_IMAGE_PLACEHOLDER|{image_url}|g" k8s/deployment.yaml | kubectl apply -f -
+echo "==> Setting image: {image_url} (and patching Service to NodePort)"
+sed -e "s|ECR_IMAGE_PLACEHOLDER|{image_url}|g" \\
+    -e "s|type: LoadBalancer|type: NodePort|" k8s/deployment.yaml | kubectl apply -f -
 
 echo "==> Waiting for deployment rollout..."
 kubectl rollout status deployment/vuln-app -n vuln-app --timeout=300s
 
-echo "==> Waiting for LoadBalancer..."
-sleep 15
-HOST=$(kubectl get svc vuln-app-service -n vuln-app -o jsonpath='{{.status.loadBalancer.ingress[0].hostname}}' 2>/dev/null || echo "pending")
+# ── Try to create an Ingress on ingress-nginx if available ──
+INGRESS_SVC_JSON=$(kubectl get svc -A -l app.kubernetes.io/name=ingress-nginx -o json 2>/dev/null)
+INGRESS_NS=$(echo "$INGRESS_SVC_JSON" | grep -m1 '"namespace"' | cut -d'"' -f4)
+if [ -n "$INGRESS_NS" ]; then
+    echo "==> Detected ingress-nginx in namespace '$INGRESS_NS' — creating Ingress"
+    cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vuln-app-ingress
+  namespace: vuln-app
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /app
+        pathType: Prefix
+        backend:
+          service:
+            name: vuln-app-service
+            port:
+              number: 80
+EOF
+fi
+
+# ── Resolve HOST: prefer ingress-nginx (NodePort + EIP), fallback to vuln-app NodePort ──
+echo "==> Resolving HOST..."
+NODE_IP=$(kubectl get nodes -o jsonpath='{{.items[0].status.addresses[?(@.type=="ExternalIP")].address}}' 2>/dev/null)
+# RKE2/k3s without cloud-provider plugin: ExternalIP is empty, fall back to the
+# API server host from the kubeconfig (this is usually the EIP / publicly reachable IP).
+if [ -z "$NODE_IP" ]; then
+    NODE_IP=$(kubectl config view --minify -o jsonpath='{{.clusters[0].cluster.server}}' 2>/dev/null \\
+        | sed -E 's|^https?://||' | cut -d: -f1)
+fi
+# Last resort: InternalIP (only useful if you're on the same private network)
+[ -z "$NODE_IP" ] && NODE_IP=$(kubectl get nodes -o jsonpath='{{.items[0].status.addresses[?(@.type=="InternalIP")].address}}' 2>/dev/null)
+
+INGRESS_PORT=""
+if [ -n "$INGRESS_NS" ]; then
+    INGRESS_PORT=$(kubectl get svc -n "$INGRESS_NS" -l app.kubernetes.io/name=ingress-nginx \\
+        -o jsonpath='{{.items[?(@.spec.type=="NodePort")].spec.ports[?(@.port==80)].nodePort}}' 2>/dev/null | awk '{{print $1}}')
+fi
+
+if [ -n "$INGRESS_PORT" ]; then
+    HOST="${{NODE_IP}}:${{INGRESS_PORT}}"
+    ROUTE="ingress-nginx"
+else
+    HOST="${{NODE_IP}}:$(kubectl get svc vuln-app-service -n vuln-app -o jsonpath='{{.spec.ports[0].nodePort}}' 2>/dev/null)"
+    ROUTE="vuln-app NodePort (direct)"
+fi
+
 echo ""
-echo "==> Application deployed!"
-echo "==> HOST=${{HOST}}"
-echo "==> URL: http://${{HOST}}/app"
+echo "=================================================="
+echo "  Application deployed (BYOC)"
+echo "=================================================="
+echo "  Route    : ${{ROUTE}}"
+echo "  Node IP  : ${{NODE_IP}}"
+echo "  HOST     : ${{HOST}}"
+echo "  URL      : http://${{HOST}}/app"
+echo ""
+echo "  >>> The dashboard auto-resolves this HOST"
+echo "      (or paste it in Settings > BYOC if you prefer)"
+echo "=================================================="
 """
     else:
         cmd = f"""
@@ -1256,19 +1339,9 @@ def k8s_status():
 @app.route("/api/k8s/host", methods=["GET"])
 def k8s_host():
     try:
-        env = os.environ.copy()
-        env.update(get_aws_env())
-        result = subprocess.run(
-            "kubectl get svc vuln-app-service -n vuln-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null",
-            shell=True,
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            env=env,
-        )
-        host = result.stdout.strip().strip("'")
+        host = get_host()
         return jsonify({"host": host if host else None})
-    except Exception as e:
+    except Exception:
         return jsonify({"host": None})
 
 
@@ -1296,22 +1369,76 @@ def kubectl_exec():
 # ─── Attack Steps ────────────────────────────────────────────────────────────
 
 
-def get_host():
-    """Get the LoadBalancer hostname (or external cluster host if BYOC)."""
-    # BYOC mode: use manually configured host
-    if external_cluster.get("enabled") and external_cluster.get("app_host"):
-        return external_cluster["app_host"]
-
+def _kubectl_jsonpath(jsonpath, extra=""):
     env = os.environ.copy()
     env.update(get_aws_env())
-    result = subprocess.run(
-        "kubectl get svc vuln-app-service -n vuln-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null",
-        shell=True,
-        capture_output=True,
-        text=True,
-        env=env,
+    r = subprocess.run(
+        f"kubectl {extra} -o jsonpath='{jsonpath}' 2>/dev/null",
+        shell=True, capture_output=True, text=True, env=env,
     )
-    return result.stdout.strip().strip("'")
+    return r.stdout.strip().strip("'")
+
+
+def get_host():
+    """Get the LoadBalancer hostname (or external cluster host if BYOC).
+
+    BYOC resolution order:
+      1. user-provided app_host
+      2. ingress-nginx NodePort + Node IP (preferred — well-known port, usually open in SG)
+      3. vuln-app Service NodePort + Node IP (fallback)
+    """
+    if external_cluster.get("enabled"):
+        if external_cluster.get("app_host"):
+            return external_cluster["app_host"]
+
+        # 1. Try node ExternalIP (works on EKS/GKE/AKS with cloud-provider plugin)
+        node_ip = _kubectl_jsonpath(
+            '{.items[0].status.addresses[?(@.type=="ExternalIP")].address}',
+            "get nodes",
+        )
+        # 2. RKE2/k3s/vanilla without cloud-provider: extract API server host from kubeconfig
+        if not node_ip:
+            env = os.environ.copy()
+            env.update(get_aws_env())
+            r = subprocess.run(
+                "kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null",
+                shell=True, capture_output=True, text=True, env=env,
+            )
+            server = r.stdout.strip().strip("'")
+            if server:
+                import re
+                m = re.match(r'^https?://([^:/]+)', server)
+                if m:
+                    node_ip = m.group(1)
+        # 3. Last resort: InternalIP (only reachable on the same private network)
+        if not node_ip:
+            node_ip = _kubectl_jsonpath(
+                '{.items[0].status.addresses[?(@.type=="InternalIP")].address}',
+                "get nodes",
+            )
+        if not node_ip:
+            return ""
+
+        # Prefer ingress-nginx NodePort
+        ingress_np = _kubectl_jsonpath(
+            '{.items[?(@.spec.type=="NodePort")].spec.ports[?(@.port==80)].nodePort}',
+            "get svc -A -l app.kubernetes.io/name=ingress-nginx",
+        ).split()
+        if ingress_np:
+            return f"{node_ip}:{ingress_np[0]}"
+
+        # Fallback: vuln-app Service NodePort
+        app_np = _kubectl_jsonpath(
+            '{.spec.ports[0].nodePort}',
+            "get svc vuln-app-service -n vuln-app",
+        )
+        return f"{node_ip}:{app_np}" if app_np else ""
+
+    # EKS mode: read the LoadBalancer hostname from the service
+    return _kubectl_jsonpath(
+        '{.status.loadBalancer.ingress[0].hostname}',
+        "get svc vuln-app-service -n vuln-app",
+    )
 
 
 @app.route("/api/attack/step1", methods=["POST"])
