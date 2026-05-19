@@ -40,8 +40,15 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
+          GIT_COMMIT: ${{ github.sha }}
+          GIT_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          docker build \
+            --build-arg GIT_COMMIT="$GIT_COMMIT" \
+            --build-arg GIT_REPO_URL="$GIT_REPO_URL" \
+            --build-arg BUILD_DATE="$BUILD_DATE" \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest

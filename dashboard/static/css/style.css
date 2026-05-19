@@ -2119,6 +2119,60 @@ body {
 .timer-label { display: block; font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
 .timer-value { display: block; font-size: 1.4rem; font-weight: 700; color: var(--text); font-family: 'JetBrains Mono', monospace; margin-top: 0.3rem; }
 
+/* ─── Code-to-Cloud Pivot Panel ─── */
+.pivot-panel {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem; margin-top: 1rem;
+}
+.pivot-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 0.8rem;
+}
+.pivot-header h4 { margin: 0; color: var(--accent-cyan); font-size: 0.95rem; }
+.pivot-input-row {
+    display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.8rem;
+    flex-wrap: wrap;
+}
+.pivot-input-row label { font-size: 0.75rem; color: var(--text-dim); }
+.pivot-input-row input {
+    flex: 1; min-width: 280px; padding: 0.4rem 0.6rem;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+}
+.pivot-empty, .pivot-loading {
+    color: var(--text-dim); font-size: 0.8rem; text-align: center; padding: 1.5rem;
+}
+.pivot-meta {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 0.6rem; margin-bottom: 0.8rem; font-size: 0.75rem;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1rem;
+}
+.pivot-meta-label { color: var(--text-dim); margin-right: 0.4rem; }
+.pivot-meta code { font-size: 0.72rem; color: var(--text); }
+.pivot-links {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+}
+.pivot-link-group {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 0.7rem;
+}
+.pivot-link-group h5 {
+    margin: 0 0 0.5rem 0; font-size: 0.75rem; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.05em;
+}
+.pivot-link {
+    display: block; padding: 0.4rem 0.6rem; margin-bottom: 0.3rem;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 4px; text-decoration: none; color: var(--accent-cyan);
+    font-size: 0.78rem; transition: all 0.15s;
+}
+.pivot-link:hover { background: var(--accent-cyan); color: var(--bg); border-color: var(--accent-cyan); }
+.pivot-link.disabled { opacity: 0.4; pointer-events: none; color: var(--text-dim); }
+
+@media (max-width: 800px) {
+    .pivot-meta, .pivot-links { grid-template-columns: 1fr; }
+}
+
 /* ─── Code Tab ─── */
 .code-container { padding: 1.5rem; overflow-y: auto; height: 100%; }
 .code-title { color: var(--accent-cyan); margin: 0 0 0.3rem 0; font-size: 1.2rem; }

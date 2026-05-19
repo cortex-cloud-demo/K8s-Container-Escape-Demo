@@ -951,6 +951,7 @@ async function publishPlaybook() {
         { name: 'containment', label: 'K8s Container Escape Containment' },
         { name: 'forensic', label: 'K8s Container Escape Forensic Analysis' },
         { name: 'search', label: 'K8s Container Escape Search Similar Events' },
+        { name: 'pivot', label: 'K8s Container Escape Code-to-Cloud Pivot' },
     ];
     let allOk = true;
 
@@ -997,11 +998,13 @@ const SCRIPT_STATUS_MAP = {
     'InvokeK8sContainmentLambda': 'deploy-status-script-invoke',
     'K8sForensicAnalysis': 'deploy-status-script-forensic',
     'K8sSearchSimilarEvents': 'deploy-status-script-search',
+    'CodeToCloudPivot': 'deploy-status-script-pivot',
 };
 const PLAYBOOK_STATUS_MAP = {
     'containment': 'deploy-status-pb-containment',
     'forensic': 'deploy-status-pb-forensic',
     'search': 'deploy-status-pb-search',
+    'pivot': 'deploy-status-pb-pivot',
 };
 
 function setItemStatus(id, text, color) {
@@ -1054,6 +1057,27 @@ const CORTEX_DETAILS = {
         ],
         inputs: 'container_id, namespace, cluster_name,\nnode_fqdn, process_name, process_sha256,\nimage_id, details, time_range (30 days)',
         outputs: 'K8sSimilar.QueriesGenerated, K8sSimilar.SearchCriteria,\nK8sSimilar.Queries[], K8sSimilar.Summary\n\nIssue field: k8ssearchsimilarevents',
+    },
+    'CodeToCloudPivot': {
+        type: 'SCRIPT',
+        title: 'CodeToCloudPivot',
+        desc: 'Lightweight enrichment script that adds a Code-to-Cloud pivot card to the issue. Generates 6 clickable deep links from the runtime alert to: (1) the image in Cortex Cloud Registry, (2) the active CVEs (CWP findings), (3) the source repo on GitHub, (4) the build commit, (5) the Dockerfile at that commit, (6) the repo Code Security findings. Mapping image -> source uses OCI standard labels baked at build time (org.opencontainers.image.source, org.opencontainers.image.revision, com.cortex.demo.dockerfile_path) - independent of any inventory. Demo defaults work even without label inspection.',
+        usedBy: [
+            { type: 'Playbook', name: 'Code-to-Cloud Pivot', task: 'Task #2 — Build pivot card' },
+        ],
+        inputs: 'image_digest, image_name, repo_url (default: demo repo),\ncommit_sha (default: main), dockerfile_path (default: Dockerfile),\ncortex_tenant_url (for console deep links)',
+        outputs: 'K8sPivot.{RegistryURL, CWPFindingsURL, RepoURL,\n  CommitURL, DockerfileURL, CodeSecurityURL,\n  MarkdownCard}\n\nIssue field: k8scodecloudpivot',
+    },
+    'pb-pivot': {
+        type: 'PLAYBOOK',
+        title: 'K8s Container Escape — Code-to-Cloud Pivot',
+        desc: 'Lightweight 2-task playbook that enriches the issue with a Code-to-Cloud pivot card containing 6 clickable deep links: image in Cortex Cloud Registry, active CVEs (CWP findings), source repo on GitHub, build commit, Dockerfile at the commit, and repo Code Security findings. Mapping uses OCI standard labels baked into the image at build time. No rescans, no API calls beyond deep link generation - just instant navigation from the runtime alert to the right surface.',
+        usedBy: [
+            { type: 'Script', name: 'ExtractK8sContainerEscapeIOCs', task: 'Task #1 — Triage' },
+            { type: 'Script', name: 'CodeToCloudPivot', task: 'Task #2 — Build pivot card' },
+        ],
+        inputs: 'Triggered on XDR issue with container image identifier.\nOptional inputs: RepoURL, CommitSHA, DockerfilePath,\nCortexTenantURL (defaults work for the demo image).',
+        outputs: 'K8sPivot.* (6 deep link URLs)\n\nIssue field: k8scodecloudpivot (markdown card)\n\n2 tasks total (Triage + Pivot)',
     },
     'pb-containment': {
         type: 'PLAYBOOK',
@@ -1214,7 +1238,8 @@ async function cortexDeployAll() {
             }
             if (r.type === 'playbook') {
                 // Map full playbook names from backend to short keys
-                const pbKey = r.name.includes('Containment') ? 'containment'
+                const pbKey = r.name.includes('Pivot') ? 'pivot'
+                    : r.name.includes('Containment') ? 'containment'
                     : r.name.includes('Forensic') ? 'forensic'
                     : r.name.includes('Search') ? 'search' : null;
                 const id = pbKey ? PLAYBOOK_STATUS_MAP[pbKey] : null;
@@ -2960,6 +2985,75 @@ async function runFullDemo() {
 
 function stopDemo() {
     demoAbort = true;
+}
+
+// ─── Code-to-Cloud Pivot Panel ───────────────────────────────────────────────
+
+async function pivotCompute() {
+    const cardEl = document.getElementById('pivot-card');
+    const digestEl = document.getElementById('pivot-image-digest');
+    const digest = (digestEl?.value || '').trim();
+
+    cardEl.innerHTML = '<div class="pivot-loading">Building pivot card…</div>';
+
+    const params = new URLSearchParams();
+    if (digest) params.set('image_digest', digest);
+
+    try {
+        const res = await fetch('/api/code-to-cloud-pivot?' + params.toString());
+        const data = await res.json();
+        if (data.status !== 'ok') {
+            cardEl.innerHTML = `<div class="pivot-empty">Error: ${data.message || 'unknown'}</div>`;
+            return;
+        }
+
+        const p = data.pivots || {};
+        const dg = data.image_digest ? `sha256:${data.image_digest}` : '<i>not provided</i>';
+        const isFullCommit = data.commit_sha && data.commit_sha !== 'main' && data.commit_sha.length >= 7;
+        const commitDisplay = isFullCommit ? data.commit_sha.slice(0, 7) : data.commit_sha;
+
+        cardEl.innerHTML = `
+            <div class="pivot-meta">
+                <div><span class="pivot-meta-label">Image:</span> <code>${dg}</code></div>
+                <div><span class="pivot-meta-label">Repo:</span> <code>${data.repo_url}</code></div>
+                <div><span class="pivot-meta-label">Commit:</span> <code>${commitDisplay}</code></div>
+                <div><span class="pivot-meta-label">Dockerfile:</span> <code>${data.dockerfile_path}</code></div>
+                <div><span class="pivot-meta-label">Cortex console:</span> <code>${data.console_base || '<i>not configured</i>'}</code></div>
+            </div>
+            <div class="pivot-links">
+                <div class="pivot-link-group">
+                    <h5>☁️ Cloud (Cortex Cloud)</h5>
+                    <a class="pivot-link ${p.registry?.url ? '' : 'disabled'}" href="${p.registry?.url || '#'}" target="_blank" rel="noopener">📦 ${p.registry?.label}</a>
+                    <a class="pivot-link ${p.cwp_findings?.url ? '' : 'disabled'}" href="${p.cwp_findings?.url || '#'}" target="_blank" rel="noopener">🐛 ${p.cwp_findings?.label}</a>
+                    <a class="pivot-link ${p.code_security?.url ? '' : 'disabled'}" href="${p.code_security?.url || '#'}" target="_blank" rel="noopener">🛡️ ${p.code_security?.label}</a>
+                </div>
+                <div class="pivot-link-group">
+                    <h5>💻 Code (GitHub)</h5>
+                    <a class="pivot-link" href="${p.repo?.url}" target="_blank" rel="noopener">🔁 ${p.repo?.label}</a>
+                    <a class="pivot-link" href="${p.commit?.url}" target="_blank" rel="noopener">🔀 ${p.commit?.label}</a>
+                    <a class="pivot-link" href="${p.dockerfile?.url}" target="_blank" rel="noopener">📄 ${p.dockerfile?.label}</a>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        cardEl.innerHTML = `<div class="pivot-empty">Request failed: ${e.message}</div>`;
+    }
+}
+
+async function pivotRefresh() {
+    // Try to grab the image digest from the latest SOC alert
+    try {
+        const res = await fetch('/api/cortex/soc-alerts');
+        const data = await res.json();
+        if (data.status === 'ok' && Array.isArray(data.alerts) && data.alerts.length > 0) {
+            const a = data.alerts[0];
+            const digest = a.image_id || a.container_image_id || a.image_digest || '';
+            if (digest) {
+                document.getElementById('pivot-image-digest').value = digest;
+            }
+        }
+    } catch (e) { /* silent */ }
+    await pivotCompute();
 }
 
 // ─── SOC Live ────────────────────────────────────────────────────────────────

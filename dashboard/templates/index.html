@@ -441,6 +441,17 @@
                     </div>
 
                     <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('CodeToCloudPivot')" style="cursor:pointer;">
+                            <span class="cortex-object-name">CodeToCloudPivot</span>
+                            <span class="cortex-object-desc">Pivot: image &rarr; registry / repo / commit / Dockerfile (OCI labels)</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-script-pivot"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployScript('CodeToCloudPivot')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
                         <div class="cortex-object-info" onclick="showCortexDetail('AwsAddInternetExposedTagToS3Bucket')" style="cursor:pointer;">
                             <span class="cortex-object-name">AwsAddInternetExposedTagToS3Bucket</span>
                             <span class="cortex-object-desc">Add internet-exposed tag to a public S3 bucket</span>
@@ -494,6 +505,17 @@
                         <div class="cortex-object-actions">
                             <span class="cortex-object-status" id="deploy-status-pb-search"></span>
                             <button class="btn btn-ghost btn-xs" onclick="cortexDeployPlaybook('search')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('pb-pivot')" style="cursor:pointer;">
+                            <span class="cortex-object-name">Code-to-Cloud Pivot</span>
+                            <span class="cortex-object-desc">2 tasks: Triage &rarr; Build pivot card (image &rarr; registry / repo / commit / Dockerfile)</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-pb-pivot"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployPlaybook('pivot')">Deploy</button>
                         </div>
                     </div>
 
@@ -1812,6 +1834,22 @@
                     <div class="timer-item">
                         <span class="timer-label">Time to Contain</span>
                         <span class="timer-value" id="timer-contain">--:--</span>
+                    </div>
+                </div>
+
+                <!-- Code-to-Cloud Pivot -->
+                <div class="pivot-panel">
+                    <div class="pivot-header">
+                        <h4>🔗 Code-to-Cloud Pivot</h4>
+                        <button class="btn btn-ghost btn-xs" onclick="pivotRefresh()">Refresh from latest alert</button>
+                    </div>
+                    <div class="pivot-input-row">
+                        <label>Image digest (sha256 or hex):</label>
+                        <input type="text" id="pivot-image-digest" placeholder="8eea6f8b17810c5e7c92dc8c7425a9535d81c24af7957ceb5190c29311491eaa" />
+                        <button class="btn btn-primary btn-xs" onclick="pivotCompute()">Build pivot card</button>
+                    </div>
+                    <div class="pivot-card" id="pivot-card">
+                        <div class="pivot-empty">Paste an image digest above (or click Refresh from latest alert) to generate the Code-to-Cloud pivot card.</div>
                     </div>
                 </div>
             </div>

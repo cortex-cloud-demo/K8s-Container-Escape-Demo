@@ -1121,7 +1121,16 @@ echo "==> Logging in to ECR..."
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${{ACCOUNT_ID}}.dkr.ecr.${{REGION}}.amazonaws.com
 
 echo "==> Building image (linux/amd64)..."
-docker buildx build --platform linux/amd64 -t ${{ECR_URL}}:latest --load .
+GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_REPO_URL=$(git config --get remote.origin.url 2>/dev/null | sed -E 's#git@github.com:#https://github.com/#; s#\\.git$##' || echo "unknown")
+BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "    GIT_COMMIT=$GIT_COMMIT"
+echo "    GIT_REPO_URL=$GIT_REPO_URL"
+docker buildx build --platform linux/amd64 \\
+  --build-arg GIT_COMMIT="$GIT_COMMIT" \\
+  --build-arg GIT_REPO_URL="$GIT_REPO_URL" \\
+  --build-arg BUILD_DATE="$BUILD_DATE" \\
+  -t ${{ECR_URL}}:latest --load .
 
 echo "==> Pushing to ECR..."
 docker push ${{ECR_URL}}:latest
@@ -2035,6 +2044,7 @@ def publish_playbook_to_cortex():
         "containment": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Spring4Shell_Containment.yml"),
         "forensic": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Forensic_Analysis.yml"),
         "search": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Search_Similar_Events.yml"),
+        "pivot": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_CodeToCloud_Pivot.yml"),
         "s3-remediation": os.path.join(PLAYBOOK_DIR, "Public_S3_Bucket_Auto_Remediation.yml"),
     }
 
@@ -2076,6 +2086,8 @@ def deploy_all_to_cortex():
          os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-K8sForensicAnalysis.yml")),
         ("K8sSearchSimilarEvents",
          os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-K8sSearchSimilarEvents.yml")),
+        ("CodeToCloudPivot",
+         os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-CodeToCloudPivot.yml")),
         ("AwsAddInternetExposedTagToS3Bucket",
          os.path.join(PROJECT_ROOT, "cortex-scripts", "aws-add-internet-exposed-tag-to-s3-bucket.yml")),
         ("AwsRemoveS3PublicAccess",
@@ -2145,6 +2157,8 @@ def deploy_all_to_cortex():
          os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Forensic_Analysis.yml")),
         ("K8s Container Escape Search Similar Events",
          os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Search_Similar_Events.yml")),
+        ("K8s Container Escape Code-to-Cloud Pivot",
+         os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_CodeToCloud_Pivot.yml")),
         ("Public S3 Bucket Auto Remediation",
          os.path.join(PLAYBOOK_DIR, "Public_S3_Bucket_Auto_Remediation.yml")),
     ]
@@ -2209,6 +2223,105 @@ CORTEX_PREVENTION_PROFILES = [
         "modules": {},
     },
 ]
+
+
+# ─── Code-to-Cloud Pivot ────────────────────────────────────────────────────
+
+@app.route("/api/code-to-cloud-pivot", methods=["GET"])
+def code_to_cloud_pivot():
+    """
+    Build a Code-to-Cloud pivot for an image digest. Returns 6 deep links
+    (image registry, CWP findings, repo, commit, Dockerfile, Code Security)
+    using the OCI labels we baked into the image at build time.
+    Reads git HEAD locally to fill in commit_sha + repo_url defaults.
+    """
+    import re
+    import subprocess
+
+    raw_digest = (request.args.get("image_digest") or "").strip()
+    raw_image_name = (request.args.get("image_name") or "").strip()
+
+    # Normalize digest to bare 64-char hex
+    s = raw_digest
+    if "@sha256:" in s:
+        s = s.split("@sha256:")[-1]
+    elif s.startswith("sha256:"):
+        s = s[len("sha256:"):]
+    m = re.search(r"[a-fA-F0-9]{64}", s)
+    digest_hex = m.group(0).lower() if m else ""
+
+    # Defaults from local git
+    try:
+        commit_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+        ).strip()
+    except Exception:
+        commit_sha = "main"
+    try:
+        raw_remote = subprocess.check_output(
+            ["git", "config", "--get", "remote.origin.url"], cwd=PROJECT_ROOT, text=True
+        ).strip()
+        if raw_remote.startswith("git@github.com:"):
+            raw_remote = "https://github.com/" + raw_remote[len("git@github.com:"):]
+        if raw_remote.endswith(".git"):
+            raw_remote = raw_remote[:-4]
+        repo_url = raw_remote
+    except Exception:
+        repo_url = "https://github.com/cortex-cloud-demo/K8s-Container-Escape-Demo"
+
+    dockerfile_path = "Dockerfile"
+
+    # Cortex console base
+    tenant_url = (cortex_settings.get("base_url") or "").strip()
+    console_base = ""
+    if tenant_url:
+        u = tenant_url.replace("https://", "").replace("http://", "").rstrip("/")
+        if u.startswith("api-"):
+            u = u[len("api-"):]
+        console_base = "https://" + u
+
+    # Build URLs (same logic as CodeToCloudPivot.py)
+    if console_base and digest_hex:
+        registry_url = console_base + "/assets/inventory?name=sha256:" + digest_hex
+        cwp_url = (console_base + "/cloud-security/findings"
+                   "?filter=asset_category:Container%20Image"
+                   "&filter=asset_name:sha256:" + digest_hex +
+                   "&filter=is_active:true")
+    elif console_base:
+        registry_url = console_base + "/assets/inventory"
+        cwp_url = console_base + "/cloud-security/findings?filter=asset_category:Container%20Image"
+    else:
+        registry_url = ""
+        cwp_url = ""
+
+    if console_base and repo_url:
+        safe_url = repo_url.replace(":", "%3A").replace("/", "%2F")
+        codesec_url = console_base + "/cloud-security/code-security/repositories?filter=url:" + safe_url
+    elif console_base:
+        codesec_url = console_base + "/cloud-security/code-security"
+    else:
+        codesec_url = ""
+
+    commit_url = (repo_url + "/commit/" + commit_sha) if commit_sha != "main" else (repo_url + "/commits/main")
+    dockerfile_url = repo_url + "/blob/" + commit_sha + "/" + dockerfile_path.lstrip("/")
+
+    return jsonify({
+        "status": "ok",
+        "image_digest": digest_hex,
+        "image_name": raw_image_name,
+        "repo_url": repo_url,
+        "commit_sha": commit_sha,
+        "dockerfile_path": dockerfile_path,
+        "console_base": console_base,
+        "pivots": {
+            "registry":      {"label": "Image in Registry",         "url": registry_url},
+            "cwp_findings":  {"label": "Active CVEs (CWP findings)", "url": cwp_url},
+            "code_security": {"label": "Repo Code Security findings","url": codesec_url},
+            "repo":          {"label": "Source repository",          "url": repo_url},
+            "commit":        {"label": "Build commit",               "url": commit_url},
+            "dockerfile":    {"label": "Dockerfile @ commit",        "url": dockerfile_url},
+        },
+    })
 
 
 @app.route("/api/cortex/playbook-runs", methods=["GET"])
