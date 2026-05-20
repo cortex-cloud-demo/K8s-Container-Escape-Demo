@@ -117,6 +117,18 @@
                     <button class="btn btn-ghost" onclick="testAwsCredentials()">Test</button>
                 </div>
             </div>
+            <div class="step-card" id="card-gcp-settings">
+                <div class="step-header">
+                    <span class="step-number gcp">GCP</span>
+                    <span class="step-status" id="gcp-status"></span>
+                </div>
+                <div class="step-name">GCP Credentials</div>
+                <div class="step-desc">Service Account JSON key file</div>
+                <div class="step-actions">
+                    <button class="btn btn-gcp" onclick="openGcpSettings()">Configure</button>
+                    <button class="btn btn-ghost" onclick="testGcpCredentials()">Test</button>
+                </div>
+            </div>
             <div class="step-card" id="card-cortex-settings">
                 <div class="step-header">
                     <span class="step-number cortex">CORTEX</span>
@@ -2388,6 +2400,49 @@ export AWS_SESSION_TOKEN="..."' oninput="parseAwsExport()"></textarea>
         <div class="modal-actions">
             <button class="btn btn-ghost" onclick="closeAwsSettings()">Cancel</button>
             <button class="btn btn-primary" onclick="saveAwsCredentials()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- ─── GCP Settings Modal ───────────────────────── -->
+<div class="modal-overlay" id="gcp-modal">
+    <div class="modal modal-wide">
+        <h3 style="color:#4285f4;">GCP Credentials — Service Account</h3>
+
+        <div style="background:rgba(66,133,244,0.08);border:1px solid rgba(66,133,244,0.25);border-radius:8px;padding:1rem;margin-bottom:1.2rem;font-size:0.85rem;line-height:1.7;">
+            <strong style="color:#4285f4;">How to get your GCP credentials</strong><br>
+            <ol style="margin:0.5rem 0 0 1.2rem;padding:0;">
+                <li>Go to <strong>console.cloud.google.com</strong> and select your project.</li>
+                <li>Open the left menu → <strong>IAM &amp; Admin → Service Accounts</strong>.</li>
+                <li>Click <strong>"Create Service Account"</strong>, give it a name, then click <strong>"Create and Continue"</strong>.</li>
+                <li>Assign the role <strong>"Owner"</strong> (or a more restrictive role if needed), then click <strong>"Done"</strong>.</li>
+                <li>Click on the service account you just created → tab <strong>"Keys"</strong>.</li>
+                <li>Click <strong>"Add Key → Create new key → JSON → Create"</strong>.</li>
+                <li>A <code>.json</code> file is downloaded — upload it below.</li>
+            </ol>
+        </div>
+
+        <div class="form-group">
+            <label for="gcp-json-file">Service Account JSON file <span style="color:#4285f4;">*</span></label>
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+                <input type="file" id="gcp-json-file" accept=".json" onchange="loadGcpJsonFile(this)"
+                    style="flex:1;padding:0.4rem;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:0.85rem;" />
+                <span id="gcp-file-status" style="font-size:0.8rem;color:var(--text-dim);white-space:nowrap;"></span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="gcp-project-id">Project ID <span class="optional">(auto-filled from JSON)</span></label>
+            <input type="text" id="gcp-project-id" placeholder="my-gcp-project-123" autocomplete="off" />
+        </div>
+        <div class="form-group">
+            <label for="gcp-region">GCP Region</label>
+            <input type="text" id="gcp-region" placeholder="europe-west1" value="europe-west1" autocomplete="off" />
+        </div>
+
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="closeGcpSettings()">Cancel</button>
+            <button class="btn btn-gcp" onclick="saveGcpCredentials()">Save</button>
         </div>
     </div>
 </div>

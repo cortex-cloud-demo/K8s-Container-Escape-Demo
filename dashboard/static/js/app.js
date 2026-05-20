@@ -619,6 +619,129 @@ function updateAwsStatus(status) {
     }
 }
 
+// ─── GCP Credentials ─────────────────────────────────────────────────────────
+
+let _gcpJsonContent = '';
+
+function openGcpSettings() {
+    fetch('/api/credentials/gcp')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('gcp-project-id').value = data.project_id || '';
+            document.getElementById('gcp-region').value = data.region || 'europe-west1';
+            if (data.service_account_json === '****configured****') {
+                document.getElementById('gcp-file-status').textContent = '✓ JSON already configured';
+                document.getElementById('gcp-file-status').style.color = '#4285f4';
+            } else {
+                document.getElementById('gcp-file-status').textContent = '';
+            }
+            _gcpJsonContent = '';
+            document.getElementById('gcp-json-file').value = '';
+            document.getElementById('gcp-modal').classList.add('visible');
+        });
+}
+
+function closeGcpSettings() {
+    document.getElementById('gcp-modal').classList.remove('visible');
+}
+
+function loadGcpJsonFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const parsed = JSON.parse(e.target.result);
+            _gcpJsonContent = e.target.result;
+            if (parsed.project_id) {
+                document.getElementById('gcp-project-id').value = parsed.project_id;
+            }
+            document.getElementById('gcp-file-status').textContent = `✓ ${file.name} loaded`;
+            document.getElementById('gcp-file-status').style.color = '#22c55e';
+        } catch {
+            document.getElementById('gcp-file-status').textContent = '✗ Invalid JSON file';
+            document.getElementById('gcp-file-status').style.color = '#ef4444';
+            _gcpJsonContent = '';
+        }
+    };
+    reader.readAsText(file);
+}
+
+async function saveGcpCredentials() {
+    const payload = {
+        project_id: document.getElementById('gcp-project-id').value.trim(),
+        region: document.getElementById('gcp-region').value.trim(),
+    };
+    if (_gcpJsonContent) {
+        payload.service_account_json = _gcpJsonContent;
+    }
+    try {
+        const res = await fetch('/api/credentials/gcp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+            closeGcpSettings();
+            updateGcpStatus('configured');
+            termWriteHeader('GCP Credentials');
+            termWrite('GCP credentials saved successfully.\n');
+            termWrite(`Project ID: ${payload.project_id}\n`);
+            termWrite(`Region:     ${payload.region}\n`);
+            if (_gcpJsonContent) termWrite('Service Account JSON: loaded\n');
+        }
+    } catch (e) {
+        termWriteHeader('Error');
+        termWrite(`Failed to save GCP credentials: ${e.message}\n`);
+    }
+}
+
+async function testGcpCredentials() {
+    openTab('terminal');
+    termWriteHeader('Testing GCP Credentials');
+    termWrite('Calling GCP Resource Manager API...\n\n');
+    try {
+        const res = await fetch('/api/credentials/gcp/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            if (data.project_name) {
+                termWrite(`Project ID:     ${data.project_id}\n`);
+                termWrite(`Project Name:   ${data.project_name}\n`);
+                termWrite(`Project Number: ${data.project_number}\n`);
+                termWrite(`Service Account: ${data.client_email}\n`);
+            } else {
+                termWrite(`Project ID:      ${data.project_id}\n`);
+                termWrite(`Service Account: ${data.client_email}\n`);
+                if (data.message) termWrite(`\nNote: ${data.message}\n`);
+            }
+            termWrite('\nGCP credentials are valid.\n');
+            updateGcpStatus('valid');
+        } else {
+            termWrite(`ERROR: ${data.message}\n`);
+            updateGcpStatus('error');
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        updateGcpStatus('error');
+    }
+}
+
+function updateGcpStatus(status) {
+    const el = document.getElementById('gcp-status');
+    if (status === 'valid') {
+        el.textContent = 'valid';
+        el.style.color = '#22c55e';
+    } else if (status === 'configured') {
+        el.textContent = 'configured';
+        el.style.color = '#4285f4';
+    } else if (status === 'error') {
+        el.textContent = 'invalid';
+        el.style.color = '#ef4444';
+    } else {
+        el.textContent = '';
+    }
+}
+
 // ─── Playbook ────────────────────────────────────────────────────────────────
 
 const PLAYBOOK_STEPS = [

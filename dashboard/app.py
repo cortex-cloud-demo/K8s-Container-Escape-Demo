@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -127,6 +128,13 @@ external_cluster = {
     "image_url": "",        # Container image URL (e.g. public ECR or Docker Hub)
 }
 
+# In-memory store for GCP credentials
+gcp_credentials = {
+    "project_id": "",
+    "region": "europe-west1",
+    "service_account_json": "",
+}
+
 
 def save_credentials():
     """Persist credentials to local file (excluded from git)."""
@@ -134,6 +142,7 @@ def save_credentials():
         "aws": aws_credentials,
         "cortex": cortex_settings,
         "external_cluster": external_cluster,
+        "gcp": gcp_credentials,
     }
     try:
         with open(CREDENTIALS_FILE, "w") as f:
@@ -155,6 +164,8 @@ def load_credentials():
             cortex_settings.update(data["cortex"])
         if "external_cluster" in data:
             external_cluster.update(data["external_cluster"])
+        if "gcp" in data:
+            gcp_credentials.update(data["gcp"])
         print(f"Credentials loaded from {CREDENTIALS_FILE}")
     except Exception as e:
         print(f"Warning: cannot load credentials: {e}")
@@ -185,6 +196,22 @@ def get_aws_env():
     if aws_credentials["aws_region"]:
         env["AWS_DEFAULT_REGION"] = aws_credentials["aws_region"]
         env["AWS_REGION"] = aws_credentials["aws_region"]
+    return env
+
+
+def get_gcp_env():
+    """Build GCP credential environment variables from the stored service account JSON."""
+    env = {}
+    if gcp_credentials.get("service_account_json"):
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        tmp.write(gcp_credentials["service_account_json"])
+        tmp.close()
+        env["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+    if gcp_credentials.get("project_id"):
+        env["GOOGLE_CLOUD_PROJECT"] = gcp_credentials["project_id"]
+        env["GCLOUD_PROJECT"] = gcp_credentials["project_id"]
+    if gcp_credentials.get("region"):
+        env["CLOUDSDK_COMPUTE_REGION"] = gcp_credentials["region"]
     return env
 
 
@@ -418,6 +445,88 @@ def test_credentials():
         if result.returncode == 0:
             return jsonify({"status": "ok", "identity": json.loads(result.stdout)})
         return jsonify({"status": "error", "message": result.stderr.strip()}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ─── GCP Credentials ────────────────────────────────────────────────────────
+
+
+@app.route("/api/credentials/gcp", methods=["GET"])
+def get_gcp_credentials():
+    """Return current GCP credentials (masked service account JSON)."""
+    masked = dict(gcp_credentials)
+    if masked["service_account_json"]:
+        masked["service_account_json"] = "****configured****"
+    return jsonify(masked)
+
+
+@app.route("/api/credentials/gcp", methods=["POST"])
+def set_gcp_credentials():
+    """Set GCP credentials from service account JSON."""
+    data = request.json
+    if "project_id" in data:
+        gcp_credentials["project_id"] = data["project_id"].strip()
+    if "region" in data:
+        gcp_credentials["region"] = data["region"].strip()
+    if "service_account_json" in data:
+        gcp_credentials["service_account_json"] = data["service_account_json"].strip()
+    save_credentials()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/credentials/gcp/test", methods=["POST"])
+def test_gcp_credentials():
+    """Test GCP credentials by calling the Resource Manager API."""
+    if not gcp_credentials.get("service_account_json"):
+        return jsonify({"status": "error", "message": "No GCP service account JSON configured"}), 400
+
+    try:
+        sa_data = json.loads(gcp_credentials["service_account_json"])
+    except json.JSONDecodeError:
+        return jsonify({"status": "error", "message": "Invalid JSON — cannot parse service account file"}), 400
+
+    required_fields = ["type", "project_id", "private_key", "client_email"]
+    missing = [f for f in required_fields if f not in sa_data]
+    if missing:
+        return jsonify({"status": "error", "message": f"Invalid service account JSON — missing: {missing}"}), 400
+
+    project_id = gcp_credentials.get("project_id") or sa_data.get("project_id", "")
+    client_email = sa_data.get("client_email", "")
+
+    try:
+        from google.oauth2 import service_account
+        import google.auth.transport.requests as ga_requests
+
+        creds = service_account.Credentials.from_service_account_info(
+            sa_data, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        creds.refresh(ga_requests.Request())
+
+        url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {creds.token}"})
+        ssl_ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as resp:
+            project_data = json.loads(resp.read().decode())
+
+        return jsonify({
+            "status": "ok",
+            "project_id": project_data.get("projectId"),
+            "project_name": project_data.get("name"),
+            "project_number": project_data.get("projectNumber"),
+            "client_email": client_email,
+        })
+
+    except ImportError:
+        return jsonify({
+            "status": "ok",
+            "message": "Service account JSON is valid. Install google-auth for full API connectivity test.",
+            "project_id": project_id,
+            "client_email": client_email,
+        })
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:300]
+        return jsonify({"status": "error", "message": f"GCP API error {e.code}: {body}"}), 400
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
