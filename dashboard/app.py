@@ -22,6 +22,7 @@ app = Flask(__name__)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TERRAFORM_DIR = os.path.join(PROJECT_ROOT, "terraform-infra")
 TERRAFORM_LAMBDA_DIR = os.path.join(PROJECT_ROOT, "terraform-lambda")
+TERRAFORM_GCP_DIR = os.path.join(PROJECT_ROOT, "terraform-gcp-infra")
 K8S_DIR = os.path.join(PROJECT_ROOT, "k8s")
 ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")
 PLAYBOOK_DIR = os.path.join(PROJECT_ROOT, "playbook")
@@ -94,6 +95,24 @@ def toolbox_cmd(command, cwd=None):
             )
             os.unlink(tmp.name)
             cmd = f"source /tmp/.cortex_env 2>/dev/null; {cmd}"
+        # Inject GCP SA credentials into container
+        if gcp_credentials.get("service_account_json"):
+            gcp_tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+            gcp_tmp.write(gcp_credentials["service_account_json"])
+            gcp_tmp.close()
+            subprocess.run(
+                f"docker cp {gcp_tmp.name} {TOOLBOX_CONTAINER}:/tmp/.gcp_sa.json",
+                shell=True, capture_output=True, timeout=5,
+            )
+            os.unlink(gcp_tmp.name)
+            env_flags += ' -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/.gcp_sa.json'
+        if gcp_credentials.get("project_id"):
+            proj = gcp_credentials["project_id"].replace('"', '').replace("'", '')
+            env_flags += f' -e GOOGLE_CLOUD_PROJECT="{proj}"'
+            env_flags += f' -e GCLOUD_PROJECT="{proj}"'
+        if gcp_credentials.get("region"):
+            reg = gcp_credentials["region"].replace('"', '').replace("'", '')
+            env_flags += f' -e CLOUDSDK_COMPUTE_REGION="{reg}"'
         # Escape single quotes in the command for bash -c '...'
         cmd_escaped = cmd.replace("'", "'\\''")
         return f"docker exec{env_flags} {TOOLBOX_CONTAINER} bash -c '{cmd_escaped}'"
@@ -219,6 +238,16 @@ def tf_var_region():
     """Return -var='region=...' flag using the configured AWS region."""
     region = aws_credentials.get("aws_region") or "eu-west-3"
     return f'-var="region={region}"'
+
+
+def tf_var_gcp():
+    """Return terraform -var flags for GCP project_id and region."""
+    parts = []
+    if gcp_credentials.get("project_id"):
+        parts.append(f'-var="project_id={gcp_credentials["project_id"]}"')
+    region = gcp_credentials.get("region") or "europe-west1"
+    parts.append(f'-var="region={region}"')
+    return " ".join(parts)
 
 
 def generate_kubeconfig(cluster_name, region):
@@ -938,6 +967,83 @@ echo '  [OK] All infrastructure destroyed'
 echo '=================================================='
 """
     task_id = create_task("Terraform Destroy", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
+# ─── GCP Infrastructure ───────────────────────────────────────────────────────
+
+
+@app.route("/api/gcp-infra/plan", methods=["POST"])
+def gcp_infra_plan():
+    gcp_dir = TERRAFORM_GCP_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo "=================================================="
+echo "  GCP Infrastructure Plan"
+echo "=================================================="
+cd {gcp_dir}
+{tf_init_cmd()}
+terraform plan -no-color {tf_var_gcp()}
+"""
+    task_id = create_task("GCP Terraform Plan", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/gcp-infra/apply", methods=["POST"])
+def gcp_infra_apply():
+    gcp_dir = TERRAFORM_GCP_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo "=================================================="
+echo "  GCP Infrastructure Apply (GKE + Artifact Registry + GCS + VPC)"
+echo "=================================================="
+cd {gcp_dir}
+{tf_init_cmd()}
+terraform apply -auto-approve -no-color {tf_var_gcp()}
+
+echo ""
+echo "=================================================="
+echo "  Upload sensitive data to GCS bucket"
+echo "=================================================="
+BUCKET=$(terraform output -raw vuln_data_bucket_name 2>/dev/null || echo '')
+if [ -n "$BUCKET" ]; then
+  echo "Bucket: gs://$BUCKET"
+  if command -v gsutil &>/dev/null; then
+    gsutil cp /project/s3-data/credentials.txt     "gs://$BUCKET/credentials.txt"
+    gsutil cp /project/s3-data/customers.csv       "gs://$BUCKET/customers.csv"
+    gsutil cp /project/s3-data/internal-report.pdf "gs://$BUCKET/internal-report.pdf"
+    echo "Files uploaded. Public URL: https://storage.googleapis.com/$BUCKET"
+  else
+    echo "Note: gsutil not available in toolbox — bucket created but data upload skipped"
+    echo "Public bucket URL: https://storage.googleapis.com/$BUCKET"
+  fi
+else
+  echo "WARNING: Could not determine bucket name, skipping file upload"
+fi
+
+echo ""
+echo "=================================================="
+echo "  [OK] GCP Infrastructure deployed successfully"
+echo "=================================================="
+"""
+    task_id = create_task("GCP Terraform Apply", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/gcp-infra/destroy", methods=["POST"])
+def gcp_infra_destroy():
+    gcp_dir = TERRAFORM_GCP_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo '=================================================='
+echo '  DESTROY GCP Infrastructure'
+echo '=================================================='
+cd {gcp_dir}
+{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_gcp()}
+
+echo ''
+echo '=================================================='
+echo '  [OK] GCP infrastructure destroyed'
+echo '=================================================='
+"""
+    task_id = create_task("GCP Terraform Destroy", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 

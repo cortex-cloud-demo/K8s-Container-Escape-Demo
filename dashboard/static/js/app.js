@@ -112,6 +112,8 @@ function updateStepStatus(taskName, status) {
     const mapping = {
         'Terraform Plan': 'infra',
         'Terraform Apply': 'infra',
+        'GCP Terraform Plan': 'gcp-infra',
+        'GCP Terraform Apply': 'gcp-infra',
         'Build & Push Image': 'build',
         'Deploy to EKS': 'deploy',
         'Undeploy from EKS': null,
@@ -136,6 +138,9 @@ function updateStepStatus(taskName, status) {
     const badgeMap = {
         'Terraform Plan':           { id: 'infra-status',          ok: 'planned',     run: 'planning...' },
         'Terraform Apply':          { id: 'infra-status',          ok: 'provisioned', run: 'applying...' },
+        'GCP Terraform Plan':       { id: 'gcp-infra-status',      ok: 'planned',     run: 'planning...' },
+        'GCP Terraform Apply':      { id: 'gcp-infra-status',      ok: 'provisioned', run: 'applying...' },
+        'GCP Terraform Destroy':    { id: 'gcp-infra-destroy-status', ok: 'destroyed', run: 'destroying...' },
         'Build & Push Image':       { id: 'build-status',          ok: 'built',       run: 'building...' },
         'Deploy to EKS':            { id: 'deploy-status',         ok: 'deployed',    run: 'deploying...' },
         'Step 1: Spring4Shell RCE': { id: 'rce-status',            ok: 'exploited',   run: 'running...' },
@@ -1748,6 +1753,37 @@ function confirmDestroy() {
 
 function cancelDestroy() {
     document.getElementById('destroy-modal').classList.remove('visible');
+}
+
+// ─── GCP Infrastructure ───────────────────────────────────────────────────────
+
+function gcpInfraPlan() {
+    openTab('terminal');
+    termWriteHeader('GCP Terraform Plan');
+    apiCall('/api/gcp-infra/plan');
+}
+
+function gcpInfraApply() {
+    openTab('terminal');
+    termWriteHeader('GCP Terraform Apply (GKE + Artifact Registry + GCS)');
+    termWrite('This will provision the full GCP infrastructure...\n\n');
+    apiCall('/api/gcp-infra/apply');
+}
+
+function gcpInfraDestroy() {
+    document.getElementById('gcp-destroy-modal').classList.add('visible');
+}
+
+function confirmGcpDestroy() {
+    document.getElementById('gcp-destroy-modal').classList.remove('visible');
+    openTab('terminal');
+    termWriteHeader('GCP Terraform Destroy');
+    termWrite('Destroying all GCP resources...\n\n');
+    apiCall('/api/gcp-infra/destroy');
+}
+
+function cancelGcpDestroy() {
+    document.getElementById('gcp-destroy-modal').classList.remove('visible');
 }
 
 function buildPush() {

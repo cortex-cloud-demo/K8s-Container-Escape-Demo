@@ -173,7 +173,7 @@
 
             <div class="step-card" id="card-infra">
                 <div class="step-header">
-                    <span class="step-number infra">INFRA</span>
+                    <span class="step-number infra">AWS</span>
                     <span class="step-status" id="infra-status"></span>
                 </div>
                 <div class="step-name">EKS + ECR + VPC + S3 + Lambda</div>
@@ -181,6 +181,19 @@
                 <div class="step-actions">
                     <button class="btn btn-ghost" onclick="infraPlan()">Plan</button>
                     <button class="btn btn-primary" onclick="infraApply()">Apply</button>
+                </div>
+            </div>
+
+            <div class="step-card" id="card-gcp-infra">
+                <div class="step-header">
+                    <span class="step-number gcp">GCP</span>
+                    <span class="step-status" id="gcp-infra-status"></span>
+                </div>
+                <div class="step-name">GKE + Artifact Registry + VPC + GCS</div>
+                <div class="step-desc">Terraform: GKE cluster, Artifact Registry, VPC, IAM, Vulnerable GCS bucket</div>
+                <div class="step-actions">
+                    <button class="btn btn-ghost" onclick="gcpInfraPlan()">Plan</button>
+                    <button class="btn btn-gcp" onclick="gcpInfraApply()">Apply</button>
                 </div>
             </div>
 
@@ -812,10 +825,22 @@
                     <span class="step-number destroy">INFRA</span>
                     <span class="step-status" id="infra-destroy-status"></span>
                 </div>
-                <div class="step-name">Destroy Infrastructure</div>
+                <div class="step-name">Destroy AWS Infrastructure</div>
                 <div class="step-desc">Remove EKS cluster, ECR, VPC + all AWS resources</div>
                 <div class="step-actions">
                     <button class="btn btn-orange" onclick="infraDestroy()">Destroy All</button>
+                </div>
+            </div>
+
+            <div class="step-card">
+                <div class="step-header">
+                    <span class="step-number gcp">GCP</span>
+                    <span class="step-status" id="gcp-infra-destroy-status"></span>
+                </div>
+                <div class="step-name">Destroy GCP Infrastructure</div>
+                <div class="step-desc">Remove GKE cluster, Artifact Registry, VPC + all GCP resources</div>
+                <div class="step-actions">
+                    <button class="btn btn-orange" onclick="gcpInfraDestroy()">Destroy GCP</button>
                 </div>
             </div>
 
@@ -2526,14 +2551,26 @@ clusters:
 </div>
 
 
-<!-- ─── Destroy Modal ──────────────────────────── -->
+<!-- ─── Destroy Modal (AWS) ──────────────────────── -->
 <div class="modal-overlay" id="destroy-modal">
     <div class="modal">
-        <h3>&#x26A0; Destroy Infrastructure</h3>
+        <h3>&#x26A0; Destroy AWS Infrastructure</h3>
         <p>This will permanently destroy the EKS cluster, ECR repository, and all associated AWS resources. This action cannot be undone.</p>
         <div class="modal-actions">
             <button class="btn btn-ghost" onclick="cancelDestroy()">Cancel</button>
             <button class="btn btn-danger" onclick="confirmDestroy()">Destroy Everything</button>
+        </div>
+    </div>
+</div>
+
+<!-- ─── Destroy Modal (GCP) ──────────────────────── -->
+<div class="modal-overlay" id="gcp-destroy-modal">
+    <div class="modal">
+        <h3>&#x26A0; Destroy GCP Infrastructure</h3>
+        <p>This will permanently destroy the GKE cluster, Artifact Registry, GCS bucket, and all associated GCP resources. This action cannot be undone.</p>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="cancelGcpDestroy()">Cancel</button>
+            <button class="btn btn-danger" onclick="confirmGcpDestroy()">Destroy GCP</button>
         </div>
     </div>
 </div>
