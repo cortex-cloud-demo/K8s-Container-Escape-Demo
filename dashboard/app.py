@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -21,6 +22,7 @@ app = Flask(__name__)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TERRAFORM_DIR = os.path.join(PROJECT_ROOT, "terraform-infra")
 TERRAFORM_LAMBDA_DIR = os.path.join(PROJECT_ROOT, "terraform-lambda")
+TERRAFORM_GCP_DIR = os.path.join(PROJECT_ROOT, "terraform-gcp-infra")
 K8S_DIR = os.path.join(PROJECT_ROOT, "k8s")
 ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")
 PLAYBOOK_DIR = os.path.join(PROJECT_ROOT, "playbook")
@@ -93,6 +95,24 @@ def toolbox_cmd(command, cwd=None):
             )
             os.unlink(tmp.name)
             cmd = f"source /tmp/.cortex_env 2>/dev/null; {cmd}"
+        # Inject GCP SA credentials into container
+        if gcp_credentials.get("service_account_json"):
+            gcp_tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+            gcp_tmp.write(gcp_credentials["service_account_json"])
+            gcp_tmp.close()
+            subprocess.run(
+                f"docker cp {gcp_tmp.name} {TOOLBOX_CONTAINER}:/tmp/.gcp_sa.json",
+                shell=True, capture_output=True, timeout=5,
+            )
+            os.unlink(gcp_tmp.name)
+            env_flags += ' -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/.gcp_sa.json'
+        if gcp_credentials.get("project_id"):
+            proj = gcp_credentials["project_id"].replace('"', '').replace("'", '')
+            env_flags += f' -e GOOGLE_CLOUD_PROJECT="{proj}"'
+            env_flags += f' -e GCLOUD_PROJECT="{proj}"'
+        if gcp_credentials.get("region"):
+            reg = gcp_credentials["region"].replace('"', '').replace("'", '')
+            env_flags += f' -e CLOUDSDK_COMPUTE_REGION="{reg}"'
         # Escape single quotes in the command for bash -c '...'
         cmd_escaped = cmd.replace("'", "'\\''")
         return f"docker exec{env_flags} {TOOLBOX_CONTAINER} bash -c '{cmd_escaped}'"
@@ -127,6 +147,13 @@ external_cluster = {
     "image_url": "",        # Container image URL (e.g. public ECR or Docker Hub)
 }
 
+# In-memory store for GCP credentials
+gcp_credentials = {
+    "project_id": "",
+    "region": "europe-west1",
+    "service_account_json": "",
+}
+
 
 def save_credentials():
     """Persist credentials to local file (excluded from git)."""
@@ -134,6 +161,7 @@ def save_credentials():
         "aws": aws_credentials,
         "cortex": cortex_settings,
         "external_cluster": external_cluster,
+        "gcp": gcp_credentials,
     }
     try:
         with open(CREDENTIALS_FILE, "w") as f:
@@ -155,6 +183,8 @@ def load_credentials():
             cortex_settings.update(data["cortex"])
         if "external_cluster" in data:
             external_cluster.update(data["external_cluster"])
+        if "gcp" in data:
+            gcp_credentials.update(data["gcp"])
         print(f"Credentials loaded from {CREDENTIALS_FILE}")
     except Exception as e:
         print(f"Warning: cannot load credentials: {e}")
@@ -188,10 +218,36 @@ def get_aws_env():
     return env
 
 
+def get_gcp_env():
+    """Build GCP credential environment variables from the stored service account JSON."""
+    env = {}
+    if gcp_credentials.get("service_account_json"):
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        tmp.write(gcp_credentials["service_account_json"])
+        tmp.close()
+        env["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+    if gcp_credentials.get("project_id"):
+        env["GOOGLE_CLOUD_PROJECT"] = gcp_credentials["project_id"]
+        env["GCLOUD_PROJECT"] = gcp_credentials["project_id"]
+    if gcp_credentials.get("region"):
+        env["CLOUDSDK_COMPUTE_REGION"] = gcp_credentials["region"]
+    return env
+
+
 def tf_var_region():
     """Return -var='region=...' flag using the configured AWS region."""
     region = aws_credentials.get("aws_region") or "eu-west-3"
     return f'-var="region={region}"'
+
+
+def tf_var_gcp():
+    """Return terraform -var flags for GCP project_id and region."""
+    parts = []
+    if gcp_credentials.get("project_id"):
+        parts.append(f'-var="project_id={gcp_credentials["project_id"]}"')
+    region = gcp_credentials.get("region") or "europe-west1"
+    parts.append(f'-var="region={region}"')
+    return " ".join(parts)
 
 
 def generate_kubeconfig(cluster_name, region):
@@ -418,6 +474,88 @@ def test_credentials():
         if result.returncode == 0:
             return jsonify({"status": "ok", "identity": json.loads(result.stdout)})
         return jsonify({"status": "error", "message": result.stderr.strip()}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ─── GCP Credentials ────────────────────────────────────────────────────────
+
+
+@app.route("/api/credentials/gcp", methods=["GET"])
+def get_gcp_credentials():
+    """Return current GCP credentials (masked service account JSON)."""
+    masked = dict(gcp_credentials)
+    if masked["service_account_json"]:
+        masked["service_account_json"] = "****configured****"
+    return jsonify(masked)
+
+
+@app.route("/api/credentials/gcp", methods=["POST"])
+def set_gcp_credentials():
+    """Set GCP credentials from service account JSON."""
+    data = request.json
+    if "project_id" in data:
+        gcp_credentials["project_id"] = data["project_id"].strip()
+    if "region" in data:
+        gcp_credentials["region"] = data["region"].strip()
+    if "service_account_json" in data:
+        gcp_credentials["service_account_json"] = data["service_account_json"].strip()
+    save_credentials()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/credentials/gcp/test", methods=["POST"])
+def test_gcp_credentials():
+    """Test GCP credentials by calling the Resource Manager API."""
+    if not gcp_credentials.get("service_account_json"):
+        return jsonify({"status": "error", "message": "No GCP service account JSON configured"}), 400
+
+    try:
+        sa_data = json.loads(gcp_credentials["service_account_json"])
+    except json.JSONDecodeError:
+        return jsonify({"status": "error", "message": "Invalid JSON — cannot parse service account file"}), 400
+
+    required_fields = ["type", "project_id", "private_key", "client_email"]
+    missing = [f for f in required_fields if f not in sa_data]
+    if missing:
+        return jsonify({"status": "error", "message": f"Invalid service account JSON — missing: {missing}"}), 400
+
+    project_id = gcp_credentials.get("project_id") or sa_data.get("project_id", "")
+    client_email = sa_data.get("client_email", "")
+
+    try:
+        from google.oauth2 import service_account
+        import google.auth.transport.requests as ga_requests
+
+        creds = service_account.Credentials.from_service_account_info(
+            sa_data, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        creds.refresh(ga_requests.Request())
+
+        url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {creds.token}"})
+        ssl_ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as resp:
+            project_data = json.loads(resp.read().decode())
+
+        return jsonify({
+            "status": "ok",
+            "project_id": project_data.get("projectId"),
+            "project_name": project_data.get("name"),
+            "project_number": project_data.get("projectNumber"),
+            "client_email": client_email,
+        })
+
+    except ImportError:
+        return jsonify({
+            "status": "ok",
+            "message": "Service account JSON is valid. Install google-auth for full API connectivity test.",
+            "project_id": project_id,
+            "client_email": client_email,
+        })
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:300]
+        return jsonify({"status": "error", "message": f"GCP API error {e.code}: {body}"}), 400
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -829,6 +967,83 @@ echo '  [OK] All infrastructure destroyed'
 echo '=================================================='
 """
     task_id = create_task("Terraform Destroy", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
+# ─── GCP Infrastructure ───────────────────────────────────────────────────────
+
+
+@app.route("/api/gcp-infra/plan", methods=["POST"])
+def gcp_infra_plan():
+    gcp_dir = TERRAFORM_GCP_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo "=================================================="
+echo "  GCP Infrastructure Plan"
+echo "=================================================="
+cd {gcp_dir}
+{tf_init_cmd()}
+terraform plan -no-color {tf_var_gcp()}
+"""
+    task_id = create_task("GCP Terraform Plan", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/gcp-infra/apply", methods=["POST"])
+def gcp_infra_apply():
+    gcp_dir = TERRAFORM_GCP_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo "=================================================="
+echo "  GCP Infrastructure Apply (GKE + Artifact Registry + GCS + VPC)"
+echo "=================================================="
+cd {gcp_dir}
+{tf_init_cmd()}
+terraform apply -auto-approve -no-color {tf_var_gcp()}
+
+echo ""
+echo "=================================================="
+echo "  Upload sensitive data to GCS bucket"
+echo "=================================================="
+BUCKET=$(terraform output -raw vuln_data_bucket_name 2>/dev/null || echo '')
+if [ -n "$BUCKET" ]; then
+  echo "Bucket: gs://$BUCKET"
+  if command -v gsutil &>/dev/null; then
+    gsutil cp /project/s3-data/credentials.txt     "gs://$BUCKET/credentials.txt"
+    gsutil cp /project/s3-data/customers.csv       "gs://$BUCKET/customers.csv"
+    gsutil cp /project/s3-data/internal-report.pdf "gs://$BUCKET/internal-report.pdf"
+    echo "Files uploaded. Public URL: https://storage.googleapis.com/$BUCKET"
+  else
+    echo "Note: gsutil not available in toolbox — bucket created but data upload skipped"
+    echo "Public bucket URL: https://storage.googleapis.com/$BUCKET"
+  fi
+else
+  echo "WARNING: Could not determine bucket name, skipping file upload"
+fi
+
+echo ""
+echo "=================================================="
+echo "  [OK] GCP Infrastructure deployed successfully"
+echo "=================================================="
+"""
+    task_id = create_task("GCP Terraform Apply", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/gcp-infra/destroy", methods=["POST"])
+def gcp_infra_destroy():
+    gcp_dir = TERRAFORM_GCP_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    cmd = f"""set -e
+echo '=================================================='
+echo '  DESTROY GCP Infrastructure'
+echo '=================================================='
+cd {gcp_dir}
+{tf_init_cmd()} && terraform destroy -auto-approve -no-color {tf_var_gcp()}
+
+echo ''
+echo '=================================================='
+echo '  [OK] GCP infrastructure destroyed'
+echo '=================================================='
+"""
+    task_id = create_task("GCP Terraform Destroy", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -3511,6 +3726,270 @@ aws cloudformation describe-stacks \\
         env_extra=get_aws_env(),
     )
     return jsonify({"status": "ok", "task_id": task_id})
+
+
+# ─── GCP Onboarding ───────────────────────────────────────────────────────────
+
+
+@app.route("/api/onboarding/gcp/status", methods=["GET"])
+def onboarding_gcp_status():
+    """Check if the current GCP project is already onboarded in Cortex Cloud."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex credentials not configured."}), 400
+
+    project_id = gcp_credentials.get("project_id", "")
+    if not project_id:
+        return jsonify({"status": "error", "message": "GCP project_id not configured. Add GCP credentials first."}), 400
+
+    list_payload = {
+        "request_data": {
+            "filter_data": {
+                "sort": [{"FIELD": "STATUS", "ORDER": "DESC"}],
+                "paging": {"from": 0, "to": 50},
+                "filter": {
+                    "AND": [
+                        {"SEARCH_FIELD": "CLOUD_PROVIDER", "SEARCH_TYPE": "EQ", "SEARCH_VALUE": "GCP"}
+                    ]
+                },
+            }
+        }
+    }
+    list_result, list_code = cortex_json_request("/public_api/v1/cloud_onboarding/get_instances", list_payload)
+    if list_code != 200:
+        return jsonify(list_result), list_code
+
+    try:
+        instances = json.loads(list_result.get("response", "{}")).get("reply", {}).get("DATA", [])
+    except Exception:
+        return jsonify({"status": "error", "message": "Failed to parse get_instances response."}), 500
+
+    matched_instance = None
+    matched_account = None
+
+    for inst in instances:
+        inst_id = inst.get("instance_id", "")
+        if not inst_id:
+            continue
+
+        accounts_payload = {
+            "request_data": {
+                "instance_id": inst_id,
+                "filter_data": {
+                    "sort": [{"FIELD": "STATUS", "ORDER": "DESC"}],
+                    "paging": {"from": 0, "to": 50},
+                    "filter": {
+                        "AND": [
+                            {"SEARCH_FIELD": "CLOUD_ACCOUNT_ID", "SEARCH_TYPE": "EQ", "SEARCH_VALUE": project_id}
+                        ]
+                    },
+                },
+            }
+        }
+        acc_result, acc_code = cortex_json_request("/public_api/v1/cloud_onboarding/get_accounts", accounts_payload)
+        if acc_code != 200:
+            continue
+        try:
+            accounts_data = json.loads(acc_result.get("response", "{}")).get("reply", {}).get("DATA", [])
+        except Exception:
+            continue
+
+        if accounts_data:
+            matched_instance = inst
+            matched_account = accounts_data[0]
+            break
+
+    return jsonify({
+        "status": "ok",
+        "project_id": project_id,
+        "onboarded": matched_instance is not None,
+        "instance": matched_instance,
+        "account": matched_account,
+        "total_gcp_instances": len(instances),
+    })
+
+
+@app.route("/api/onboarding/gcp", methods=["POST"])
+def onboarding_gcp():
+    """Onboard GCP project to Cortex Cloud Security.
+
+    Calls create_instance_template, downloads the Terraform template, and
+    applies it inside the toolbox container (which already has GCP credentials).
+    """
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex credentials not configured."}), 400
+
+    project_id = gcp_credentials.get("project_id", "")
+    region = gcp_credentials.get("region") or "europe-west1"
+
+    if not project_id:
+        return jsonify({"status": "error", "message": "GCP project_id not configured. Add GCP credentials first."}), 400
+
+    instance_name = f"GCP-{project_id}"
+
+    payload = {
+        "request_data": {
+            "scope": "ACCOUNT",
+            "scan_mode": "MANAGED",
+            "instance_name": instance_name,
+            "cloud_provider": "GCP",
+            "cloud_partition": "COMMERCIAL",
+            "custom_resources_tags": [],
+            "collection_configuration": {
+                "audit_logs": {
+                    "enabled": True,
+                    "collection_method": "AUTOMATED",
+                }
+            },
+            "scope_modifications": {
+                "regions": {"enabled": False},
+            },
+            "additional_capabilities": {
+                "xsiam_analytics": True,
+                "data_security_posture_management": True,
+                "registry_scanning": True,
+                "registry_scanning_options": {"type": "GCR"},
+                "serverless_scanning": True,
+                "agentless_disk_scanning": True,
+            },
+        }
+    }
+
+    result, status_code = cortex_json_request(
+        "/public_api/v1/cloud_onboarding/create_instance_template", payload
+    )
+
+    if status_code != 200:
+        return jsonify(result), status_code
+
+    raw_response = result.get("response", "{}")
+    try:
+        resp_data = json.loads(raw_response)
+        reply = resp_data.get("reply", {})
+        automated = reply.get("automated", {})
+        manual = reply.get("manual", {})
+        template_url = (
+            automated.get("link") or
+            manual.get("TF") or
+            manual.get("link") or
+            reply.get("link") or ""
+        )
+        tracking_guid = (
+            automated.get("tracking_guid") or
+            manual.get("tracking_guid") or
+            reply.get("tracking_guid") or ""
+        )
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Failed to parse Cortex API response: {e}", "raw": raw_response[:2000]}), 500
+
+    if not template_url:
+        return jsonify({
+            "status": "error",
+            "message": "Cortex API returned no template link.",
+            "raw": raw_response[:2000],
+        }), 500
+
+    work_dir = "/tmp/cortex-gcp-onboarding"
+    apis_dir = "/tmp/cortex-gcp-enable-apis"
+
+    script = f"""set -e
+echo "=========================================================="
+echo "  Cortex Cloud Onboarding — GCP"
+echo "=========================================================="
+echo "Project  : {project_id}"
+echo "Region   : {region}"
+echo "Tracking : {tracking_guid}"
+echo ""
+
+echo "=========================================================="
+echo "  STEP 0: Enable required GCP APIs"
+echo "=========================================================="
+rm -rf {apis_dir}
+mkdir -p {apis_dir}
+cat > {apis_dir}/main.tf << 'TFEOF'
+terraform {{
+  required_providers {{
+    google = {{
+      source  = "hashicorp/google"
+      version = "~> 6.0"
+    }}
+  }}
+}}
+variable "project_id" {{ type = string }}
+resource "google_project_service" "apis" {{
+  for_each = toset([
+    "logging.googleapis.com",
+    "pubsub.googleapis.com",
+    "iam.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
+    "cloudfunctions.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "container.googleapis.com",
+    "cloudkms.googleapis.com",
+    "sqladmin.googleapis.com",
+    "storage.googleapis.com",
+  ])
+  project            = var.project_id
+  service            = each.value
+  disable_on_destroy = false
+}}
+TFEOF
+cd {apis_dir}
+terraform init -input=false -no-color
+terraform apply -var="project_id={project_id}" -auto-approve -no-color
+echo "  APIs enabled. Waiting 15s for propagation..."
+sleep 15
+echo ""
+
+echo "==> Downloading Cortex GCP onboarding template..."
+mkdir -p {work_dir}
+cd {work_dir}
+
+curl -sfL -o template.tar.gz "{template_url}"
+echo "  Download complete."
+echo ""
+
+echo "==> Extracting template (tar.gz)..."
+tar -xzvf template.tar.gz
+rm template.tar.gz
+echo "  (Existing terraform state preserved if present)"
+echo ""
+
+echo "==> Template contents:"
+ls -la
+echo ""
+
+echo "=========================================================="
+echo "  Running: terraform init"
+echo "=========================================================="
+terraform init -input=false
+
+echo ""
+echo "=========================================================="
+echo "  Running: terraform apply --var-file=template_params.tfvars"
+echo "=========================================================="
+if [ -f template_params.tfvars ]; then
+  terraform apply --var-file=template_params.tfvars -var="project_id={project_id}" -auto-approve -no-color
+else
+  echo "  Warning: template_params.tfvars not found — applying without var file"
+  terraform apply -var="project_id={project_id}" -auto-approve -no-color
+fi
+
+echo ""
+echo "=========================================================="
+echo "  [OK] GCP Onboarding complete"
+echo "=========================================================="
+echo "Project {project_id} is now connected to Cortex Cloud."
+echo "Initial discovery scan has started — assets visible in Cortex shortly."
+echo "Click 'Test' to verify the connection."
+"""
+
+    task_id = create_task(
+        name="GCP Onboarding — Cortex Cloud Security",
+        command=script,
+        use_toolbox=True,
+    )
+    return jsonify({"status": "ok", "task_id": task_id, "template_url": template_url})
 
 
 @app.route("/api/tasks/<task_id>", methods=["GET"])

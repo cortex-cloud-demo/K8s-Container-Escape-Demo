@@ -112,6 +112,8 @@ function updateStepStatus(taskName, status) {
     const mapping = {
         'Terraform Plan': 'infra',
         'Terraform Apply': 'infra',
+        'GCP Terraform Plan': 'gcp-infra',
+        'GCP Terraform Apply': 'gcp-infra',
         'Build & Push Image': 'build',
         'Deploy to EKS': 'deploy',
         'Undeploy from EKS': null,
@@ -136,6 +138,9 @@ function updateStepStatus(taskName, status) {
     const badgeMap = {
         'Terraform Plan':           { id: 'infra-status',          ok: 'planned',     run: 'planning...' },
         'Terraform Apply':          { id: 'infra-status',          ok: 'provisioned', run: 'applying...' },
+        'GCP Terraform Plan':       { id: 'gcp-infra-status',      ok: 'planned',     run: 'planning...' },
+        'GCP Terraform Apply':      { id: 'gcp-infra-status',      ok: 'provisioned', run: 'applying...' },
+        'GCP Terraform Destroy':    { id: 'gcp-infra-destroy-status', ok: 'destroyed', run: 'destroying...' },
         'Build & Push Image':       { id: 'build-status',          ok: 'built',       run: 'building...' },
         'Deploy to EKS':            { id: 'deploy-status',         ok: 'deployed',    run: 'deploying...' },
         'Step 1: Spring4Shell RCE': { id: 'rce-status',            ok: 'exploited',   run: 'running...' },
@@ -611,6 +616,129 @@ function updateAwsStatus(status) {
     } else if (status === 'configured') {
         el.textContent = 'configured';
         el.style.color = '#f97316';
+    } else if (status === 'error') {
+        el.textContent = 'invalid';
+        el.style.color = '#ef4444';
+    } else {
+        el.textContent = '';
+    }
+}
+
+// ─── GCP Credentials ─────────────────────────────────────────────────────────
+
+let _gcpJsonContent = '';
+
+function openGcpSettings() {
+    fetch('/api/credentials/gcp')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('gcp-project-id').value = data.project_id || '';
+            document.getElementById('gcp-region').value = data.region || 'europe-west1';
+            if (data.service_account_json === '****configured****') {
+                document.getElementById('gcp-file-status').textContent = '✓ JSON already configured';
+                document.getElementById('gcp-file-status').style.color = '#4285f4';
+            } else {
+                document.getElementById('gcp-file-status').textContent = '';
+            }
+            _gcpJsonContent = '';
+            document.getElementById('gcp-json-file').value = '';
+            document.getElementById('gcp-modal').classList.add('visible');
+        });
+}
+
+function closeGcpSettings() {
+    document.getElementById('gcp-modal').classList.remove('visible');
+}
+
+function loadGcpJsonFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const parsed = JSON.parse(e.target.result);
+            _gcpJsonContent = e.target.result;
+            if (parsed.project_id) {
+                document.getElementById('gcp-project-id').value = parsed.project_id;
+            }
+            document.getElementById('gcp-file-status').textContent = `✓ ${file.name} loaded`;
+            document.getElementById('gcp-file-status').style.color = '#22c55e';
+        } catch {
+            document.getElementById('gcp-file-status').textContent = '✗ Invalid JSON file';
+            document.getElementById('gcp-file-status').style.color = '#ef4444';
+            _gcpJsonContent = '';
+        }
+    };
+    reader.readAsText(file);
+}
+
+async function saveGcpCredentials() {
+    const payload = {
+        project_id: document.getElementById('gcp-project-id').value.trim(),
+        region: document.getElementById('gcp-region').value.trim(),
+    };
+    if (_gcpJsonContent) {
+        payload.service_account_json = _gcpJsonContent;
+    }
+    try {
+        const res = await fetch('/api/credentials/gcp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+            closeGcpSettings();
+            updateGcpStatus('configured');
+            termWriteHeader('GCP Credentials');
+            termWrite('GCP credentials saved successfully.\n');
+            termWrite(`Project ID: ${payload.project_id}\n`);
+            termWrite(`Region:     ${payload.region}\n`);
+            if (_gcpJsonContent) termWrite('Service Account JSON: loaded\n');
+        }
+    } catch (e) {
+        termWriteHeader('Error');
+        termWrite(`Failed to save GCP credentials: ${e.message}\n`);
+    }
+}
+
+async function testGcpCredentials() {
+    openTab('terminal');
+    termWriteHeader('Testing GCP Credentials');
+    termWrite('Calling GCP Resource Manager API...\n\n');
+    try {
+        const res = await fetch('/api/credentials/gcp/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            if (data.project_name) {
+                termWrite(`Project ID:     ${data.project_id}\n`);
+                termWrite(`Project Name:   ${data.project_name}\n`);
+                termWrite(`Project Number: ${data.project_number}\n`);
+                termWrite(`Service Account: ${data.client_email}\n`);
+            } else {
+                termWrite(`Project ID:      ${data.project_id}\n`);
+                termWrite(`Service Account: ${data.client_email}\n`);
+                if (data.message) termWrite(`\nNote: ${data.message}\n`);
+            }
+            termWrite('\nGCP credentials are valid.\n');
+            updateGcpStatus('valid');
+        } else {
+            termWrite(`ERROR: ${data.message}\n`);
+            updateGcpStatus('error');
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        updateGcpStatus('error');
+    }
+}
+
+function updateGcpStatus(status) {
+    const el = document.getElementById('gcp-status');
+    if (status === 'valid') {
+        el.textContent = 'valid';
+        el.style.color = '#22c55e';
+    } else if (status === 'configured') {
+        el.textContent = 'configured';
+        el.style.color = '#4285f4';
     } else if (status === 'error') {
         el.textContent = 'invalid';
         el.style.color = '#ef4444';
@@ -1625,6 +1753,37 @@ function confirmDestroy() {
 
 function cancelDestroy() {
     document.getElementById('destroy-modal').classList.remove('visible');
+}
+
+// ─── GCP Infrastructure ───────────────────────────────────────────────────────
+
+function gcpInfraPlan() {
+    openTab('terminal');
+    termWriteHeader('GCP Terraform Plan');
+    apiCall('/api/gcp-infra/plan');
+}
+
+function gcpInfraApply() {
+    openTab('terminal');
+    termWriteHeader('GCP Terraform Apply (GKE + Artifact Registry + GCS)');
+    termWrite('This will provision the full GCP infrastructure...\n\n');
+    apiCall('/api/gcp-infra/apply');
+}
+
+function gcpInfraDestroy() {
+    document.getElementById('gcp-destroy-modal').classList.add('visible');
+}
+
+function confirmGcpDestroy() {
+    document.getElementById('gcp-destroy-modal').classList.remove('visible');
+    openTab('terminal');
+    termWriteHeader('GCP Terraform Destroy');
+    termWrite('Destroying all GCP resources...\n\n');
+    apiCall('/api/gcp-infra/destroy');
+}
+
+function cancelGcpDestroy() {
+    document.getElementById('gcp-destroy-modal').classList.remove('visible');
 }
 
 function buildPush() {
@@ -2785,6 +2944,103 @@ async function runAwsOnboarding() {
             }, 2000);
         } else {
             termWrite(`ERROR: ${data.message || 'Unknown error'}\n`);
+            statusEl.textContent = 'error';
+            statusEl.style.color = '#ef4444';
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        statusEl.textContent = 'error';
+        statusEl.style.color = '#ef4444';
+    }
+}
+
+// ─── GCP Onboarding ───────────────────────────────────────────────────────────
+
+async function testGcpOnboarding() {
+    openTab('terminal');
+    termWriteHeader('GCP Onboarding — Status Check');
+    termWrite('Querying Cortex Cloud for existing GCP instances...\n\n');
+
+    const statusEl = document.getElementById('gcp-onboarding-status');
+
+    try {
+        const res = await fetch('/api/onboarding/gcp/status');
+        const data = await res.json();
+
+        if (data.status !== 'ok') {
+            termWrite(`ERROR: ${data.message}\n`);
+            statusEl.textContent = 'error';
+            statusEl.style.color = '#ef4444';
+            return;
+        }
+
+        termWrite(`GCP Project : ${data.project_id}\n\n`);
+
+        if (data.onboarded && data.instance && data.account) {
+            const inst = data.instance;
+            const acc = data.account;
+            termWrite(`✓ Project is onboarded\n\n`);
+            termWrite(`  Instance  : ${inst.instance_name}\n`);
+            termWrite(`  Status    : ${inst.status}\n`);
+            termWrite(`  Scope     : ${inst.scope}\n`);
+            termWrite(`  Scan Mode : ${inst.scan_mode}\n`);
+            if (inst.update_status) termWrite(`  Update    : ${inst.update_status}\n`);
+            termWrite(`\n  Project ID   : ${acc.cloud_account_id}\n`);
+            termWrite(`  Account Name : ${acc.account_name || '—'}\n`);
+            termWrite(`  Account Type : ${acc.account_type || '—'}\n`);
+            termWrite(`  Account Status : ${acc.status}\n`);
+            statusEl.textContent = 'done';
+            statusEl.style.color = '#22c55e';
+        } else {
+            termWrite(`✗ Project ${data.project_id} not found in any Cortex Cloud GCP instance.\n`);
+            termWrite(`  Total GCP instances checked: ${data.total_gcp_instances}\n`);
+            statusEl.textContent = 'not onboarded';
+            statusEl.style.color = '#f97316';
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        statusEl.textContent = 'error';
+        statusEl.style.color = '#ef4444';
+    }
+}
+
+async function runGcpOnboarding() {
+    openTab('terminal');
+    termWriteHeader('GCP Onboarding — Cortex Cloud Security');
+    termWrite('Generating GCP onboarding template from Cortex API...\n\n');
+
+    const statusEl = document.getElementById('gcp-onboarding-status');
+    statusEl.textContent = 'running...';
+    statusEl.style.color = '#f97316';
+
+    try {
+        const res = await fetch('/api/onboarding/gcp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        const data = await res.json();
+
+        if (data.task_id) {
+            startPolling(data.task_id);
+            const poll = setInterval(async () => {
+                try {
+                    const tr = await fetch(`/api/tasks/${data.task_id}`);
+                    const task = await tr.json();
+                    if (task.status === 'success') {
+                        clearInterval(poll);
+                        statusEl.textContent = 'done';
+                        statusEl.style.color = '#22c55e';
+                    } else if (task.status === 'error') {
+                        clearInterval(poll);
+                        statusEl.textContent = 'error';
+                        statusEl.style.color = '#ef4444';
+                    }
+                } catch (e) { clearInterval(poll); }
+            }, 2000);
+        } else {
+            termWrite(`ERROR: ${data.message || 'Unknown error'}\n`);
+            if (data.raw) termWrite(`\nRaw API response:\n${data.raw}\n`);
             statusEl.textContent = 'error';
             statusEl.style.color = '#ef4444';
         }
