@@ -105,6 +105,20 @@
         <!-- Settings -->
         <div class="section">
             <div class="section-title section-title-settings"><span class="section-icon">&#9881;</span> Settings</div>
+            <div class="step-card" id="card-infra-type">
+                <div class="step-header">
+                    <span class="step-number infra">MODE</span>
+                    <span class="step-status" id="infra-mode-status"></span>
+                </div>
+                <div class="step-name">Infrastructure Mode</div>
+                <div class="step-desc">Choose how to provision the target K8s cluster</div>
+                <div class="step-actions" style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <button class="btn btn-mode" data-mode="eks"  onclick="selectInfraMode('eks')">EKS</button>
+                    <button class="btn btn-mode" data-mode="gcp"  onclick="selectInfraMode('gcp')">GCP</button>
+                    <button class="btn btn-mode" data-mode="rke2" onclick="selectInfraMode('rke2')">RKE2 (AWS)</button>
+                    <button class="btn btn-mode" data-mode="byoc" onclick="selectInfraMode('byoc')">BYOC</button>
+                </div>
+            </div>
             <div class="step-card" id="card-aws-settings">
                 <div class="step-header">
                     <span class="step-number aws">AWS</span>
@@ -821,7 +835,7 @@
                 </div>
             </div>
 
-            <div class="step-card">
+            <div class="step-card" id="card-lambda-destroy">
                 <div class="step-header">
                     <span class="step-number destroy">LAMBDA</span>
                     <span class="step-status" id="lambda-destroy-status"></span>
@@ -833,7 +847,7 @@
                 </div>
             </div>
 
-            <div class="step-card">
+            <div class="step-card" id="card-infra-destroy">
                 <div class="step-header">
                     <span class="step-number destroy">INFRA</span>
                     <span class="step-status" id="infra-destroy-status"></span>
@@ -845,7 +859,7 @@
                 </div>
             </div>
 
-            <div class="step-card">
+            <div class="step-card" id="card-gcp-infra-destroy">
                 <div class="step-header">
                     <span class="step-number gcp">GCP</span>
                     <span class="step-status" id="gcp-infra-destroy-status"></span>

@@ -9,6 +9,7 @@ const state = {
     activeTab: 'overview',
     kubectlTaskId: null,
     kubectlPollInterval: null,
+    infraMode: 'eks',  // "eks" | "rke2" | "byoc"
 };
 
 const STEPS = [
@@ -1731,10 +1732,17 @@ function infraPlan() {
 }
 
 function infraApply() {
+    const mode = (state.infraMode || 'eks');
     openTab('terminal');
-    termWriteHeader('Terraform Apply (EKS + ECR)');
-    termWrite('This will provision the full infrastructure...\n\n');
-    apiCall('/api/infra/apply');
+    if (mode === 'rke2') {
+        termWriteHeader('Terraform Apply (RKE2 on EC2)');
+        termWrite('Provisioning a single-node RKE2 cluster in AWS (~5-7 min)...\n\n');
+        apiCall('/api/infra-rke2/apply');
+    } else {
+        termWriteHeader('Terraform Apply (EKS + ECR)');
+        termWrite('This will provision the full infrastructure...\n\n');
+        apiCall('/api/infra/apply');
+    }
 }
 
 function infraDestroy() {
@@ -1743,10 +1751,11 @@ function infraDestroy() {
 
 function confirmDestroy() {
     document.getElementById('destroy-modal').classList.remove('visible');
+    const mode = (state.infraMode || 'eks');
     openTab('terminal');
     termWriteHeader('Terraform Destroy');
     termWrite('Destroying all resources...\n\n');
-    apiCall('/api/infra/destroy');
+    apiCall(mode === 'rke2' ? '/api/infra-rke2/destroy' : '/api/infra/destroy');
     state.stepStatuses = {};
     renderKillChain();
 }
@@ -3122,6 +3131,94 @@ async function testByocCluster() {
     }
 }
 
+// ─── Infrastructure Mode (EKS / RKE2 / BYOC) ────────────────────────────────
+
+async function loadInfraMode() {
+    try {
+        const r = await fetch('/api/app-settings');
+        const data = await r.json();
+        applyInfraMode(data.infra_mode || 'eks');
+    } catch (e) {
+        applyInfraMode('eks');
+    }
+}
+
+async function selectInfraMode(mode) {
+    try {
+        const r = await fetch('/api/app-settings', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({infra_mode: mode}),
+        });
+        const data = await r.json();
+        if (data.status === 'ok') {
+            applyInfraMode(mode);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+function applyInfraMode(mode) {
+    state.infraMode = mode;
+    // Highlight the active mode button
+    document.querySelectorAll('.btn-mode').forEach(b => {
+        b.classList.toggle('active', b.dataset.mode === mode);
+    });
+    const isEks  = mode === 'eks';
+    const isRke2 = mode === 'rke2';
+    const isGcp  = mode === 'gcp';
+    const isByoc = mode === 'byoc';
+
+    // Card-level visibility
+    const show = (id, visible) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = visible ? '' : 'none';
+    };
+    // AWS-side infra card is shown for EKS and RKE2 (both deploy in AWS),
+    // hidden in pure BYOC and in GCP mode
+    show('card-infra', isEks || isRke2);
+    // GCP-side infra card is shown only in GCP mode
+    show('card-gcp-infra', isGcp);
+    // GCP credentials + onboarding cards only useful in GCP mode
+    show('card-gcp-settings', isGcp);
+    show('card-gcp-onboarding-settings', isGcp);
+    // AWS credentials hidden in pure GCP mode (kept for EKS / RKE2 / BYOC since
+    // some BYOC users still want AWS creds for the toolbox / image push)
+    show('card-aws-settings', !isGcp);
+    // BYOC manual config card is only useful in BYOC mode (RKE2 auto-configures it)
+    show('card-byoc-settings', isByoc);
+    // AWS Onboarding (Cortex CSPM for AWS) is EKS-specific in this demo
+    show('card-onboarding-settings', isEks);
+    // Destroy cards mirror the deploy cards
+    show('card-infra-destroy', isEks || isRke2);
+    show('card-lambda-destroy', isEks);
+    show('card-gcp-infra-destroy', isGcp);
+
+    // INFRA card text adapts to the mode (AWS-side card)
+    const name = document.querySelector('#card-infra .step-name');
+    const desc = document.querySelector('#card-infra .step-desc');
+    if (name && desc) {
+        if (isRke2) {
+            name.textContent = 'RKE2 single-node on EC2';
+            desc.textContent = 'Terraform: VPC + EC2 Ubuntu 22.04 + RKE2 + ingress-nginx (NodePort 30080)';
+        } else {
+            name.textContent = 'EKS + ECR + VPC + S3 + Lambda';
+            desc.textContent = 'Terraform: EKS cluster, ECR, VPC, IAM, Vulnerable S3 bucket + Containment Lambda';
+        }
+    }
+
+    // Mode badge in the MODE card status
+    const statusEl = document.getElementById('infra-mode-status');
+    if (statusEl) {
+        statusEl.textContent = mode.toUpperCase();
+        if (isRke2) statusEl.style.color = '#f59e0b';
+        else if (isGcp) statusEl.style.color = '#4285f4';
+        else if (isByoc) statusEl.style.color = '#22c55e';
+        else statusEl.style.color = '#3b82f6';
+    }
+}
+
 // ─── Demo Wizard ─────────────────────────────────────────────────────────────
 
 let demoRunning = false;
@@ -3460,6 +3557,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshHost();
     refreshClusterStatus();
     refreshAwsRegionLabel();
+    loadInfraMode();
 
     // Load Cortex console link if credentials exist
     fetch('/api/cortex/credentials').then(r => r.json()).then(data => {

@@ -494,6 +494,20 @@ body {
 }
 .btn-ghost:hover:not(:disabled) { background: var(--bg-card-hover); }
 
+.btn-mode {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    flex: 1;
+    min-width: 0;
+}
+.btn-mode:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text); }
+.btn-mode.active {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: white;
+}
+
 /* ─── Content Area ─────────────────────────────── */
 
 .content {

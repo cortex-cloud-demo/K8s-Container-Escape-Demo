@@ -197,16 +197,33 @@ All Terraform resources are tagged with [Yor](https://github.com/bridgecrewio/yo
 
 Run `yor tag -d .` to update tags after changes.
 
-## BYOC Mode (Bring Your Own Cluster)
+## Infrastructure Mode
 
-Use an existing Kubernetes cluster instead of deploying one:
+Pick the target cluster in **Settings > MODE** before clicking `INFRA > Apply` :
 
-1. **Settings > BYOC > Configure**
-2. Paste kubeconfig content
-3. Set the LoadBalancer hostname
-4. Optionally provide a container image URL
+| Mode | What gets provisioned | Use it for |
+|------|-----------------------|------------|
+| **EKS** (default) | Full demo: EKS + ECR + VPC + S3 + Lambda (`terraform-infra/` + `terraform-lambda/`) | The complete Code→Cloud→SOC demo with Lambda containment and Cortex CSPM/CDR on AWS |
+| **RKE2 (AWS)** | Single-node RKE2 on an EC2 in AWS (`terraform-rke2/`) — VPC + Ubuntu 22.04 + RKE2 + ingress-nginx (NodePort 30080). Auto-configures BYOC at the end. | Demos on a vanilla-style K8s (RKE2) without the EKS-specific surface |
+| **BYOC** | Nothing — you bring your own cluster | Plug in an existing K8s cluster by pasting the kubeconfig |
 
-Skip the infrastructure steps and go straight to Deploy + Attack.
+### RKE2 mode
+
+1. **Settings > MODE > RKE2 (AWS)**
+2. **INFRA > Apply** — provisions the EC2 (~5-7 min) then waits for cloud-init to push the kubeconfig into SSM Parameter Store. The dashboard auto-fetches the kubeconfig, writes it to `dashboard/.kubeconfig-byoc`, and pre-fills `app_host=<EIP>:30080` + `image_url=chrisley75/k8s-escape-demo-vuln-app:1.0.0`.
+3. **Deploy** — applies the vulnerable manifests through the existing ingress-nginx.
+4. **Run the 6 attack steps** as usual — they target `http://<EIP>:30080/app/greeting`.
+5. **Destroy** — `terraform destroy` on `terraform-rke2/` and the BYOC mapping is cleared.
+
+In RKE2 mode the EKS-only cards (Build & Push ECR, Lambda containment, AWS Onboarding) are hidden to keep the UI clean.
+
+### BYOC mode (manual)
+
+1. **Settings > MODE > BYOC**
+2. **Settings > BYOC > Configure**
+3. Paste kubeconfig content
+4. Set the application host (`<ip>:<port>`) and the container image URL
+5. Skip the infrastructure steps and go straight to Deploy + Attack.
 
 ## Components
 

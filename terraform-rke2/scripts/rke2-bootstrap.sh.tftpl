@@ -1,0 +1,103 @@
+#!/bin/bash
+set -euxo pipefail
+
+# RKE2 all-in-one bootstrap for the K8s Container Escape demo
+# Target: Ubuntu 22.04 LTS
+
+export DEBIAN_FRONTEND=noninteractive
+
+# 1. System prerequisites
+apt-get update -y
+apt-get install -y curl ca-certificates gnupg jq apt-transport-https unzip
+
+# AWS CLI v2 (not preinstalled on the official Ubuntu 22.04 AMI)
+if ! command -v aws >/dev/null 2>&1; then
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  unzip -q /tmp/awscliv2.zip -d /tmp
+  /tmp/aws/install
+  rm -rf /tmp/aws /tmp/awscliv2.zip
+fi
+
+# Disable swap (kubelet requirement)
+swapoff -a
+sed -i '/ swap / s/^/#/' /etc/fstab
+
+# Kernel modules + sysctl for Kubernetes
+modprobe br_netfilter
+modprobe overlay
+cat >/etc/modules-load.d/k8s.conf <<EOF
+br_netfilter
+overlay
+EOF
+
+cat >/etc/sysctl.d/99-kubernetes.conf <<EOF
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward = 1
+EOF
+sysctl --system
+
+# 2. RKE2 config
+# resolv-conf: point at the real systemd-resolved resolv.conf, otherwise pods
+# (especially CoreDNS) inherit the 127.0.0.53 stub and CoreDNS detects a DNS
+# loop at startup -> CrashLoopBackOff.
+mkdir -p /etc/rancher/rke2
+cat >/etc/rancher/rke2/config.yaml <<EOF
+write-kubeconfig-mode: "0644"
+resolv-conf: /run/systemd/resolve/resolv.conf
+tls-san:
+  - "${public_ip}"
+  - "${public_dns}"
+disable:
+  - rke2-ingress-nginx
+node-label:
+  - "k8s-escape-demo=true"
+EOF
+
+# 3. Install RKE2 server
+curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION="${rke2_version}" INSTALL_RKE2_TYPE=server sh -
+
+systemctl enable rke2-server.service
+systemctl start rke2-server.service
+
+# 4. kubectl + helm on the host
+ln -sf /var/lib/rancher/rke2/bin/kubectl /usr/local/bin/kubectl
+echo 'export KUBECONFIG=/etc/rancher/rke2/rke2.yaml' >>/etc/profile.d/rke2.sh
+echo 'export PATH=$PATH:/var/lib/rancher/rke2/bin' >>/etc/profile.d/rke2.sh
+chmod +x /etc/profile.d/rke2.sh
+
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# 5. Wait for the API to be ready
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+export PATH=$PATH:/var/lib/rancher/rke2/bin
+for i in {1..60}; do
+  if kubectl get nodes >/dev/null 2>&1; then
+    break
+  fi
+  sleep 5
+done
+
+# 6. Install ingress-nginx (replacement for the disabled bundled one) as NodePort
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx || true
+helm repo update
+helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx --create-namespace \
+  --set controller.service.type=NodePort \
+  --set controller.service.nodePorts.http=30080 \
+  --set controller.service.nodePorts.https=30443
+
+# 7. Push kubeconfig into SSM Parameter Store for easy retrieval
+# (rewrites the loopback IP to the public EIP so the kubeconfig is usable externally)
+sed "s/127.0.0.1/${public_ip}/g" /etc/rancher/rke2/rke2.yaml >/tmp/kubeconfig-public.yaml
+
+REGION="${aws_region}"
+aws --region "$REGION" ssm put-parameter \
+  --name "/${project_name}/kubeconfig" \
+  --type SecureString \
+  --value "file:///tmp/kubeconfig-public.yaml" \
+  --overwrite
+
+rm -f /tmp/kubeconfig-public.yaml
+
+echo "=== RKE2 bootstrap complete ==="

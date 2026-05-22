@@ -23,11 +23,17 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TERRAFORM_DIR = os.path.join(PROJECT_ROOT, "terraform-infra")
 TERRAFORM_LAMBDA_DIR = os.path.join(PROJECT_ROOT, "terraform-lambda")
 TERRAFORM_GCP_DIR = os.path.join(PROJECT_ROOT, "terraform-gcp-infra")
+TERRAFORM_RKE2_DIR = os.path.join(PROJECT_ROOT, "terraform-rke2")
 K8S_DIR = os.path.join(PROJECT_ROOT, "k8s")
 ATTACK_DIR = os.path.join(PROJECT_ROOT, "attack")
 PLAYBOOK_DIR = os.path.join(PROJECT_ROOT, "playbook")
 KUBECONFIG_PATH = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig")
 KUBECONFIG_BYOC_PATH = os.path.join(PROJECT_ROOT, "dashboard", ".kubeconfig-byoc")
+
+# RKE2 mode defaults — must match terraform-rke2/variables.tf
+RKE2_PROJECT_NAME = "k8s-escape-demo-rke2"
+RKE2_DEFAULT_IMAGE = "chrisley75/k8s-escape-demo-vuln-app:1.0.0"
+RKE2_INGRESS_PORT = 30080
 
 # Toolbox container name
 TOOLBOX_CONTAINER = "k8s-escape-toolbox"
@@ -154,6 +160,11 @@ gcp_credentials = {
     "service_account_json": "",
 }
 
+# In-memory store for general app settings (persisted in .credentials.json)
+app_settings = {
+    "infra_mode": "eks",    # "eks" | "rke2" | "gcp" | "byoc"
+}
+
 
 def save_credentials():
     """Persist credentials to local file (excluded from git)."""
@@ -162,6 +173,7 @@ def save_credentials():
         "cortex": cortex_settings,
         "external_cluster": external_cluster,
         "gcp": gcp_credentials,
+        "app_settings": app_settings,
     }
     try:
         with open(CREDENTIALS_FILE, "w") as f:
@@ -185,6 +197,8 @@ def load_credentials():
             external_cluster.update(data["external_cluster"])
         if "gcp" in data:
             gcp_credentials.update(data["gcp"])
+        if "app_settings" in data:
+            app_settings.update(data["app_settings"])
         print(f"Credentials loaded from {CREDENTIALS_FILE}")
     except Exception as e:
         print(f"Warning: cannot load credentials: {e}")
@@ -609,6 +623,34 @@ def test_external_cluster():
         return jsonify({"status": "ok", "output": result.stdout + result.stderr})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ─── App Settings (infra mode) ──────────────────────────────────────────────
+
+
+VALID_INFRA_MODES = {"eks", "rke2", "gcp", "byoc"}
+
+
+@app.route("/api/app-settings", methods=["GET"])
+def get_app_settings():
+    return jsonify(app_settings)
+
+
+@app.route("/api/app-settings", methods=["POST"])
+def set_app_settings():
+    data = request.json or {}
+    mode = (data.get("infra_mode") or "").strip().lower()
+    if mode and mode not in VALID_INFRA_MODES:
+        return jsonify({"status": "error", "message": f"infra_mode must be one of {sorted(VALID_INFRA_MODES)}"}), 400
+    if mode:
+        app_settings["infra_mode"] = mode
+        # Switching to a cloud mode (EKS/GCP) disables any active BYOC mapping so
+        # kubeconfig resolution goes back to the cloud kubeconfig. RKE2 mode keeps
+        # BYOC enabled because the cluster is provisioned by Terraform and auto-wired.
+        if mode in ("eks", "gcp"):
+            external_cluster["enabled"] = False
+    save_credentials()
+    return jsonify({"status": "ok", "app_settings": app_settings})
 
 
 # ─── Kubeconfig ─────────────────────────────────────────────────────────────
@@ -1059,6 +1101,153 @@ def infra_outputs():
             text=True,
             cwd=TERRAFORM_DIR,
             env=env,
+        )
+        if result.returncode == 0:
+            return jsonify(json.loads(result.stdout))
+        return jsonify({"error": result.stderr}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── Infrastructure (RKE2) ──────────────────────────────────────────────────
+
+
+@app.route("/api/infra-rke2/apply", methods=["POST"])
+def infra_rke2_apply():
+    """Apply the RKE2 Terraform stack, then auto-configure BYOC from SSM."""
+    rke2_dir = TERRAFORM_RKE2_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+    cmd = f"""set -e
+echo "=================================================="
+echo "  RKE2: VPC + EC2 Ubuntu 22.04 + RKE2 bootstrap"
+echo "=================================================="
+cd {rke2_dir}
+{tf_init_cmd()}
+terraform apply -auto-approve -no-color -var="aws_region={region}"
+
+echo ""
+echo "=================================================="
+echo "  RKE2 apply complete"
+echo "=================================================="
+echo "  Public IP : $(terraform output -raw public_ip 2>/dev/null)"
+echo "  Ingress   : $(terraform output -raw ingress_http_url 2>/dev/null)"
+echo ""
+echo "  Note: RKE2 bootstrap (cloud-init) takes ~3-5 min after"
+echo "  the EC2 is ready. The dashboard will poll SSM Parameter"
+echo "  Store and auto-configure BYOC once the kubeconfig is up."
+"""
+    task_id = create_task("Terraform Apply (RKE2)", cmd, use_toolbox=True)
+
+    # Schedule the BYOC finalization in a background thread
+    def _watch_then_finalize():
+        # Wait for terraform task to finish
+        deadline = time.time() + 30 * 60
+        while time.time() < deadline:
+            status = tasks.get(task_id, {}).get("status")
+            if status in ("success", "error"):
+                break
+            time.sleep(5)
+        if tasks.get(task_id, {}).get("status") != "success":
+            return
+        # Read public_ip from terraform output
+        env = os.environ.copy()
+        env.update(get_aws_env())
+        public_ip = tf_output(TERRAFORM_RKE2_DIR, "public_ip", env)
+        if not public_ip:
+            tasks[task_id]["output"] += "\n[finalize] Could not read public_ip terraform output\n"
+            return
+        # Wait for SSM kubeconfig parameter to appear (cloud-init pushes it at the end)
+        tasks[task_id]["output"] += "\n[finalize] Waiting for cloud-init to push kubeconfig to SSM (~3-5 min)...\n"
+        param_name = f"/{RKE2_PROJECT_NAME}/kubeconfig"
+        deadline = time.time() + 10 * 60
+        while time.time() < deadline:
+            r = subprocess.run(
+                f"aws ssm get-parameter --region {aws_credentials.get('aws_region') or 'eu-west-3'} "
+                f"--name {param_name} --query Parameter.Name --output text",
+                shell=True, capture_output=True, text=True, env=env, timeout=10,
+            )
+            if r.returncode == 0 and param_name in r.stdout:
+                break
+            time.sleep(15)
+        # Fetch the actual kubeconfig content (decrypted)
+        r2 = subprocess.run(
+            f"aws ssm get-parameter --region {aws_credentials.get('aws_region') or 'eu-west-3'} "
+            f"--name {param_name} --with-decryption --query Parameter.Value --output text",
+            shell=True, capture_output=True, text=True, env=env, timeout=60,
+        )
+        kc = r2.stdout.strip()
+        if r2.returncode != 0 or not kc or kc.startswith("file://"):
+            tasks[task_id]["output"] += f"\n[finalize] kubeconfig fetch failed: {r2.stderr or 'empty'}\n"
+            return
+        with open(KUBECONFIG_BYOC_PATH, "w") as f:
+            f.write(kc)
+        os.chmod(KUBECONFIG_BYOC_PATH, 0o600)
+        external_cluster["enabled"] = True
+        external_cluster["kubeconfig"] = kc
+        external_cluster["app_host"] = f"{public_ip}:{RKE2_INGRESS_PORT}"
+        external_cluster["image_url"] = RKE2_DEFAULT_IMAGE
+        save_credentials()
+        tasks[task_id]["output"] += (
+            f"\n[finalize] BYOC auto-configured:\n"
+            f"  kubeconfig : {KUBECONFIG_BYOC_PATH}\n"
+            f"  app_host   : {external_cluster['app_host']}\n"
+            f"  image_url  : {external_cluster['image_url']}\n"
+        )
+
+    threading.Thread(target=_watch_then_finalize, daemon=True).start()
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/infra-rke2/destroy", methods=["POST"])
+def infra_rke2_destroy():
+    rke2_dir = TERRAFORM_RKE2_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+    cmd = f"""set -e
+echo "=================================================="
+echo "  RKE2: Terraform Destroy"
+echo "=================================================="
+cd {rke2_dir}
+{tf_init_cmd()}
+terraform destroy -auto-approve -no-color -var="aws_region={region}"
+echo ""
+echo "  RKE2 infrastructure destroyed"
+"""
+    task_id = create_task("Terraform Destroy (RKE2)", cmd, use_toolbox=True)
+
+    # On success, disable BYOC mapping to keep the dashboard state coherent
+    def _reset_byoc_after_destroy():
+        deadline = time.time() + 15 * 60
+        while time.time() < deadline:
+            status = tasks.get(task_id, {}).get("status")
+            if status in ("success", "error"):
+                break
+            time.sleep(5)
+        if tasks.get(task_id, {}).get("status") == "success":
+            external_cluster["enabled"] = False
+            external_cluster["kubeconfig"] = ""
+            external_cluster["app_host"] = ""
+            external_cluster["image_url"] = ""
+            try:
+                if os.path.isfile(KUBECONFIG_BYOC_PATH):
+                    os.unlink(KUBECONFIG_BYOC_PATH)
+            except Exception:
+                pass
+            save_credentials()
+            tasks[task_id]["output"] += "\n[reset] BYOC mapping cleared\n"
+
+    threading.Thread(target=_reset_byoc_after_destroy, daemon=True).start()
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/api/infra-rke2/outputs", methods=["GET"])
+def infra_rke2_outputs():
+    try:
+        env = os.environ.copy()
+        env.update(get_aws_env())
+        result = subprocess.run(
+            "terraform output -json",
+            shell=True, capture_output=True, text=True,
+            cwd=TERRAFORM_RKE2_DIR, env=env, timeout=30,
         )
         if result.returncode == 0:
             return jsonify(json.loads(result.stdout))
