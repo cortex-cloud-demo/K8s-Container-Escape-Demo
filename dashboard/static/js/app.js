@@ -2954,6 +2954,103 @@ async function runAwsOnboarding() {
     }
 }
 
+// ─── GCP Onboarding ───────────────────────────────────────────────────────────
+
+async function testGcpOnboarding() {
+    openTab('terminal');
+    termWriteHeader('GCP Onboarding — Status Check');
+    termWrite('Querying Cortex Cloud for existing GCP instances...\n\n');
+
+    const statusEl = document.getElementById('gcp-onboarding-status');
+
+    try {
+        const res = await fetch('/api/onboarding/gcp/status');
+        const data = await res.json();
+
+        if (data.status !== 'ok') {
+            termWrite(`ERROR: ${data.message}\n`);
+            statusEl.textContent = 'error';
+            statusEl.style.color = '#ef4444';
+            return;
+        }
+
+        termWrite(`GCP Project : ${data.project_id}\n\n`);
+
+        if (data.onboarded && data.instance && data.account) {
+            const inst = data.instance;
+            const acc = data.account;
+            termWrite(`✓ Project is onboarded\n\n`);
+            termWrite(`  Instance  : ${inst.instance_name}\n`);
+            termWrite(`  Status    : ${inst.status}\n`);
+            termWrite(`  Scope     : ${inst.scope}\n`);
+            termWrite(`  Scan Mode : ${inst.scan_mode}\n`);
+            if (inst.update_status) termWrite(`  Update    : ${inst.update_status}\n`);
+            termWrite(`\n  Project ID   : ${acc.cloud_account_id}\n`);
+            termWrite(`  Account Name : ${acc.account_name || '—'}\n`);
+            termWrite(`  Account Type : ${acc.account_type || '—'}\n`);
+            termWrite(`  Account Status : ${acc.status}\n`);
+            statusEl.textContent = 'done';
+            statusEl.style.color = '#22c55e';
+        } else {
+            termWrite(`✗ Project ${data.project_id} not found in any Cortex Cloud GCP instance.\n`);
+            termWrite(`  Total GCP instances checked: ${data.total_gcp_instances}\n`);
+            statusEl.textContent = 'not onboarded';
+            statusEl.style.color = '#f97316';
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        statusEl.textContent = 'error';
+        statusEl.style.color = '#ef4444';
+    }
+}
+
+async function runGcpOnboarding() {
+    openTab('terminal');
+    termWriteHeader('GCP Onboarding — Cortex Cloud Security');
+    termWrite('Generating GCP onboarding template from Cortex API...\n\n');
+
+    const statusEl = document.getElementById('gcp-onboarding-status');
+    statusEl.textContent = 'running...';
+    statusEl.style.color = '#f97316';
+
+    try {
+        const res = await fetch('/api/onboarding/gcp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        const data = await res.json();
+
+        if (data.task_id) {
+            startPolling(data.task_id);
+            const poll = setInterval(async () => {
+                try {
+                    const tr = await fetch(`/api/tasks/${data.task_id}`);
+                    const task = await tr.json();
+                    if (task.status === 'success') {
+                        clearInterval(poll);
+                        statusEl.textContent = 'done';
+                        statusEl.style.color = '#22c55e';
+                    } else if (task.status === 'error') {
+                        clearInterval(poll);
+                        statusEl.textContent = 'error';
+                        statusEl.style.color = '#ef4444';
+                    }
+                } catch (e) { clearInterval(poll); }
+            }, 2000);
+        } else {
+            termWrite(`ERROR: ${data.message || 'Unknown error'}\n`);
+            if (data.raw) termWrite(`\nRaw API response:\n${data.raw}\n`);
+            statusEl.textContent = 'error';
+            statusEl.style.color = '#ef4444';
+        }
+    } catch (e) {
+        termWrite(`Request failed: ${e.message}\n`);
+        statusEl.textContent = 'error';
+        statusEl.style.color = '#ef4444';
+    }
+}
+
 function openByocSettings() {
     document.getElementById('byoc-modal').classList.add('visible');
     // Load current settings

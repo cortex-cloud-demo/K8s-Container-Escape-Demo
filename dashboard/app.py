@@ -3728,6 +3728,270 @@ aws cloudformation describe-stacks \\
     return jsonify({"status": "ok", "task_id": task_id})
 
 
+# ─── GCP Onboarding ───────────────────────────────────────────────────────────
+
+
+@app.route("/api/onboarding/gcp/status", methods=["GET"])
+def onboarding_gcp_status():
+    """Check if the current GCP project is already onboarded in Cortex Cloud."""
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex credentials not configured."}), 400
+
+    project_id = gcp_credentials.get("project_id", "")
+    if not project_id:
+        return jsonify({"status": "error", "message": "GCP project_id not configured. Add GCP credentials first."}), 400
+
+    list_payload = {
+        "request_data": {
+            "filter_data": {
+                "sort": [{"FIELD": "STATUS", "ORDER": "DESC"}],
+                "paging": {"from": 0, "to": 50},
+                "filter": {
+                    "AND": [
+                        {"SEARCH_FIELD": "CLOUD_PROVIDER", "SEARCH_TYPE": "EQ", "SEARCH_VALUE": "GCP"}
+                    ]
+                },
+            }
+        }
+    }
+    list_result, list_code = cortex_json_request("/public_api/v1/cloud_onboarding/get_instances", list_payload)
+    if list_code != 200:
+        return jsonify(list_result), list_code
+
+    try:
+        instances = json.loads(list_result.get("response", "{}")).get("reply", {}).get("DATA", [])
+    except Exception:
+        return jsonify({"status": "error", "message": "Failed to parse get_instances response."}), 500
+
+    matched_instance = None
+    matched_account = None
+
+    for inst in instances:
+        inst_id = inst.get("instance_id", "")
+        if not inst_id:
+            continue
+
+        accounts_payload = {
+            "request_data": {
+                "instance_id": inst_id,
+                "filter_data": {
+                    "sort": [{"FIELD": "STATUS", "ORDER": "DESC"}],
+                    "paging": {"from": 0, "to": 50},
+                    "filter": {
+                        "AND": [
+                            {"SEARCH_FIELD": "CLOUD_ACCOUNT_ID", "SEARCH_TYPE": "EQ", "SEARCH_VALUE": project_id}
+                        ]
+                    },
+                },
+            }
+        }
+        acc_result, acc_code = cortex_json_request("/public_api/v1/cloud_onboarding/get_accounts", accounts_payload)
+        if acc_code != 200:
+            continue
+        try:
+            accounts_data = json.loads(acc_result.get("response", "{}")).get("reply", {}).get("DATA", [])
+        except Exception:
+            continue
+
+        if accounts_data:
+            matched_instance = inst
+            matched_account = accounts_data[0]
+            break
+
+    return jsonify({
+        "status": "ok",
+        "project_id": project_id,
+        "onboarded": matched_instance is not None,
+        "instance": matched_instance,
+        "account": matched_account,
+        "total_gcp_instances": len(instances),
+    })
+
+
+@app.route("/api/onboarding/gcp", methods=["POST"])
+def onboarding_gcp():
+    """Onboard GCP project to Cortex Cloud Security.
+
+    Calls create_instance_template, downloads the Terraform template, and
+    applies it inside the toolbox container (which already has GCP credentials).
+    """
+    if not cortex_settings.get("api_key"):
+        return jsonify({"status": "error", "message": "Cortex credentials not configured."}), 400
+
+    project_id = gcp_credentials.get("project_id", "")
+    region = gcp_credentials.get("region") or "europe-west1"
+
+    if not project_id:
+        return jsonify({"status": "error", "message": "GCP project_id not configured. Add GCP credentials first."}), 400
+
+    instance_name = f"GCP-{project_id}"
+
+    payload = {
+        "request_data": {
+            "scope": "ACCOUNT",
+            "scan_mode": "MANAGED",
+            "instance_name": instance_name,
+            "cloud_provider": "GCP",
+            "cloud_partition": "COMMERCIAL",
+            "custom_resources_tags": [],
+            "collection_configuration": {
+                "audit_logs": {
+                    "enabled": True,
+                    "collection_method": "AUTOMATED",
+                }
+            },
+            "scope_modifications": {
+                "regions": {"enabled": False},
+            },
+            "additional_capabilities": {
+                "xsiam_analytics": True,
+                "data_security_posture_management": True,
+                "registry_scanning": True,
+                "registry_scanning_options": {"type": "GCR"},
+                "serverless_scanning": True,
+                "agentless_disk_scanning": True,
+            },
+        }
+    }
+
+    result, status_code = cortex_json_request(
+        "/public_api/v1/cloud_onboarding/create_instance_template", payload
+    )
+
+    if status_code != 200:
+        return jsonify(result), status_code
+
+    raw_response = result.get("response", "{}")
+    try:
+        resp_data = json.loads(raw_response)
+        reply = resp_data.get("reply", {})
+        automated = reply.get("automated", {})
+        manual = reply.get("manual", {})
+        template_url = (
+            automated.get("link") or
+            manual.get("TF") or
+            manual.get("link") or
+            reply.get("link") or ""
+        )
+        tracking_guid = (
+            automated.get("tracking_guid") or
+            manual.get("tracking_guid") or
+            reply.get("tracking_guid") or ""
+        )
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Failed to parse Cortex API response: {e}", "raw": raw_response[:2000]}), 500
+
+    if not template_url:
+        return jsonify({
+            "status": "error",
+            "message": "Cortex API returned no template link.",
+            "raw": raw_response[:2000],
+        }), 500
+
+    work_dir = "/tmp/cortex-gcp-onboarding"
+    apis_dir = "/tmp/cortex-gcp-enable-apis"
+
+    script = f"""set -e
+echo "=========================================================="
+echo "  Cortex Cloud Onboarding — GCP"
+echo "=========================================================="
+echo "Project  : {project_id}"
+echo "Region   : {region}"
+echo "Tracking : {tracking_guid}"
+echo ""
+
+echo "=========================================================="
+echo "  STEP 0: Enable required GCP APIs"
+echo "=========================================================="
+rm -rf {apis_dir}
+mkdir -p {apis_dir}
+cat > {apis_dir}/main.tf << 'TFEOF'
+terraform {{
+  required_providers {{
+    google = {{
+      source  = "hashicorp/google"
+      version = "~> 6.0"
+    }}
+  }}
+}}
+variable "project_id" {{ type = string }}
+resource "google_project_service" "apis" {{
+  for_each = toset([
+    "logging.googleapis.com",
+    "pubsub.googleapis.com",
+    "iam.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
+    "cloudfunctions.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "container.googleapis.com",
+    "cloudkms.googleapis.com",
+    "sqladmin.googleapis.com",
+    "storage.googleapis.com",
+  ])
+  project            = var.project_id
+  service            = each.value
+  disable_on_destroy = false
+}}
+TFEOF
+cd {apis_dir}
+terraform init -input=false -no-color
+terraform apply -var="project_id={project_id}" -auto-approve -no-color
+echo "  APIs enabled. Waiting 15s for propagation..."
+sleep 15
+echo ""
+
+echo "==> Downloading Cortex GCP onboarding template..."
+mkdir -p {work_dir}
+cd {work_dir}
+
+curl -sfL -o template.tar.gz "{template_url}"
+echo "  Download complete."
+echo ""
+
+echo "==> Extracting template (tar.gz)..."
+tar -xzvf template.tar.gz
+rm template.tar.gz
+echo "  (Existing terraform state preserved if present)"
+echo ""
+
+echo "==> Template contents:"
+ls -la
+echo ""
+
+echo "=========================================================="
+echo "  Running: terraform init"
+echo "=========================================================="
+terraform init -input=false
+
+echo ""
+echo "=========================================================="
+echo "  Running: terraform apply --var-file=template_params.tfvars"
+echo "=========================================================="
+if [ -f template_params.tfvars ]; then
+  terraform apply --var-file=template_params.tfvars -var="project_id={project_id}" -auto-approve -no-color
+else
+  echo "  Warning: template_params.tfvars not found — applying without var file"
+  terraform apply -var="project_id={project_id}" -auto-approve -no-color
+fi
+
+echo ""
+echo "=========================================================="
+echo "  [OK] GCP Onboarding complete"
+echo "=========================================================="
+echo "Project {project_id} is now connected to Cortex Cloud."
+echo "Initial discovery scan has started — assets visible in Cortex shortly."
+echo "Click 'Test' to verify the connection."
+"""
+
+    task_id = create_task(
+        name="GCP Onboarding — Cortex Cloud Security",
+        command=script,
+        use_toolbox=True,
+    )
+    return jsonify({"status": "ok", "task_id": task_id, "template_url": template_url})
+
+
 @app.route("/api/tasks/<task_id>", methods=["GET"])
 def get_task(task_id):
     task = tasks.get(task_id)
