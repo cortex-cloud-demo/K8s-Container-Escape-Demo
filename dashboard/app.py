@@ -14,7 +14,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 
 app = Flask(__name__)
 
@@ -262,6 +262,84 @@ def tf_var_gcp():
     region = gcp_credentials.get("region") or "europe-west1"
     parts.append(f'-var="region={region}"')
     return " ".join(parts)
+
+
+def patch_kubeconfig_skip_tls(content):
+    """Rewrite a kubeconfig so each cluster uses insecure-skip-tls-verify.
+
+    Removes certificate-authority-data and sets insecure-skip-tls-verify: true.
+    This avoids TLS validation failures when a TLS-intercepting VPN
+    (GlobalProtect with `decrypt-untrust`) sits between the client and the
+    RKE2 API server. The cluster control plane is exposed publicly for the
+    demo and authenticated via client cert / bearer token in the same file,
+    so skipping CA verification is acceptable here.
+    """
+    try:
+        kc = yaml.safe_load(content)
+    except Exception:
+        return content
+    if not isinstance(kc, dict) or not kc.get("clusters"):
+        return content
+    for entry in kc["clusters"]:
+        cluster = entry.get("cluster") or {}
+        cluster.pop("certificate-authority-data", None)
+        cluster.pop("certificate-authority", None)
+        cluster["insecure-skip-tls-verify"] = True
+        entry["cluster"] = cluster
+    return yaml.safe_dump(kc, default_flow_style=False)
+
+
+def ensure_rke2_kubeconfig(force_refresh=False):
+    """Ensure the RKE2 BYOC kubeconfig file exists, fetching from SSM if needed.
+
+    Returns (ok, message, info) where info is {'cluster': ..., 'region': ...,
+    'endpoint': ...} on success.
+    """
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+    info = {"cluster": "rke2-escape-demo", "region": region, "endpoint": ""}
+
+    if (not force_refresh
+            and os.path.isfile(KUBECONFIG_BYOC_PATH)
+            and os.path.getsize(KUBECONFIG_BYOC_PATH) > 0):
+        return True, "kubeconfig already present", info
+
+    env = os.environ.copy()
+    env.update(get_aws_env())
+    param_name = f"/{RKE2_PROJECT_NAME}/kubeconfig"
+    r = subprocess.run(
+        f"aws ssm get-parameter --region {region} --name {param_name} "
+        f"--with-decryption --query Parameter.Value --output text",
+        shell=True, capture_output=True, text=True, env=env, timeout=30,
+    )
+    if r.returncode != 0:
+        msg = r.stderr.strip() or "unknown error"
+        return False, (
+            f"Failed to fetch RKE2 kubeconfig from SSM ({param_name}): {msg}. "
+            f"Check that the RKE2 apply has finished and cloud-init pushed the "
+            f"kubeconfig (~3-5 min after apply)."
+        ), info
+    kc = r.stdout.strip()
+    if not kc or kc.startswith("file://"):
+        return False, (
+            "SSM returned empty kubeconfig. Wait for cloud-init to finish "
+            "(~3-5 min after RKE2 apply) and try again."
+        ), info
+
+    kc = patch_kubeconfig_skip_tls(kc)
+    with open(KUBECONFIG_BYOC_PATH, "w") as f:
+        f.write(kc)
+    os.chmod(KUBECONFIG_BYOC_PATH, 0o600)
+
+    external_cluster["enabled"] = True
+    external_cluster["kubeconfig"] = kc
+    if not external_cluster.get("app_host"):
+        public_ip = tf_output(TERRAFORM_RKE2_DIR, "public_ip", env)
+        if public_ip:
+            external_cluster["app_host"] = f"{public_ip}:{RKE2_INGRESS_PORT}"
+    if not external_cluster.get("image_url"):
+        external_cluster["image_url"] = RKE2_DEFAULT_IMAGE
+    save_credentials()
+    return True, "kubeconfig fetched from SSM", info
 
 
 def generate_kubeconfig(cluster_name, region):
@@ -658,24 +736,68 @@ def set_app_settings():
 
 @app.route("/api/kubeconfig/generate", methods=["POST"])
 def api_generate_kubeconfig():
-    """Generate kubeconfig with embedded AWS credentials."""
+    """Connect to the cluster. EKS: generate kubeconfig with embedded AWS creds.
+    RKE2/BYOC: ensure the BYOC kubeconfig file is present (fetch from SSM for RKE2)."""
     try:
+        mode = (app_settings.get("infra_mode") or "eks").lower()
+
+        if mode == "rke2":
+            # Always re-fetch from SSM so we pick up the latest server IP after
+            # an EC2 re-deploy. Cheap (one AWS call) and avoids the "stale
+            # kubeconfig with old IP" trap.
+            ok, msg, info = ensure_rke2_kubeconfig(force_refresh=True)
+            if not ok:
+                return jsonify({"status": "error", "message": msg}), 500
+            return jsonify({
+                "status": "ok",
+                "path": KUBECONFIG_BYOC_PATH,
+                "cluster": info.get("cluster") or "rke2-escape-demo",
+                "region": info.get("region") or aws_credentials.get("aws_region") or "eu-west-3",
+                "mode": "rke2",
+            })
+
+        if mode == "byoc":
+            if not external_cluster.get("enabled") or not os.path.isfile(KUBECONFIG_BYOC_PATH):
+                return jsonify({
+                    "status": "error",
+                    "message": "BYOC kubeconfig not configured. Use the BYOC settings card to upload one.",
+                }), 400
+            return jsonify({
+                "status": "ok",
+                "path": KUBECONFIG_BYOC_PATH,
+                "cluster": "byoc-cluster",
+                "region": aws_credentials.get("aws_region") or "",
+                "mode": "byoc",
+            })
+
+        # EKS (default)
         env = os.environ.copy()
         env.update(get_aws_env())
         region = tf_output(TERRAFORM_DIR, "region", env) or aws_credentials["aws_region"] or "eu-west-3"
         cluster = tf_output(TERRAFORM_DIR, "cluster_name", env) or "eks-escape-demo"
         path = generate_kubeconfig(cluster, region)
-        return jsonify({"status": "ok", "path": path, "cluster": cluster, "region": region})
+        return jsonify({
+            "status": "ok", "path": path, "cluster": cluster,
+            "region": region, "mode": "eks",
+        })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/kubeconfig/status", methods=["GET"])
 def api_kubeconfig_status():
-    """Check kubeconfig existence and test cluster connectivity."""
+    """Check kubeconfig existence and test cluster connectivity.
+
+    Mode-aware: in EKS mode we read .kubeconfig and run `aws eks get-token`;
+    in RKE2/BYOC mode we read .kubeconfig-byoc and skip the AWS auth step.
+    """
     debug_log = []
+    mode = (app_settings.get("infra_mode") or "eks").lower()
+    is_external = mode in ("rke2", "byoc")
+    kubeconfig_file = KUBECONFIG_BYOC_PATH if is_external else KUBECONFIG_PATH
+
     result = {
-        "kubeconfig_exists": os.path.exists(KUBECONFIG_PATH),
+        "kubeconfig_exists": os.path.exists(kubeconfig_file),
         "cluster_name": None,
         "region": None,
         "endpoint": None,
@@ -683,27 +805,34 @@ def api_kubeconfig_status():
         "server_version": None,
         "nodes": None,
         "error": None,
+        "mode": mode,
         "debug": debug_log,
     }
 
-    debug_log.append(f"KUBECONFIG path: {KUBECONFIG_PATH}")
+    debug_log.append(f"Infra mode: {mode}")
+    debug_log.append(f"KUBECONFIG path: {kubeconfig_file}")
     debug_log.append(f"KUBECONFIG exists: {result['kubeconfig_exists']}")
 
     if not result["kubeconfig_exists"]:
-        debug_log.append("No kubeconfig file found. Click 'Connect' to generate one.")
+        if is_external:
+            debug_log.append(
+                "No BYOC kubeconfig found. For RKE2: click 'Connect' to fetch it "
+                "from SSM (requires cloud-init to be done, ~3-5 min after apply)."
+            )
+        else:
+            debug_log.append("No kubeconfig file found. Click 'Connect' to generate one.")
         return jsonify(result)
 
     # Read cluster name from kubeconfig
     try:
-        import yaml
-        with open(KUBECONFIG_PATH) as f:
+        with open(kubeconfig_file) as f:
             kc = yaml.safe_load(f)
         if kc and kc.get("clusters"):
             result["cluster_name"] = kc["clusters"][0]["name"]
             result["endpoint"] = kc["clusters"][0]["cluster"].get("server", "")
             debug_log.append(f"Cluster: {result['cluster_name']}")
             debug_log.append(f"Endpoint: {result['endpoint']}")
-        if kc and kc.get("users"):
+        if kc and kc.get("users") and not is_external:
             user_exec = kc["users"][0].get("user", {}).get("exec", {})
             args = user_exec.get("args", [])
             for i, a in enumerate(args):
@@ -719,34 +848,39 @@ def api_kubeconfig_status():
     except Exception as e:
         debug_log.append(f"Error reading kubeconfig: {e}")
 
-    # Test connectivity
+    # Build env: for EKS we need AWS creds for the exec plugin; for BYOC/RKE2
+    # we only need KUBECONFIG to point at the right file.
     env = os.environ.copy()
-    env.update(get_aws_env())
-    debug_log.append(f"AWS_ACCESS_KEY_ID set in env: {bool(env.get('AWS_ACCESS_KEY_ID'))}")
-    debug_log.append(f"AWS_SESSION_TOKEN set in env: {bool(env.get('AWS_SESSION_TOKEN'))}")
-    debug_log.append(f"AWS_REGION: {env.get('AWS_REGION', 'not set')}")
+    if is_external:
+        env["KUBECONFIG"] = kubeconfig_file
+    else:
+        env.update(get_aws_env())
+        debug_log.append(f"AWS_ACCESS_KEY_ID set in env: {bool(env.get('AWS_ACCESS_KEY_ID'))}")
+        debug_log.append(f"AWS_SESSION_TOKEN set in env: {bool(env.get('AWS_SESSION_TOKEN'))}")
+        debug_log.append(f"AWS_REGION: {env.get('AWS_REGION', 'not set')}")
 
-    # Step 1: test aws eks get-token
-    try:
-        cluster_name = result["cluster_name"] or "eks-escape-demo"
-        region = result["region"] or env.get("AWS_REGION", "eu-west-3")
-        token_r = subprocess.run(
-            f"aws eks get-token --cluster-name {cluster_name} --region {region} --output json",
-            shell=True, capture_output=True, text=True, env=env, timeout=15,
-        )
-        if token_r.returncode == 0:
-            debug_log.append("aws eks get-token: OK")
-        else:
-            debug_log.append(f"aws eks get-token: FAILED (exit {token_r.returncode})")
-            debug_log.append(f"stderr: {token_r.stderr.strip()}")
-            result["error"] = f"aws eks get-token failed: {token_r.stderr.strip()}"
+    # Step 1 (EKS only): test aws eks get-token
+    if not is_external:
+        try:
+            cluster_name = result["cluster_name"] or "eks-escape-demo"
+            region = result["region"] or env.get("AWS_REGION", "eu-west-3")
+            token_r = subprocess.run(
+                f"aws eks get-token --cluster-name {cluster_name} --region {region} --output json",
+                shell=True, capture_output=True, text=True, env=env, timeout=15,
+            )
+            if token_r.returncode == 0:
+                debug_log.append("aws eks get-token: OK")
+            else:
+                debug_log.append(f"aws eks get-token: FAILED (exit {token_r.returncode})")
+                debug_log.append(f"stderr: {token_r.stderr.strip()}")
+                result["error"] = f"aws eks get-token failed: {token_r.stderr.strip()}"
+                return jsonify(result)
+        except subprocess.TimeoutExpired:
+            debug_log.append("aws eks get-token: TIMEOUT (15s)")
+            result["error"] = "aws eks get-token timed out"
             return jsonify(result)
-    except subprocess.TimeoutExpired:
-        debug_log.append("aws eks get-token: TIMEOUT (15s)")
-        result["error"] = "aws eks get-token timed out"
-        return jsonify(result)
-    except Exception as e:
-        debug_log.append(f"aws eks get-token: EXCEPTION {e}")
+        except Exception as e:
+            debug_log.append(f"aws eks get-token: EXCEPTION {e}")
 
     # Step 2: kubectl version
     try:
@@ -801,6 +935,26 @@ def api_kubeconfig_status():
             debug_log.append(f"kubectl get nodes exception: {e}")
 
     return jsonify(result)
+
+
+@app.route("/api/kubeconfig/download", methods=["GET"])
+def api_kubeconfig_download():
+    """Download the active kubeconfig file (EKS .kubeconfig or BYOC/RKE2 .kubeconfig-byoc)."""
+    mode = (app_settings.get("infra_mode") or "eks").lower()
+    is_external = mode in ("rke2", "byoc")
+    path = KUBECONFIG_BYOC_PATH if is_external else KUBECONFIG_PATH
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return jsonify({
+            "status": "error",
+            "message": f"No kubeconfig available for mode '{mode}'. Click Connect first.",
+        }), 404
+    download_name = f"kubeconfig-{mode}.yaml"
+    return send_file(
+        path,
+        mimetype="application/yaml",
+        as_attachment=True,
+        download_name=download_name,
+    )
 
 
 # ─── Terraform Helpers ───────────────────────────────────────────────────────
@@ -1112,6 +1266,23 @@ def infra_outputs():
 # ─── Infrastructure (RKE2) ──────────────────────────────────────────────────
 
 
+@app.route("/api/infra-rke2/plan", methods=["POST"])
+def infra_rke2_plan():
+    """Show terraform plan for the RKE2 stack only (no EKS infra)."""
+    rke2_dir = TERRAFORM_RKE2_DIR.replace(PROJECT_ROOT, "").lstrip("/")
+    region = aws_credentials.get("aws_region") or "eu-west-3"
+    cmd = f"""set -e
+echo "=================================================="
+echo "  Terraform Plan (RKE2 single-node on EC2)"
+echo "=================================================="
+cd {rke2_dir}
+{tf_init_cmd()}
+terraform plan -no-color -var="aws_region={region}"
+"""
+    task_id = create_task("Terraform Plan (RKE2)", cmd, use_toolbox=True)
+    return jsonify({"task_id": task_id})
+
+
 @app.route("/api/infra-rke2/apply", methods=["POST"])
 def infra_rke2_apply():
     """Apply the RKE2 Terraform stack, then auto-configure BYOC from SSM."""
@@ -1179,6 +1350,7 @@ echo "  Store and auto-configure BYOC once the kubeconfig is up."
         if r2.returncode != 0 or not kc or kc.startswith("file://"):
             tasks[task_id]["output"] += f"\n[finalize] kubeconfig fetch failed: {r2.stderr or 'empty'}\n"
             return
+        kc = patch_kubeconfig_skip_tls(kc)
         with open(KUBECONFIG_BYOC_PATH, "w") as f:
             f.write(kc)
         os.chmod(KUBECONFIG_BYOC_PATH, 0o600)

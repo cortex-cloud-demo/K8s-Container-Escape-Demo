@@ -13,3 +13,5 @@ dashboard/.kubeconfig
 dashboard/.kubeconfig-byoc
 dashboard/.venv/
 dashboard/.credentials.json
+**/__pycache__/
+**/*.pyc

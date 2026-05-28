@@ -387,29 +387,55 @@ function kubectlExec() {
 
 // ─── Cluster Connection ──────────────────────────────────────────────────────
 
+function modeLabel(mode) {
+    const m = (mode || state.infraMode || 'eks').toLowerCase();
+    if (m === 'rke2') return 'RKE2';
+    if (m === 'gcp')  return 'GKE';
+    if (m === 'byoc') return 'BYOC';
+    return 'EKS';
+}
+
 async function connectCluster() {
     updateClusterStatus('connecting');
     try {
         const res = await fetch('/api/kubeconfig/generate', { method: 'POST' });
         const data = await res.json();
+        const label = modeLabel(data.mode);
         if (data.status === 'ok') {
             openTab('terminal');
-            termWriteHeader('Cluster Connection');
+            termWriteHeader(`Cluster Connection (${label})`);
             termWrite(`Cluster:    ${data.cluster}\n`);
             termWrite(`Region:     ${data.region}\n`);
             termWrite(`Kubeconfig: ${data.path}\n\n`);
-            termWrite('Kubeconfig generated with embedded AWS credentials.\n');
+            if ((data.mode || '').toLowerCase() === 'rke2') {
+                termWrite('Kubeconfig fetched from SSM (RKE2 BYOC).\n');
+            } else if ((data.mode || '').toLowerCase() === 'byoc') {
+                termWrite('Using BYOC kubeconfig.\n');
+            } else {
+                termWrite('Kubeconfig generated with embedded AWS credentials.\n');
+            }
             // Refresh status after a short delay
             setTimeout(refreshClusterStatus, 500);
         } else {
             updateClusterStatus('error');
             openTab('terminal');
-            termWriteHeader('Cluster Connection Error');
+            termWriteHeader(`Cluster Connection Error (${label})`);
             termWrite(`ERROR: ${data.message}\n`);
         }
     } catch (e) {
         updateClusterStatus('error');
     }
+}
+
+function downloadKubeconfig() {
+    // Trigger a file download via a hidden link. The backend chooses the right
+    // file (EKS or BYOC/RKE2) based on current infra_mode.
+    const a = document.createElement('a');
+    a.href = '/api/kubeconfig/download';
+    a.download = `kubeconfig-${state.infraMode || 'eks'}.yaml`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 }
 
 async function refreshClusterStatus() {
@@ -434,10 +460,12 @@ async function refreshClusterStatus() {
             debugPanel.style.display = 'none';
         }
 
+        const label = modeLabel(data.mode);
+
         if (!data.kubeconfig_exists) {
             updateClusterStatus('none');
             nameEl.textContent = 'Cluster Connection';
-            descEl.textContent = 'Generate kubeconfig to connect to EKS';
+            descEl.textContent = `Generate kubeconfig to connect to ${label}`;
             infoPanel.style.display = 'none';
             errorPanel.style.display = 'none';
             return;
@@ -445,7 +473,7 @@ async function refreshClusterStatus() {
 
         if (data.connected) {
             updateClusterStatus('connected');
-            nameEl.textContent = data.cluster_name || 'EKS Cluster';
+            nameEl.textContent = data.cluster_name || `${label} Cluster`;
             descEl.textContent = 'Connected';
             infoPanel.style.display = 'block';
             errorPanel.style.display = 'none';
@@ -1726,9 +1754,15 @@ function updateCortexStatus(status) {
 // ─── Infrastructure ───────────────────────────────────────────────────────────
 
 function infraPlan() {
+    const mode = (state.infraMode || 'eks');
     openTab('terminal');
-    termWriteHeader('Terraform Plan');
-    apiCall('/api/infra/plan');
+    if (mode === 'rke2') {
+        termWriteHeader('Terraform Plan (RKE2 on EC2)');
+        apiCall('/api/infra-rke2/plan');
+    } else {
+        termWriteHeader('Terraform Plan (EKS + ECR)');
+        apiCall('/api/infra/plan');
+    }
 }
 
 function infraApply() {
@@ -3206,6 +3240,12 @@ function applyInfraMode(mode) {
             name.textContent = 'EKS + ECR + VPC + S3 + Lambda';
             desc.textContent = 'Terraform: EKS cluster, ECR, VPC, IAM, Vulnerable S3 bucket + Containment Lambda';
         }
+    }
+
+    // CLUSTER card placeholder description follows the mode (only when not yet connected)
+    const clusterDescEl = document.getElementById('cluster-conn-desc');
+    if (clusterDescEl && clusterDescEl.textContent.startsWith('Generate kubeconfig')) {
+        clusterDescEl.textContent = `Generate kubeconfig to connect to ${modeLabel(mode)}`;
     }
 
     // Mode badge in the MODE card status
