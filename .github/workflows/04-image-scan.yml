@@ -1,0 +1,32 @@
+name: "04 - Cortex CWP - Container Image Scan"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cortex-image-scan:
+    name: Build & Scan Vulnerable Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: |
+          docker build -t vuln-app:${{ github.sha }} .
+
+      - name: Install Cortex CLI
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew tap paloaltonetworks/cortexcli
+          brew install cortexcli
+          echo "$(brew --prefix)/bin" >> $GITHUB_PATH
+
+      - name: Run Cortex Image Scan
+        env:
+          CORTEX_API_BASE_URL: ${{ secrets.CORTEX_API_BASE_URL }}
+          CORTEX_API_KEY_ID: ${{ secrets.CORTEX_API_KEY_ID }}
+          CORTEX_API_KEY: ${{ secrets.CORTEX_API_KEY }}
+        run: |
+          cortexcli image scan vuln-app:${{ github.sha }} --soft-fail
