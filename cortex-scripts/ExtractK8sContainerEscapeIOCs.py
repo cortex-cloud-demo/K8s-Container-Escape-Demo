@@ -746,7 +746,13 @@ def main():
         # MARKDOWN REPORT
         # ==================================================================
 
-        human_readable = build_markdown_report(
+        # Quiet mode (used by the Code-to-Cloud pivot playbook): suppress
+        # this card so the downstream CodeToCloudPivot script renders the
+        # single consolidated card. Context outputs are unaffected.
+        quiet_arg = str(args.get('quiet', '')).strip().lower()
+        quiet = quiet_arg in ('true', 'yes', '1')
+
+        full_report = build_markdown_report(
             details, details_analysis, container_ids, namespace,
             cluster_name, node_analysis, user_analysis, username,
             process_analysis, process_name, process_path, process_cmdline,
@@ -754,14 +760,25 @@ def main():
             severity, severity_reasons, iocs, containment_target
         )
 
+        if quiet:
+            human_readable = ("> " + EMOJI_SHIELD + " **K8s IOC extraction complete** — "
+                              + str(len(iocs)) + " IOCs surfaced into `K8sEscape.*` context. "
+                              "See the **Investigation Code-to-Cloud** card below for the consolidated view.")
+        else:
+            human_readable = full_report
+
         # ==================================================================
         # WRITE TO ISSUE
         # ==================================================================
+        # Always persist the FULL report to the issue field, even in quiet
+        # mode — that's the durable record. Quiet mode only suppresses the
+        # task-output card, not the issue-field write.
 
-        write_success, write_error = write_results_to_issue(human_readable)
+        write_success, write_error = write_results_to_issue(full_report)
         if not write_success:
             demisto.error("setIssue failed: " + write_error)
-            human_readable += "\n> **WARNING**: Failed to write to '" + ISSUE_FIELD_NAME + "': " + write_error + "\n"
+            if not quiet:
+                human_readable += "\n> **WARNING**: Failed to write to '" + ISSUE_FIELD_NAME + "': " + write_error + "\n"
 
         # ==================================================================
         # ENTRY CONTEXT

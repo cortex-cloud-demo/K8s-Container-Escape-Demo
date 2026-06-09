@@ -73,6 +73,18 @@ resource "google_artifact_registry_repository" "vuln_app" {
   repository_id = "${var.project_name}-vuln-app"
   format        = "DOCKER"
   description   = "Vulnerable app container registry for demo"
+
+  labels = {
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-gcp-infra_main_tf"
+    git_last_modified_at = "2026-06-09_14_45_00"
+    git_last_modified_by = "cley_paloaltonetworks_com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "k8s-container-escape-demo"
+    yor_name             = "vuln_app"
+    yor_trace            = "5abf1876-8c0d-4682-a3d1-ec8d264189e9"
+  }
 }
 
 #######################
@@ -89,6 +101,18 @@ resource "google_storage_bucket" "vuln_data" {
 
   # Intentional — allows legacy per-object ACLs
   uniform_bucket_level_access = false
+
+  labels = {
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-gcp-infra_main_tf"
+    git_last_modified_at = "2026-06-09_14_45_00"
+    git_last_modified_by = "cley_paloaltonetworks_com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "k8s-container-escape-demo"
+    yor_name             = "vuln_data"
+    yor_trace            = "45fee0cc-a0e5-4ce8-9af5-442c00dd0293"
+  }
 }
 
 #######################
@@ -146,6 +170,18 @@ resource "google_container_cluster" "main" {
   }
 
   deletion_protection = false
+
+  resource_labels = {
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-gcp-infra_main_tf"
+    git_last_modified_at = "2026-06-09_14_45_00"
+    git_last_modified_by = "cley_paloaltonetworks_com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "k8s-container-escape-demo"
+    yor_name             = "main"
+    yor_trace            = "fc068fe4-d068-45c7-b0e4-69ece21aa29f"
+  }
 }
 
 #######################
@@ -182,6 +218,19 @@ resource "google_container_node_pool" "main" {
     labels = {
       env     = "demo"
       purpose = "intentionally-vulnerable"
+    }
+
+    # Propagated to the underlying GCE VM instances (visible in Cortex Asset Inventory)
+    resource_labels = {
+      git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+      git_file             = "terraform-gcp-infra_main_tf"
+      git_last_modified_at = "2026-06-09_14_45_00"
+      git_last_modified_by = "cley_paloaltonetworks_com"
+      git_modifiers        = "cley"
+      git_org              = "cortex-cloud-demo"
+      git_repo             = "k8s-container-escape-demo"
+      yor_name             = "main"
+      yor_trace            = "3ddcb453-9afa-4ffa-aa09-ec0c85936faf"
     }
   }
 

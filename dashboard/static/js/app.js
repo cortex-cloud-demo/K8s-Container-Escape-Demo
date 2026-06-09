@@ -1156,6 +1156,7 @@ const SCRIPT_STATUS_MAP = {
     'K8sForensicAnalysis': 'deploy-status-script-forensic',
     'K8sSearchSimilarEvents': 'deploy-status-script-search',
     'CodeToCloudPivot': 'deploy-status-script-pivot',
+    'EnrichCloudAssetYorTags': 'deploy-status-script-enrich',
 };
 const PLAYBOOK_STATUS_MAP = {
     'containment': 'deploy-status-pb-containment',
@@ -1225,16 +1226,27 @@ const CORTEX_DETAILS = {
         inputs: 'image_digest, image_name, repo_url (default: demo repo),\ncommit_sha (default: main), dockerfile_path (default: Dockerfile),\ncortex_tenant_url (for console deep links)',
         outputs: 'K8sPivot.{RegistryURL, CWPFindingsURL, RepoURL,\n  CommitURL, DockerfileURL, CodeSecurityURL,\n  MarkdownCard}\n\nIssue field: k8scodecloudpivot',
     },
+    'EnrichCloudAssetYorTags': {
+        type: 'SCRIPT',
+        title: 'EnrichCloudAssetYorTags',
+        desc: 'Auto-enrichment bridge between the runtime alert and the Code-to-Cloud Pivot card. Queries Cortex Cloud Asset Inventory via XQL (dataset cloud_inventory) using one of three identifiers — instance_id, host_name (FQDN), or asset_id — to retrieve the Yor IaC tags applied by Terraform: git_commit, git_file, git_last_modified_by, git_last_modified_at, git_org, git_repo, yor_trace, yor_name. Derives the GitHub repo URL from git_org + git_repo. Handles both flat (xdm.asset.tags.*) and nested (xdm.asset.tags: {}) XQL row formats, and AWS tags + GCP labels through the same code path. Writes K8sAsset.* context consumed by the downstream CodeToCloudPivot task — the build card task uses IfEmpty transformers to fall back to these values when the analyst leaves the manual inputs blank.',
+        usedBy: [
+            { type: 'Playbook', name: 'Code-to-Cloud Pivot', task: 'Task #5 — Enrich Yor tags from Asset Inventory' },
+        ],
+        inputs: 'instance_id (e.g. i-0abc...), host_name (FQDN),\nasset_id (Cortex internal ID) — first non-empty wins',
+        outputs: 'K8sAsset.{YorTrace, IacGitCommit, IacGitFile,\n  IacGitAuthor, IacGitLastModifiedAt, IacGitOrg,\n  IacGitRepo, IacRepoURL, CloudResourceID,\n  CloudResourceType, AssetID, AssetName,\n  CloudProjectID, TagsFound, EnrichmentStatus}',
+    },
     'pb-pivot': {
         type: 'PLAYBOOK',
         title: 'K8s Container Escape — Code-to-Cloud Pivot',
-        desc: 'Lightweight 2-task playbook that enriches the issue with a Code-to-Cloud pivot card containing 6 clickable deep links: image in Cortex Cloud Registry, active CVEs (CWP findings), source repo on GitHub, build commit, Dockerfile at the commit, and repo Code Security findings. Mapping uses OCI standard labels baked into the image at build time. No rescans, no API calls beyond deep link generation - just instant navigation from the runtime alert to the right surface.',
+        desc: 'Lightweight 3-task playbook that enriches the issue with a Code-to-Cloud pivot card containing 6 clickable deep links: image in Cortex Cloud Registry, active CVEs (CWP findings), source repo on GitHub, build commit, Dockerfile at the commit, and repo Code Security findings. Mapping uses OCI labels baked into the image at build time, with automatic fallback to Yor IaC tags pulled from Cortex Asset Inventory (terraform-side trace from runtime alert all the way back to the .tf file and commit). No rescans, no manual mapping — just instant navigation from the runtime alert to the right surface.',
         usedBy: [
             { type: 'Script', name: 'ExtractK8sContainerEscapeIOCs', task: 'Task #1 — Triage' },
+            { type: 'Script', name: 'EnrichCloudAssetYorTags', task: 'Task #5 — Enrich Yor tags from Asset Inventory' },
             { type: 'Script', name: 'CodeToCloudPivot', task: 'Task #2 — Build pivot card' },
         ],
-        inputs: 'Triggered on XDR issue with container image identifier.\nOptional inputs: RepoURL, CommitSHA, DockerfilePath,\nCortexTenantURL (defaults work for the demo image).',
-        outputs: 'K8sPivot.* (6 deep link URLs)\n\nIssue field: k8scodecloudpivot (markdown card)\n\n2 tasks total (Triage + Pivot)',
+        inputs: 'Triggered on XDR issue with container image identifier.\nOptional manual overrides: RepoURL, CommitSHA, DockerfilePath,\nCortexTenantURL (auto-resolved from Yor tags when blank).',
+        outputs: 'K8sAsset.* (Yor IaC enrichment from Asset Inventory)\nK8sPivot.* (6 deep link URLs)\n\nIssue field: k8scodecloudpivot (markdown card)\n\n3 tasks total (Triage + Enrich + Pivot)',
     },
     'pb-containment': {
         type: 'PLAYBOOK',

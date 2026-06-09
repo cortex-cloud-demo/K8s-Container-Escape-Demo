@@ -1,39 +1,66 @@
 """
 CodeToCloudPivot
 =================
-Enriches a Kubernetes container escape SOC issue with a Code-to-Cloud
-pivot card: clickable deep links from the runtime alert to:
-  1. The image in the Cortex Cloud Registry view
-  2. The image's CWP findings (active CVEs)
-  3. The source repository on GitHub
-  4. The exact commit on GitHub
-  5. The Dockerfile at that commit
-  6. The repository's Code Security findings in Cortex Cloud
+Builds the unified "Investigation Code-to-Cloud" markdown card that turns
+a runtime SOC issue into one-click pivots to every related surface:
 
-Mapping image -> repo: uses OCI standard labels embedded in the image
-itself (org.opencontainers.image.source, org.opencontainers.image.revision,
-com.cortex.demo.dockerfile_path). For the demo, defaults are configurable
-via script args so the playbook works even if labels can't be inspected.
+  Runtime Triage (from ExtractK8sContainerEscapeIOCs / K8sEscape.*):
+    container ID, namespace, cluster, node FQDN, process name + SHA256,
+    severity, attack details, source user/process - the runtime context
+    of the escape, inlined at the top of the card.
+
+  Channel A - Image -> Source code (OCI standard labels)
+    1. The compromised image in the Cortex Cloud Asset Inventory
+    2. The image's CWP findings (active CVEs)
+    3. The source repository on GitHub
+    4. The exact commit on GitHub
+    5. The Dockerfile at that commit
+    6. The repo's Code Security findings in Cortex Cloud
+
+Channel A mapping comes from OCI labels baked into the image at build:
+  org.opencontainers.image.source    -> repo URL
+  org.opencontainers.image.revision  -> commit SHA
+  com.cortex.demo.dockerfile_path    -> Dockerfile path
 
 Script arguments:
-- image_digest          : Compromised image SHA256 (from K8sEscape.ContainerImageID)
-- image_name            : Compromised image name (registry/repo:tag)
-- repo_url              : Source repo URL (defaults to demo repo if empty)
-- commit_sha            : Git commit that built the image (defaults to "main")
-- dockerfile_path       : Path to Dockerfile in repo (default: "Dockerfile")
-- cortex_tenant_url     : Cortex tenant base URL (e.g. https://api-xxx.xdr.us.paloaltonetworks.com)
+  IMAGE CHANNEL (A):
+    image_digest             SHA256 digest of the compromised image
+    image_name               registry/repo:tag of the compromised image
+    repo_url                 source repo URL (defaults to demo repo)
+    commit_sha               git commit that built the image (default "main")
+    dockerfile_path          path to Dockerfile in repo (default "Dockerfile")
 
-Output issue field:
-- k8scodecloudpivot  (markdown - the pivot card)
+  RUNTIME TRIAGE (from K8sEscape.*):
+    container_id             container short ID (K8sEscape.ContainerID)
+    container_image_id       SHA256 of the running image (K8sEscape.ContainerImageID)
+    namespace                kubernetes namespace
+    cluster_name             cluster name
+    node_fqdn                worker node FQDN
+    node_ips                 list of node IPs (CSV or list)
+    process_name             malicious / suspicious process name
+    process_sha256           SHA256 of the malicious process image
+    process_path             process image path
+    process_command_line     process command line
+    username                 source user name
+    severity                 Critical / High / Medium / Low
+    details                  free-form attack details from the issue
+    is_spring_shell          true/false flag from Extract analyzer
+    is_webshell              true/false flag from Extract analyzer
+    is_privileged_user       true/false flag (root)
+    is_container_runtime     true/false flag (containerd/runc in causality)
 
-Output context:
-- K8sPivot.RegistryURL
-- K8sPivot.CWPFindingsURL
-- K8sPivot.RepoURL
-- K8sPivot.CommitURL
-- K8sPivot.DockerfileURL
-- K8sPivot.CodeSecurityURL
-- K8sPivot.MarkdownCard
+  COMMON:
+    cortex_tenant_url        Cortex tenant base URL for deep links
+    issue_field_name         Optional incident field name to persist the card
+
+Output context (K8sPivot.*):
+    ImageDigest, ImageName, RepoURL, CommitSHA, DockerfilePath
+    RegistryURL, CWPFindingsURL, CommitURL, DockerfileURL, CodeSecurityURL
+    Triage.{ContainerID, Namespace, ClusterName, NodeFQDN, ProcessName,
+            ProcessImageSHA256, Severity, Details, SourceUserName,
+            SourceProcessImagePath, SourceProcessCommandLine}
+    MarkdownCard, HasImageChannel, HasTriage,
+    IssueFieldName, IssueFieldWriteStatus
 """
 
 
@@ -41,12 +68,7 @@ Output context:
 # CONFIGURATION
 # ==============================================================================
 
-# Issue field is OPTIONAL. By default we don't try to write to one (the
-# markdown card is always returned via HumanReadable so it shows in the
-# task entry). Override via `issue_field_name` arg if you have created
-# a custom incident field for this purpose, or want to reuse an existing one.
 DEFAULT_ISSUE_FIELD_NAME = ""
-
 DEFAULT_REPO_URL = "https://github.com/cortex-cloud-demo/K8s-Container-Escape-Demo"
 DEFAULT_DOCKERFILE_PATH = "Dockerfile"
 DEFAULT_COMMIT = "main"
@@ -90,22 +112,27 @@ def normalize_repo_url(url):
     return u
 
 
+def looks_like_sha(value):
+    """True if value is a plausible git SHA (>=7 hex chars)."""
+    if not value:
+        return False
+    import re
+    return bool(re.match(r'^[a-fA-F0-9]{7,40}$', str(value).strip()))
+
+
 def derive_console_base(tenant_url):
     """
     Get the Cortex console base URL.
       1. If tenant_url arg is provided, derive from it (strip api- prefix).
-      2. Otherwise, ask the Cortex SDK via demisto.demistoUrls() which
-         returns the actual console URL ('server' key) - no derivation needed.
+      2. Otherwise, ask the Cortex SDK via demisto.demistoUrls().
       3. Empty string if neither source is available.
     """
-    # 1. Explicit override via arg
     if tenant_url:
         u = tenant_url.replace("https://", "").replace("http://", "").rstrip("/")
         if u.startswith("api-"):
             u = u[len("api-"):]
         return "https://" + u
 
-    # 2. SDK auto-detect (works inside any Cortex playbook task)
     try:
         urls = demisto.demistoUrls()
         if isinstance(urls, dict):
@@ -122,14 +149,11 @@ def derive_console_base(tenant_url):
 
 
 # ==============================================================================
-# URL BUILDERS
+# URL BUILDERS - IMAGE CHANNEL (A)
 # ==============================================================================
 
 def build_registry_url(console_base, image_digest, image_name):
-    """
-    Deep link to the image in the Cortex Cloud Asset Inventory view.
-    Pattern: <console>/assets/inventory?name=sha256:<digest>
-    """
+    """Deep link to the image in the Cortex Cloud Asset Inventory view."""
     if not console_base:
         return ""
     if image_digest:
@@ -187,79 +211,343 @@ def build_code_security_url(console_base, repo_url):
 
 
 # ==============================================================================
-# MARKDOWN CARD BUILDER
+# MARKDOWN CARD BUILDER - UNIFIED "INVESTIGATION CODE-TO-CLOUD"
 # ==============================================================================
 
-EMOJI_PIVOT = "\U0001F517"   # link
-EMOJI_IMAGE = "\U0001F4E6"   # package
-EMOJI_BUG = "\U0001F41B"     # bug
-EMOJI_CODE = "\U0001F4BB"    # laptop
-EMOJI_GIT = "\U0001F500"     # git/twisted
-EMOJI_DOC = "\U0001F4C4"     # document
-EMOJI_SHIELD = "\U0001F6E1"  # shield
-EMOJI_INFO = "ℹ️"
-EMOJI_ARROW = "→"
+EMOJI_PIVOT = "\U0001F517"       # link
+EMOJI_IMAGE = "\U0001F4E6"       # package
+EMOJI_BUG = "\U0001F41B"         # bug
+EMOJI_CODE = "\U0001F4BB"        # laptop
+EMOJI_GIT = "\U0001F500"         # git/twisted
+EMOJI_DOC = "\U0001F4C4"         # document
+EMOJI_SHIELD = "\U0001F6E1"      # shield
+EMOJI_CLOUD = "☁️"     # cloud
+EMOJI_PERSON = "\U0001F464"      # person
+EMOJI_SEARCH = "\U0001F50D"      # magnifier
+EMOJI_TARGET = "\U0001F3AF"      # target
+EMOJI_INFO = "ℹ️"      # information
+EMOJI_SIREN = "\U0001F6A8"       # siren (runtime detection)
+EMOJI_GEAR = "⚙️"      # gear (process)
+EMOJI_KUBE = "\U0001F6F3"        # ship (kubernetes-ish)
+EMOJI_NODE = "\U0001F5A5"        # desktop computer (node)
+EMOJI_ARROW = "→"           # right arrow
+EMOJI_BULLET = "•"          # bullet
+
+SEVERITY_EMOJI = {
+    "critical": "\U0001F534",   # red circle
+    "high":     "\U0001F7E0",   # orange circle
+    "medium":   "\U0001F7E1",   # yellow circle
+    "low":      "\U0001F7E2",   # green circle
+    "info":     "\U0001F535",   # blue circle
+}
+
+EMOJI_CHECK = "✅"
+EMOJI_WARN = "⚠️"
+EMOJI_CRITICAL = "\U0001F534"   # red circle
 
 
-def build_markdown_card(image_digest, image_name, repo_url, commit_sha,
-                        dockerfile_path, registry_url, cwp_url,
-                        repo_link, commit_link, dockerfile_link, codesec_link):
+def _fmt_cell(value):
+    return "`" + value + "`" if value else "_unknown_"
+
+
+def _to_bool(value):
+    if value is None:
+        return False
+    s = str(value).strip().lower()
+    return s in ("true", "yes", "1", "y", "t")
+
+
+def _parse_list(value):
+    """Accept a Python list, comma-separated string, or '['a','b']' literal -> list of strings."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    s = str(value).strip()
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            import json
+            parsed = json.loads(s.replace("'", '"'))
+            if isinstance(parsed, list):
+                return [str(v).strip() for v in parsed if str(v).strip()]
+        except Exception:
+            s = s[1:-1]
+    return [p.strip().strip("'\"") for p in s.split(",") if p.strip()]
+
+
+def _classify_ip(ip):
+    """Return 'Private' / 'Public' / 'Invalid' for an IPv4 string."""
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return "Invalid"
+    try:
+        octets = [int(p) for p in parts]
+        if any(o < 0 or o > 255 for o in octets):
+            return "Invalid"
+    except ValueError:
+        return "Invalid"
+    a, b = octets[0], octets[1]
+    if a == 10:
+        return "Private"
+    if a == 172 and 16 <= b <= 31:
+        return "Private"
+    if a == 192 and b == 168:
+        return "Private"
+    if a == 127:
+        return "Private"
+    if a == 169 and b == 254:
+        return "Private"
+    return "Public"
+
+
+def _detect_cloud_region(fqdn):
+    """AWS region detection from EKS-style FQDN like ip-10-0-0-1.eu-west-3.compute.internal."""
+    if not fqdn or "compute.internal" not in fqdn:
+        return ""
+    parts = fqdn.split(".")
+    for p in parts:
+        if p and "-" in p and any(p.startswith(x) for x in ("us-", "eu-", "ap-", "ca-", "sa-", "af-", "me-")):
+            return p
+    return ""
+
+
+def _severity_label(severity):
+    if not severity:
+        return "_unknown_"
+    icon = SEVERITY_EMOJI.get(severity.strip().lower(), "")
+    return ((icon + " ") if icon else "") + "**" + severity.strip().upper() + "**"
+
+
+def build_markdown_card(
+    # Image channel
+    image_digest, image_name, repo_url, commit_sha, dockerfile_path,
+    registry_url, cwp_url, repo_link, commit_link, dockerfile_link, codesec_link,
+    # Runtime triage (from K8sEscape.*)
+    triage,
+    # Section availability
+    has_image_channel, has_triage,
+):
     md = []
-    md.append("# " + EMOJI_PIVOT + " Code-to-Cloud Pivot")
+    md.append("# " + EMOJI_SEARCH + " Investigation Code-to-Cloud")
     md.append("")
-    md.append("> " + EMOJI_INFO + " One-click navigation from this runtime SOC issue to the related "
-              "image in the registry, the source repository, and the exact Dockerfile commit.")
-    md.append("")
-
-    # ============== TARGET ==============
-    md.append("## " + EMOJI_IMAGE + " Target Image")
-    md.append("")
-    md.append("| Property | Value |")
-    md.append("|---|---|")
-    md.append("| Image Name | `" + (image_name if image_name else "_unknown_") + "` |")
-    md.append("| Image Digest | `" + ("sha256:" + image_digest if image_digest else "_unknown_") + "` |")
-    md.append("| Source Repo | `" + (repo_url if repo_url else "_unknown_") + "` |")
-    md.append("| Commit | `" + (commit_sha if commit_sha else "main") + "` |")
-    md.append("| Dockerfile | `" + dockerfile_path + "` |")
+    md.append("> " + EMOJI_INFO + " Unified pivot card. The triage IOCs surfaced by the runtime detection "
+              "are listed below, followed by one-click pivots from the **compromised image** to its source "
+              "in Cortex Cloud (registry, CVEs) and on GitHub (repo, commit, Dockerfile).")
     md.append("")
 
-    # ============== CLOUD PIVOTS ==============
-    md.append("## " + EMOJI_IMAGE + " Cloud Pivots (Cortex Cloud)")
+    # ============== HEADER SUMMARY ==============
+    md.append("## " + EMOJI_TARGET + " Investigation Targets")
     md.append("")
-    md.append("- " + EMOJI_IMAGE + " **[View image in Registry](" + registry_url + ")** "
-              + EMOJI_ARROW + " layers, tags, build metadata")
-    md.append("- " + EMOJI_BUG + " **[View active CVEs (CWP findings)](" + cwp_url + ")** "
-              + EMOJI_ARROW + " all active vulnerabilities for this image")
-    md.append("- " + EMOJI_SHIELD + " **[View repo Code Security findings](" + codesec_link + ")** "
-              + EMOJI_ARROW + " IaC, SCA, secrets, dependencies")
+    md.append("| Surface | Identifier | Source |")
+    md.append("|---|---|---|")
+    if has_triage:
+        runtime_id = (triage.get("container_id")
+                      or triage.get("namespace")
+                      or triage.get("cluster_name")
+                      or "_(from incident)_")
+        md.append("| " + EMOJI_SIREN + " Runtime Detection | `" + runtime_id + "` | K8sEscape.* |")
+    if has_image_channel:
+        identifier = image_name or ("sha256:" + image_digest if image_digest else "_unknown_")
+        md.append("| " + EMOJI_IMAGE + " Container Image | `" + identifier + "` | OCI labels |")
+    if not has_image_channel and not has_triage:
+        md.append("| _none_ | _no triage data or image digest found_ | - |")
     md.append("")
 
-    # ============== CODE PIVOTS ==============
-    md.append("## " + EMOJI_CODE + " Code Pivots (GitHub)")
+    # ============== RUNTIME TRIAGE RESULTS ==============
+    if has_triage:
+        severity = triage.get("severity") or ""
+        sev_label = _severity_label(severity)
+        is_spring = _to_bool(triage.get("is_spring_shell"))
+        is_webshell = _to_bool(triage.get("is_webshell"))
+        is_privileged = _to_bool(triage.get("is_privileged_user"))
+        is_container_runtime = _to_bool(triage.get("is_container_runtime"))
+        node_fqdn = triage.get("node_fqdn") or ""
+        node_ips = _parse_list(triage.get("node_ips"))
+        aws_region = _detect_cloud_region(node_fqdn)
+        is_eks_node = bool(node_fqdn and "compute.internal" in node_fqdn)
+
+        md.append("---")
+        md.append("")
+        md.append("## " + EMOJI_SIREN + " Runtime Triage Results")
+        md.append("")
+
+        # ---- Severity ----
+        if severity:
+            md.append("### Severity: " + sev_label)
+            md.append("")
+            if triage.get("namespace"):
+                md.append("- Target namespace: `" + triage["namespace"] + "`")
+            md.append("")
+
+        # ---- Attack details ----
+        if triage.get("details") or is_spring or is_webshell:
+            md.append("### " + EMOJI_TARGET + " Attack Details")
+            md.append("")
+            if triage.get("details"):
+                md.append("> **" + triage["details"].replace("\n", " ").strip() + "**")
+                md.append("")
+            if is_spring:
+                md.append("- " + EMOJI_CRITICAL + " **Spring4Shell / CVE-2022-22965 detected**")
+            if is_webshell:
+                md.append("- " + EMOJI_CRITICAL + " **Webshell detected** (malicious file dropped)")
+            if not is_spring and not is_webshell:
+                md.append("- " + SEVERITY_EMOJI["low"] + " No Spring4Shell/webshell indicators found in details")
+            md.append("")
+
+        # ---- Compromised container ----
+        md.append("### " + EMOJI_IMAGE + " Compromised Container")
+        md.append("")
+        cids = _parse_list(triage.get("container_id"))
+        if cids:
+            for cid in cids:
+                md.append("- **Container ID**: `" + cid + "`")
+        elif triage.get("container_id"):
+            md.append("- **Container ID**: `" + triage["container_id"] + "`")
+        else:
+            md.append("- Container ID: Not available")
+        if triage.get("namespace"):
+            md.append("- **Namespace**: `" + triage["namespace"] + "`")
+        if triage.get("container_image_id"):
+            md.append("- **Image ID**: `" + triage["container_image_id"] + "`")
+        md.append("")
+
+        # ---- K8s / EKS node ----
+        node_heading = "EKS Node" if is_eks_node else "K8s Node"
+        md.append("### " + EMOJI_NODE + " " + node_heading)
+        md.append("")
+        if triage.get("cluster_name"):
+            md.append("- **Cluster**: `" + triage["cluster_name"] + "`")
+        if node_fqdn:
+            md.append("- **FQDN**: `" + node_fqdn + "`")
+        if is_eks_node:
+            md.append("- " + EMOJI_CHECK + " EKS node confirmed (compute.internal)")
+        if aws_region:
+            md.append("- **AWS Region**: `" + aws_region + "`")
+        if node_ips:
+            md.append("- **IP Addresses**:")
+            for ip in node_ips:
+                ip_type = _classify_ip(ip)
+                suffix = ""
+                if ip_type == "Public":
+                    suffix = " " + EMOJI_WARN
+                elif ip_type == "Invalid":
+                    suffix = " ❌"
+                md.append("  - `" + ip + "` (" + ip_type + ")" + suffix)
+        md.append("")
+
+        # ---- Process ----
+        md.append("### " + EMOJI_GEAR + " Process (Causality Actor)")
+        md.append("")
+        if triage.get("process_name"):
+            md.append("- **Process**: `" + triage["process_name"] + "`")
+        if triage.get("process_path"):
+            md.append("- **Path**: `" + triage["process_path"] + "`")
+        if is_container_runtime:
+            md.append("- " + EMOJI_WARN + " **Container runtime detected** in causality chain")
+        if triage.get("process_sha256"):
+            md.append("- **SHA256**: `" + triage["process_sha256"] + "`")
+        if triage.get("process_command_line"):
+            cmd = triage["process_command_line"]
+            display_cmd = cmd if len(cmd) <= 200 else cmd[:200] + "..."
+            md.append("- **Command Line**:")
+            md.append("  ```")
+            md.append("  " + display_cmd)
+            md.append("  ```")
+        md.append("")
+
+        # ---- User ----
+        md.append("### " + EMOJI_PERSON + " User")
+        md.append("")
+        if triage.get("username"):
+            md.append("- **Username**: `" + triage["username"] + "`")
+            if is_privileged:
+                md.append("- " + EMOJI_CRITICAL + " **Privileged user (root)** — privilege escalation confirmed")
+            else:
+                md.append("- " + SEVERITY_EMOJI["low"] + " Non-privileged user")
+        else:
+            md.append("- Username: Not available")
+        md.append("")
+
+    # ============== CHANNEL A - IMAGE ==============
+    if has_image_channel:
+        md.append("---")
+        md.append("")
+        md.append("## " + EMOJI_IMAGE + " Channel A " + EMOJI_ARROW + " Compromised Image")
+        md.append("")
+        md.append("| Property | Value |")
+        md.append("|---|---|")
+        md.append("| Image Name | " + _fmt_cell(image_name) + " |")
+        md.append("| Image Digest | " + _fmt_cell("sha256:" + image_digest if image_digest else "") + " |")
+        md.append("| Source Repo | " + _fmt_cell(repo_url) + " |")
+        md.append("| Build Commit | " + _fmt_cell(commit_sha if commit_sha != DEFAULT_COMMIT else "main (default)") + " |")
+        md.append("| Dockerfile | " + _fmt_cell(dockerfile_path) + " |")
+        md.append("")
+        md.append("**" + EMOJI_CLOUD + " Cloud pivots (Cortex Cloud):**")
+        md.append("")
+        if registry_url:
+            md.append("- " + EMOJI_IMAGE + " **[View image in Registry](" + registry_url + ")** "
+                      + EMOJI_ARROW + " layers, tags, build metadata")
+        if cwp_url:
+            md.append("- " + EMOJI_BUG + " **[View active CVEs (CWP findings)](" + cwp_url + ")** "
+                      + EMOJI_ARROW + " all active vulnerabilities for this image")
+        if codesec_link:
+            md.append("- " + EMOJI_SHIELD + " **[View repo Code Security findings](" + codesec_link + ")** "
+                      + EMOJI_ARROW + " IaC, SCA, secrets, dependencies")
+        md.append("")
+        md.append("**" + EMOJI_CODE + " Code pivots (GitHub):**")
+        md.append("")
+        if repo_link:
+            md.append("- " + EMOJI_GIT + " **[Source repository](" + repo_link + ")** "
+                      + EMOJI_ARROW + " repo home")
+        if commit_link:
+            md.append("- " + EMOJI_GIT + " **[Build commit](" + commit_link + ")** "
+                      + EMOJI_ARROW + " exact commit that produced this image")
+        if dockerfile_link:
+            md.append("- " + EMOJI_DOC + " **[Dockerfile @ commit](" + dockerfile_link + ")** "
+                      + EMOJI_ARROW + " the Dockerfile that built this vulnerable image")
+        md.append("")
+
+    # ============== RECOMMENDED ACTIONS ==============
+    md.append("---")
     md.append("")
-    md.append("- " + EMOJI_GIT + " **[Source repository](" + repo_link + ")** "
-              + EMOJI_ARROW + " repo home")
-    md.append("- " + EMOJI_GIT + " **[Build commit](" + commit_link + ")** "
-              + EMOJI_ARROW + " exact commit that produced this image")
-    md.append("- " + EMOJI_DOC + " **[Dockerfile @ commit](" + dockerfile_link + ")** "
-              + EMOJI_ARROW + " the Dockerfile that built this vulnerable image")
+    md.append("## " + EMOJI_SHIELD + " Recommended Actions")
+    md.append("")
+    if has_image_channel:
+        md.append("1. **Confirm the runtime detection**: review the triage block above (process, "
+                  "container, node) to validate the escape is real and not a benign workload.")
+        md.append("2. **Triage the image**: open the CWP findings link to confirm exploitable CVEs.")
+        md.append("3. **Inspect the Dockerfile**: open the Dockerfile-at-commit link to find the base "
+                  "image / package responsible.")
+        md.append("4. **Fix in code**: open a PR against the Dockerfile or `requirements.txt`/`pom.xml`. "
+                  "Merging the fix triggers the next build - the runtime change follows the code.")
+    elif has_triage:
+        md.append("1. **Confirm the runtime detection**: review the triage block above and pivot to the "
+                  "node in Cortex XDR to investigate further.")
+        md.append("2. **No image identity available** - the image digest could not be resolved. Inspect "
+                  "the pod manifest directly to recover the image reference.")
+    else:
+        md.append("_No triage data or image identity available - check that ExtractK8sContainerEscapeIOCs "
+                  "ran successfully and that the image has OCI labels._")
     md.append("")
 
     # ============== EXPLAINER ==============
     md.append("---")
     md.append("")
-    md.append("## " + EMOJI_PIVOT + " How this works")
+    md.append("## " + EMOJI_INFO + " How this works")
     md.append("")
-    md.append("Mapping image " + EMOJI_ARROW + " repo " + EMOJI_ARROW + " commit " + EMOJI_ARROW
-              + " Dockerfile uses **OCI standard labels** baked at build time:")
+    md.append("A vendor-neutral mapping mechanism makes every code-to-cloud pivot deterministic - "
+              "no inventory lookup, no guesswork.")
+    md.append("")
+    md.append("**Channel A** " + EMOJI_ARROW + " image identity travels with the image via **OCI standard labels** "
+              "baked at build time:")
     md.append("")
     md.append("- `org.opencontainers.image.source` " + EMOJI_ARROW + " repo URL")
     md.append("- `org.opencontainers.image.revision` " + EMOJI_ARROW + " commit SHA")
     md.append("- `com.cortex.demo.dockerfile_path` " + EMOJI_ARROW + " Dockerfile path in repo")
     md.append("")
-    md.append("> Image labels are independent of the orchestration platform and the registry "
-              "vendor. They travel with the image - any consumer can resolve the source code "
-              "without depending on a separate inventory.")
+    md.append("> The mapping is independent of the orchestration platform and the cloud vendor. "
+              "It travels with the artifact - any consumer (SOC, audit, CSPM) can resolve the source "
+              "code without depending on a separate inventory.")
     md.append("")
 
     return "\n".join(md)
@@ -270,12 +558,9 @@ def build_markdown_card(image_digest, image_name, repo_url, commit_sha,
 # ==============================================================================
 
 def write_results_to_issue(field_name, markdown_content):
-    """
-    Optionally write the markdown card to a custom incident field.
-    No-op if field_name is empty. Failure is non-fatal - we just log it.
-    """
+    """Optionally write the markdown card to a custom incident field."""
     if not field_name:
-        return None, ""  # skipped, not an error
+        return None, ""
     try:
         result = demisto.executeCommand("setIssue", {field_name: markdown_content})
         if is_error(result):
@@ -292,25 +577,62 @@ def write_results_to_issue(field_name, markdown_content):
 def main():
     try:
         args = demisto.args()
-        demisto.info("=== CodeToCloudPivot v1.0.0 START ===")
+        demisto.info("=== CodeToCloudPivot v1.2.0 START ===")
 
+        # --- IMAGE CHANNEL (A) ---
         raw_image_digest = get_arg(args, 'image_digest')
         raw_image_name = get_arg(args, 'image_name')
         repo_url = get_arg(args, 'repo_url') or DEFAULT_REPO_URL
         commit_sha = get_arg(args, 'commit_sha') or DEFAULT_COMMIT
         dockerfile_path = get_arg(args, 'dockerfile_path') or DEFAULT_DOCKERFILE_PATH
+
+        # --- RUNTIME TRIAGE (from K8sEscape.*) ---
+        triage = {
+            "container_id":          get_arg(args, 'container_id'),
+            "container_image_id":    get_arg(args, 'container_image_id'),
+            "namespace":             get_arg(args, 'namespace'),
+            "cluster_name":          get_arg(args, 'cluster_name'),
+            "node_fqdn":             get_arg(args, 'node_fqdn'),
+            "node_ips":              get_arg(args, 'node_ips'),
+            "process_name":          get_arg(args, 'process_name'),
+            "process_sha256":        get_arg(args, 'process_sha256'),
+            "process_path":          get_arg(args, 'process_path'),
+            "process_command_line":  get_arg(args, 'process_command_line'),
+            "username":              get_arg(args, 'username'),
+            "severity":              get_arg(args, 'severity'),
+            "details":               get_arg(args, 'details'),
+            "is_spring_shell":       get_arg(args, 'is_spring_shell'),
+            "is_webshell":           get_arg(args, 'is_webshell'),
+            "is_privileged_user":    get_arg(args, 'is_privileged_user'),
+            "is_container_runtime":  get_arg(args, 'is_container_runtime'),
+        }
+
+        # --- COMMON ---
         tenant_url = get_arg(args, 'cortex_tenant_url')
         issue_field_name = get_arg(args, 'issue_field_name', DEFAULT_ISSUE_FIELD_NAME)
 
+        # Normalize
         image_digest = normalize_digest(raw_image_digest) or normalize_digest(raw_image_name)
         image_name = raw_image_name or ""
         repo_url = normalize_repo_url(repo_url)
         console_base = derive_console_base(tenant_url)
 
-        demisto.info("Image digest: '" + image_digest + "' name: '" + image_name +
-                     "' repo: '" + repo_url + "' commit: '" + commit_sha + "'")
+        # Section availability
+        has_image_channel = bool(image_digest or image_name)
+        has_triage = any(triage.values())
 
-        # Build URLs
+        demisto.info("Image channel: " + ("ON" if has_image_channel else "OFF") +
+                     " | Triage: " + ("ON" if has_triage else "OFF"))
+        demisto.info("Image: digest='" + image_digest + "' name='" + image_name +
+                     "' repo='" + repo_url + "' commit='" + commit_sha + "'")
+        demisto.info("Triage: container='" + triage["container_id"] + "' ns='" + triage["namespace"] +
+                     "' cluster='" + triage["cluster_name"] + "' node='" + triage["node_fqdn"] +
+                     "' process='" + triage["process_name"] + "' severity='" + triage["severity"] +
+                     "' user='" + triage["username"] + "' image_id='" + triage["container_image_id"] +
+                     "' spring=" + triage["is_spring_shell"] + " webshell=" + triage["is_webshell"] +
+                     " priv=" + triage["is_privileged_user"])
+
+        # --- BUILD URLS (image channel only) ---
         registry_url = build_registry_url(console_base, image_digest, image_name)
         cwp_url = build_cwp_findings_url(console_base, image_digest)
         repo_link = build_repo_url(repo_url)
@@ -318,21 +640,25 @@ def main():
         dockerfile_link = build_dockerfile_url(repo_url, commit_sha, dockerfile_path)
         codesec_link = build_code_security_url(console_base, repo_url)
 
-        # Markdown
+        # --- BUILD MARKDOWN ---
         human_readable = build_markdown_card(
+            # Image
             image_digest, image_name, repo_url, commit_sha, dockerfile_path,
-            registry_url, cwp_url, repo_link, commit_link, dockerfile_link, codesec_link
+            registry_url, cwp_url, repo_link, commit_link, dockerfile_link, codesec_link,
+            # Triage
+            triage,
+            # Sections
+            has_image_channel, has_triage,
         )
 
-        # Optional persistent write to a custom incident field. Skipped by
-        # default - the markdown card is always visible via HumanReadable.
+        # Optional persistent write
         write_success, write_error = write_results_to_issue(issue_field_name, human_readable)
         if write_success is False:
-            # Field write was attempted but failed - log only, don't pollute output.
             demisto.info("setIssue('" + issue_field_name + "') failed (non-fatal): " + write_error)
 
-        # Context
+        # --- CONTEXT ---
         entry_context = {
+            # Image channel
             'K8sPivot.ImageDigest': image_digest,
             'K8sPivot.ImageName': image_name,
             'K8sPivot.RepoURL': repo_link,
@@ -343,7 +669,28 @@ def main():
             'K8sPivot.CommitURL': commit_link,
             'K8sPivot.DockerfileURL': dockerfile_link,
             'K8sPivot.CodeSecurityURL': codesec_link,
+            # Runtime triage
+            'K8sPivot.Triage.ContainerID':           triage["container_id"],
+            'K8sPivot.Triage.ContainerImageID':      triage["container_image_id"],
+            'K8sPivot.Triage.Namespace':             triage["namespace"],
+            'K8sPivot.Triage.ClusterName':           triage["cluster_name"],
+            'K8sPivot.Triage.NodeFQDN':              triage["node_fqdn"],
+            'K8sPivot.Triage.NodeIPs':               triage["node_ips"],
+            'K8sPivot.Triage.ProcessName':           triage["process_name"],
+            'K8sPivot.Triage.ProcessImageSHA256':    triage["process_sha256"],
+            'K8sPivot.Triage.ProcessImagePath':      triage["process_path"],
+            'K8sPivot.Triage.ProcessCommandLine':    triage["process_command_line"],
+            'K8sPivot.Triage.Username':              triage["username"],
+            'K8sPivot.Triage.Severity':              triage["severity"],
+            'K8sPivot.Triage.Details':               triage["details"],
+            'K8sPivot.Triage.IsSpringShell':         _to_bool(triage["is_spring_shell"]),
+            'K8sPivot.Triage.IsWebshell':            _to_bool(triage["is_webshell"]),
+            'K8sPivot.Triage.IsPrivilegedUser':      _to_bool(triage["is_privileged_user"]),
+            'K8sPivot.Triage.IsContainerRuntime':    _to_bool(triage["is_container_runtime"]),
+            # Card + status
             'K8sPivot.MarkdownCard': human_readable,
+            'K8sPivot.HasImageChannel': has_image_channel,
+            'K8sPivot.HasTriage': has_triage,
             'K8sPivot.IssueFieldName': issue_field_name,
             'K8sPivot.IssueFieldWriteStatus': (
                 "skipped" if write_success is None else
@@ -360,6 +707,9 @@ def main():
                 'ImageName': image_name,
                 'RepoURL': repo_link,
                 'CommitSHA': commit_sha,
+                'HasImageChannel': has_image_channel,
+                'HasTriage': has_triage,
+                'Triage': triage,
                 'Pivots': {
                     'Registry': registry_url,
                     'CWPFindings': cwp_url,
@@ -379,7 +729,7 @@ def main():
             'EntryContext': entry_context
         })
 
-        demisto.info("=== CodeToCloudPivot v1.0.0 END ===")
+        demisto.info("=== CodeToCloudPivot v1.2.0 END ===")
 
     except Exception as e:
         error_msg = "Error in CodeToCloudPivot: " + str(e)

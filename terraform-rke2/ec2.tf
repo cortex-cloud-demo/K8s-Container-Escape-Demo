@@ -17,7 +17,16 @@ resource "aws_eip" "rke2" {
   domain = "vpc"
 
   tags = {
-    Name = "${var.project_name}-eip"
+    Name                 = "${var.project_name}-eip"
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-rke2/ec2.tf"
+    git_last_modified_at = "2026-06-09 14:45:00"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "rke2"
+    yor_trace            = "2184aedd-2069-4d21-901e-f05fa82ed614"
   }
 }
 
@@ -53,6 +62,19 @@ resource "aws_instance" "rke2" {
     volume_size = var.root_volume_size_gb
     volume_type = "gp3"
     encrypted   = true
+
+    tags = {
+      Name                 = "${var.project_name}-node-root"
+      git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+      git_file             = "terraform-rke2/ec2.tf"
+      git_last_modified_at = "2026-06-09 14:45:00"
+      git_last_modified_by = "cley@paloaltonetworks.com"
+      git_modifiers        = "cley"
+      git_org              = "cortex-cloud-demo"
+      git_repo             = "K8s-Container-Escape-Demo"
+      yor_name             = "rke2"
+      yor_trace            = "69fe2f84-eb97-4584-8574-e7db7dab64d3"
+    }
   }
 
   user_data = templatefile("${path.module}/scripts/rke2-bootstrap.sh.tftpl", {
@@ -66,7 +88,16 @@ resource "aws_instance" "rke2" {
   user_data_replace_on_change = true
 
   tags = {
-    Name = "${var.project_name}-node"
+    Name                 = "${var.project_name}-node"
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-rke2/ec2.tf"
+    git_last_modified_at = "2026-06-09 14:45:00"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "rke2"
+    yor_trace            = "1334c5bb-f56f-458d-bead-3b57bb33dc23"
   }
 
   depends_on = [aws_iam_role_policy.ssm_param_write]

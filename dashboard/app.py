@@ -968,15 +968,25 @@ def tf_init_cmd():
 def tf_output(tf_dir, output_name, env=None):
     """Run terraform output for a given module.
 
+    Runs inside the toolbox container if available, so the providers cache
+    in `.terraform/providers/` (Linux binaries) matches the runtime arch.
+    Falls back to local execution otherwise.
+
     Returns the output value as string, or empty string on failure.
     """
     if env is None:
         env = os.environ.copy()
         env.update(get_aws_env())
-    result = subprocess.run(
-        f'terraform output -raw {output_name}',
-        shell=True, capture_output=True, text=True, cwd=tf_dir, env=env, timeout=30,
-    )
+    raw_cmd = f'terraform output -raw {output_name}'
+    if is_toolbox_running():
+        wrapped = toolbox_cmd(raw_cmd, cwd=tf_dir)
+        result = subprocess.run(
+            wrapped, shell=True, capture_output=True, text=True, env=env, timeout=30,
+        )
+    else:
+        result = subprocess.run(
+            raw_cmd, shell=True, capture_output=True, text=True, cwd=tf_dir, env=env, timeout=30,
+        )
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
@@ -1435,7 +1445,7 @@ def infra_rke2_outputs():
 def cortex_image_scan():
     """Scan a Docker image with cortexcli (CWP) before push."""
     if not cortex_settings.get("api_key"):
-        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+        return jsonify({"error": "Cortex API not configured — open Settings > Cortex > Configure."}), 400
 
     # Derive the cortexcli API base URL from the Cortex API URL
     api_base_url = cortex_settings["base_url"].rstrip("/")
@@ -1452,7 +1462,7 @@ def cortex_image_scan():
         if ecr_url:
             image_name = f"{ecr_url}:latest"
         else:
-            return jsonify({"status": "error", "message": "No image specified and ECR URL not found"}), 400
+            return jsonify({"error": "No image specified and ECR URL not found — run Terraform Apply first or pass an image via Custom."}), 400
 
     # Extract region from image name for ECR login
     region = aws_credentials.get("aws_region") or "eu-west-3"
@@ -1569,7 +1579,7 @@ echo "=================================================="
 def cortex_iac_scan():
     """Scan IaC (Terraform + K8s manifests) with cortexcli code scan."""
     if not cortex_settings.get("api_key"):
-        return jsonify({"status": "error", "message": "Cortex API not configured"}), 400
+        return jsonify({"error": "Cortex API not configured — open Settings > Cortex > Configure."}), 400
 
     # Scan directories
     scan_target = request.json.get("target", "all")  # all, terraform, k8s
@@ -1702,14 +1712,65 @@ echo "=================================================="
 
 @app.route("/api/image/build-push", methods=["POST"])
 def image_build_push():
-    cmd = f"""
-set -e
-REGION=$(cd terraform-infra && terraform output -raw region 2>/dev/null || echo "$AWS_REGION")
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-ECR_URL=$(cd terraform-infra && terraform output -raw ecr_repository_url 2>/dev/null)
+    cmd = """
+set -uo pipefail
+
+echo "==> Resolving configuration..."
+
+REGION="${AWS_REGION:-}"
+if [ -z "$REGION" ]; then
+  REGION=$(cd terraform-infra 2>/dev/null && terraform output -raw region 2>/dev/null || true)
+fi
+REGION="${REGION:-eu-west-3}"
+echo "    REGION=$REGION"
+
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>&1)
+RC=$?
+if [ $RC -ne 0 ] || [ -z "$ACCOUNT_ID" ]; then
+  echo ""
+  echo "✗ FAILED: AWS credentials are invalid or expired."
+  echo "  aws sts returned: $ACCOUNT_ID"
+  echo "  Fix: open Settings > AWS > Configure and paste fresh credentials."
+  exit 1
+fi
+echo "    ACCOUNT_ID=$ACCOUNT_ID"
+
+ECR_URL=$(cd terraform-infra 2>/dev/null && terraform output -raw ecr_repository_url 2>/dev/null || true)
+if [ -z "$ECR_URL" ]; then
+  echo "    (no usable terraform state on host, querying ECR API...)"
+  ECR_URL=$(aws ecr describe-repositories \\
+    --region "$REGION" \\
+    --repository-names k8s-escape-demo/vuln-app \\
+    --query 'repositories[0].repositoryUri' --output text 2>&1)
+  RC=$?
+  if [ $RC -ne 0 ] || [ -z "$ECR_URL" ] || [ "$ECR_URL" = "None" ]; then
+    echo ""
+    echo "✗ FAILED: cannot resolve ECR repository URL."
+    echo "  aws ecr returned: $ECR_URL"
+    echo "  Fix: run INFRA > Apply first (creates the ECR repo)."
+    exit 1
+  fi
+fi
+echo "    ECR_URL=$ECR_URL"
+
+if ! docker info >/dev/null 2>&1; then
+  echo ""
+  echo "✗ FAILED: Docker daemon is not running."
+  echo "  Fix: start Docker Desktop and retry."
+  exit 1
+fi
 
 echo "==> Logging in to ECR..."
-aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${{ACCOUNT_ID}}.dkr.ecr.${{REGION}}.amazonaws.com
+LOGIN_OUT=$(aws ecr get-login-password --region "$REGION" 2>&1 \\
+  | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com" 2>&1)
+RC=$?
+echo "$LOGIN_OUT"
+if [ $RC -ne 0 ]; then
+  echo ""
+  echo "✗ FAILED: ECR login failed."
+  echo "  Fix: check the AWS user has ecr:GetAuthorizationToken permission."
+  exit 1
+fi
 
 echo "==> Building image (linux/amd64)..."
 GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -1717,16 +1778,33 @@ GIT_REPO_URL=$(git config --get remote.origin.url 2>/dev/null | sed -E 's#git@gi
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo "    GIT_COMMIT=$GIT_COMMIT"
 echo "    GIT_REPO_URL=$GIT_REPO_URL"
+echo "    BUILD_DATE=$BUILD_DATE"
 docker buildx build --platform linux/amd64 \\
   --build-arg GIT_COMMIT="$GIT_COMMIT" \\
   --build-arg GIT_REPO_URL="$GIT_REPO_URL" \\
   --build-arg BUILD_DATE="$BUILD_DATE" \\
-  -t ${{ECR_URL}}:latest --load .
+  -t "${ECR_URL}:latest" --load .
+RC=$?
+if [ $RC -ne 0 ]; then
+  echo ""
+  echo "✗ FAILED: docker buildx build returned $RC."
+  echo "  Common causes: missing buildx, no QEMU for cross-arch on Apple Silicon,"
+  echo "  or Dockerfile error. Check the build output above."
+  exit 1
+fi
 
 echo "==> Pushing to ECR..."
-docker push ${{ECR_URL}}:latest
+docker push "${ECR_URL}:latest"
+RC=$?
+if [ $RC -ne 0 ]; then
+  echo ""
+  echo "✗ FAILED: docker push returned $RC."
+  echo "  Common causes: ECR login expired (retry), or network issue."
+  exit 1
+fi
 
-echo "==> Done! Image pushed to ${{ECR_URL}}:latest"
+echo ""
+echo "==> Done! Image pushed to ${ECR_URL}:latest"
 """
     task_id = create_task("Build & Push Image", cmd, use_toolbox=False)
     return jsonify({"task_id": task_id})
@@ -2664,6 +2742,12 @@ def deploy_script_to_cortex():
         "K8sSearchSimilarEvents": os.path.join(
             PROJECT_ROOT, "cortex-scripts", "automation-K8sSearchSimilarEvents.yml"
         ),
+        "CodeToCloudPivot": os.path.join(
+            PROJECT_ROOT, "cortex-scripts", "automation-CodeToCloudPivot.yml"
+        ),
+        "EnrichCloudAssetYorTags": os.path.join(
+            PROJECT_ROOT, "cortex-scripts", "automation-EnrichCloudAssetYorTags.yml"
+        ),
         "AwsAddInternetExposedTagToS3Bucket": os.path.join(
             PROJECT_ROOT, "cortex-scripts", "aws-add-internet-exposed-tag-to-s3-bucket.yml"
         ),
@@ -2791,6 +2875,8 @@ def deploy_all_to_cortex():
          os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-K8sSearchSimilarEvents.yml")),
         ("CodeToCloudPivot",
          os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-CodeToCloudPivot.yml")),
+        ("EnrichCloudAssetYorTags",
+         os.path.join(PROJECT_ROOT, "cortex-scripts", "automation-EnrichCloudAssetYorTags.yml")),
         ("AwsAddInternetExposedTagToS3Bucket",
          os.path.join(PROJECT_ROOT, "cortex-scripts", "aws-add-internet-exposed-tag-to-s3-bucket.yml")),
         ("AwsRemoveS3PublicAccess",

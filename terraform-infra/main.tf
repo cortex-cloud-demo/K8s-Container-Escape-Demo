@@ -266,8 +266,8 @@ resource "aws_iam_role_policy" "eks_node_s3_dangerous" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = [
+      Effect = "Allow"
+      Action = [
         "s3:PutObjectRetention",
         "s3:PutLifecycleConfiguration",
         "s3:PutBucketPolicy",
@@ -335,17 +335,39 @@ resource "aws_launch_template" "eks_nodes" {
     }
   }
 
+  # Propagate Yor tags (and Name) to each EC2 instance and its EBS volume.
+  # Without this, the top-level `tags` block below only tags the launch
+  # template resource itself - the instances spawned by the node group
+  # would inherit only `Name`, breaking Code-to-Cloud pivots on the worker.
   tag_specifications {
     resource_type = "instance"
     tags = {
-      Name = "${var.project_name}-node"
+      Name                 = "${var.project_name}-node"
+      git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+      git_file             = "terraform-infra/main.tf"
+      git_last_modified_at = "2026-03-31 13:11:42"
+      git_last_modified_by = "cley@paloaltonetworks.com"
+      git_modifiers        = "cley"
+      git_org              = "cortex-cloud-demo"
+      git_repo             = "K8s-Container-Escape-Demo"
+      yor_name             = "eks_nodes"
+      yor_trace            = "56cd7896-d1d6-4b80-bf82-71071299c9df"
     }
   }
 
   tag_specifications {
     resource_type = "volume"
     tags = {
-      Name = "${var.project_name}-node-volume"
+      Name                 = "${var.project_name}-node-volume"
+      git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+      git_file             = "terraform-infra/main.tf"
+      git_last_modified_at = "2026-03-31 13:11:42"
+      git_last_modified_by = "cley@paloaltonetworks.com"
+      git_modifiers        = "cley"
+      git_org              = "cortex-cloud-demo"
+      git_repo             = "K8s-Container-Escape-Demo"
+      yor_name             = "eks_nodes"
+      yor_trace            = "56cd7896-d1d6-4b80-bf82-71071299c9df"
     }
   }
   tags = {

@@ -2,23 +2,28 @@ id: a1b2c3d4-5678-4901-bc23-456789abcdef
 version: -1
 name: K8s Container Escape - Code-to-Cloud Pivot
 description: |-
-  Lightweight enrichment playbook that adds a Code-to-Cloud pivot card
-  to the issue. The card contains clickable deep links from the runtime
-  SOC alert to:
-    1. The image in the Cortex Cloud Registry view
-    2. The image's CWP findings (active CVEs)
-    3. The source repository on GitHub
-    4. The exact build commit on GitHub
-    5. The Dockerfile at that commit
-    6. The repository's Code Security findings in Cortex Cloud
+  Enrichment playbook that adds the unified "Investigation Code-to-Cloud"
+  card to the issue. The card contains:
 
-  Mapping image -> source uses OCI standard labels baked into the image:
+    Triage Results (from ExtractK8sContainerEscapeIOCs):
+      Container ID, Namespace, Cluster, Node FQDN, Process, SHA256,
+      Severity, attack details - the runtime context of the escape.
+
+    Channel A (Image -> Source via OCI labels):
+      1. The image in the Cortex Cloud Asset Inventory
+      2. The image's CWP findings (active CVEs)
+      3. The source repository on GitHub
+      4. The build commit on GitHub
+      5. The Dockerfile at that commit
+      6. The repository's Code Security findings in Cortex Cloud
+
+  Channel A mapping uses OCI standard labels baked into the image:
     org.opencontainers.image.source    -> repo URL
     org.opencontainers.image.revision  -> commit SHA
     com.cortex.demo.dockerfile_path    -> path to Dockerfile
 
-  Two tasks: Triage (extract image identity) -> Pivot (build the card).
-  No rescans, no API calls beyond the LLM-free deep link generation.
+  Two tasks: Triage (extract IOCs into K8sEscape.*) -> Pivot (build the
+  unified card from K8sEscape.* + OCI labels).
 contentitemexportablefields:
   contentitemfields:
     packID: K8sContainerEscape
@@ -109,6 +114,8 @@ tasks:
         simple: ${incident.agent_os_sub_type}
       cluster_name:
         simple: ${incident.clustername.[0]}
+      quiet:
+        simple: "true"
     separatecontext: false
     continueonerrortype: ""
     view: |-
@@ -132,19 +139,27 @@ tasks:
     task:
       id: 33333333-3333-4333-8333-cccccccccccc
       version: -1
-      name: "Build Code-to-Cloud Pivot Card"
+      name: "Build Investigation Code-to-Cloud Card"
       description: |-
-        Run CodeToCloudPivot to generate a markdown card with clickable
-        deep links to the image (Cortex Cloud Asset Inventory), the active
-        CVEs (CWP findings), the source repo on GitHub, the build commit,
-        the Dockerfile at the commit, and the repo's Code Security findings.
+        Run CodeToCloudPivot to generate the unified "Investigation Code-to-Cloud"
+        markdown card. The card contains:
 
-        The card is always returned via HumanReadable (visible in this task's
-        output entries below). Optionally persisted to a custom incident
-        field via the 'IssueFieldName' playbook input - skipped by default.
+          Runtime Triage Results (from K8sEscape.* context):
+            container ID, namespace, cluster, node FQDN, process name + SHA256,
+            severity and attack details surfaced by the previous task.
+
+          Channel A (Image -> Source via OCI labels):
+            registry, CVEs, source repo, build commit, Dockerfile, Code Security.
+
+        Triage values come from K8sEscape.* populated by the previous
+        ExtractK8sContainerEscapeIOCs task (task #1). Image identity comes from
+        K8sEscape.ContainerImageID + incident.image_name; repo URL, commit SHA
+        and Dockerfile path come from the playbook inputs.
+
+        Always returned via HumanReadable. Optionally persisted to a custom
+        incident field via the 'IssueFieldName' input.
 
         Tenant URL is auto-detected via the Cortex SDK (demisto.demistoUrls).
-        The 'CortexTenantURL' input is only needed to override the auto-detection.
       iscommand: true
       brand: ""
       script: CodeToCloudPivot
@@ -162,6 +177,40 @@ tasks:
         simple: ${inputs.CommitSHA}
       dockerfile_path:
         simple: ${inputs.DockerfilePath}
+      container_id:
+        simple: ${K8sEscape.ContainerID}
+      container_image_id:
+        simple: ${K8sEscape.ContainerImageID}
+      namespace:
+        simple: ${K8sEscape.Namespace}
+      cluster_name:
+        simple: ${K8sEscape.ClusterName}
+      node_fqdn:
+        simple: ${K8sEscape.NodeFQDN}
+      node_ips:
+        simple: ${K8sEscape.NodeIPs}
+      process_name:
+        simple: ${K8sEscape.ProcessName}
+      process_sha256:
+        simple: ${K8sEscape.ProcessImageSHA256}
+      process_path:
+        simple: ${K8sEscape.ProcessImagePath}
+      process_command_line:
+        simple: ${K8sEscape.ProcessCommandLine}
+      username:
+        simple: ${K8sEscape.Username}
+      severity:
+        simple: ${K8sEscape.Severity}
+      details:
+        simple: ${K8sEscape.Details}
+      is_spring_shell:
+        simple: ${K8sEscape.IsSpringShell}
+      is_webshell:
+        simple: ${K8sEscape.IsWebshell}
+      is_privileged_user:
+        simple: ${K8sEscape.IsPrivilegedUser}
+      is_container_runtime:
+        simple: ${K8sEscape.IsContainerRuntime}
       cortex_tenant_url:
         simple: ${inputs.CortexTenantURL}
       issue_field_name:
@@ -172,7 +221,7 @@ tasks:
       {
         "position": {
           "x": 450,
-          "y": 380
+          "y": 480
         }
       }
     note: false
@@ -189,11 +238,14 @@ tasks:
     task:
       id: 44444444-4444-4444-8444-dddddddddddd
       version: -1
-      name: Pivot Card Ready
+      name: Investigation Card Ready
       description: |-
-        Issue field 'k8scodecloudpivot' now contains a markdown card with
-        6 deep links. Analyst clicks the link of interest to navigate to
-        the right surface (Registry, CWP, GitHub, Code Security).
+        The unified "Investigation Code-to-Cloud" card is now visible in
+        the previous task's output (and persisted to 'k8scodecloudpivot'
+        if the IssueFieldName input was set). The analyst sees the triage
+        results inline and can click any deep link to pivot to the right
+        surface: Cortex Cloud Registry, CWP findings, GitHub source repo,
+        build commit, Dockerfile, or repo Code Security findings.
       type: title
       iscommand: false
       brand: ""
@@ -205,7 +257,7 @@ tasks:
       {
         "position": {
           "x": 450,
-          "y": 560
+          "y": 660
         }
       }
     note: false
@@ -220,39 +272,39 @@ inputs:
     value:
       simple: "https://github.com/cortex-cloud-demo/K8s-Container-Escape-Demo"
     required: false
-    description: "Source code repo URL. Default: demo repo. Override if pivoting on a different image."
+    description: "Source code repo URL for the image (Channel A). Default: demo repo. Override if pivoting on a different image."
     playbookInputQuery: null
   - key: CommitSHA
     value:
       simple: "main"
     required: false
-    description: "Git commit SHA that built the image. Default: 'main' branch. Use a specific SHA for accurate Dockerfile linking."
+    description: "Git commit SHA that built the image (Channel A). Default: 'main' branch. Use a specific SHA for accurate Dockerfile linking."
     playbookInputQuery: null
   - key: DockerfilePath
     value:
       simple: "Dockerfile"
     required: false
-    description: "Path to the Dockerfile in the repo (default: Dockerfile)"
+    description: "Path to the Dockerfile in the repo (Channel A). Default: Dockerfile"
     playbookInputQuery: null
   - key: CortexTenantURL
     value:
       simple: ""
     required: false
-    description: "OPTIONAL override for the Cortex tenant base URL used in deep links. Leave EMPTY to auto-detect via demisto.demistoUrls() (recommended). Only set this if you want to point links at a different console (e.g. https://france-xsiam.xdr.eu.paloaltonetworks.com)."
+    description: "OPTIONAL override for the Cortex tenant base URL used in deep links. Leave EMPTY to auto-detect via demisto.demistoUrls() (recommended)."
     playbookInputQuery: null
   - key: IssueFieldName
     value:
       simple: ""
     required: false
-    description: "Optional custom incident field to persist the markdown card (e.g. 'k8scodecloudpivot'). Leave EMPTY (default) if the field doesn't exist in your tenant - the card is always visible in the task output. Create the field once in Settings -> Object Setup -> Incident Fields if you want persistent storage on the issue."
+    description: "Optional custom incident field to persist the markdown card (e.g. 'k8scodecloudpivot'). Leave EMPTY (default) if the field doesn't exist - the card is always visible in the task output."
     playbookInputQuery: null
 inputSections:
   - inputs:
       - RepoURL
       - CommitSHA
       - DockerfilePath
-    name: Source Code Mapping
-    description: Repo / commit / Dockerfile path used to build the pivot card.
+    name: Channel A - Image -> Source (OCI labels)
+    description: Repo / commit / Dockerfile path for the image channel.
   - inputs:
       - CortexTenantURL
       - IssueFieldName
@@ -260,15 +312,66 @@ inputSections:
     description: Tenant URL for deep links + optional custom incident field for persistent card storage.
 outputSections:
   - outputs:
+      - K8sPivot.Triage.ContainerID
+      - K8sPivot.Triage.ContainerImageID
+      - K8sPivot.Triage.Namespace
+      - K8sPivot.Triage.ClusterName
+      - K8sPivot.Triage.NodeFQDN
+      - K8sPivot.Triage.NodeIPs
+      - K8sPivot.Triage.ProcessName
+      - K8sPivot.Triage.ProcessImageSHA256
+      - K8sPivot.Triage.Username
+      - K8sPivot.Triage.Severity
+      - K8sPivot.Triage.Details
+      - K8sPivot.Triage.IsSpringShell
+      - K8sPivot.Triage.IsWebshell
+      - K8sPivot.Triage.IsPrivilegedUser
+    name: Runtime Triage
+    description: Triage IOCs surfaced by ExtractK8sContainerEscapeIOCs (task #1) and embedded in the card.
+  - outputs:
       - K8sPivot.RegistryURL
       - K8sPivot.CWPFindingsURL
       - K8sPivot.RepoURL
       - K8sPivot.CommitURL
       - K8sPivot.DockerfileURL
       - K8sPivot.CodeSecurityURL
-    name: Pivot Links
-    description: 6 deep links from the runtime issue to image / code surfaces.
+    name: Channel A - Image Pivots
+    description: Deep links from the runtime issue to image / source code surfaces.
+  - outputs:
+      - K8sPivot.MarkdownCard
+      - K8sPivot.HasImageChannel
+      - K8sPivot.HasTriage
+    name: Unified Card
+    description: Full markdown card + section availability flags.
 outputs:
+  - contextPath: K8sPivot.Triage.ContainerID
+    description: Container ID (short form) where the escape originated
+  - contextPath: K8sPivot.Triage.ContainerImageID
+    description: SHA256 of the running container image
+  - contextPath: K8sPivot.Triage.Namespace
+    description: Kubernetes namespace of the compromised pod
+  - contextPath: K8sPivot.Triage.ClusterName
+    description: Cluster name hosting the compromised pod
+  - contextPath: K8sPivot.Triage.NodeFQDN
+    description: FQDN of the worker node where the escape was observed
+  - contextPath: K8sPivot.Triage.NodeIPs
+    description: List of IP addresses of the worker node
+  - contextPath: K8sPivot.Triage.ProcessName
+    description: Name of the malicious / suspicious process
+  - contextPath: K8sPivot.Triage.ProcessImageSHA256
+    description: SHA256 of the malicious / suspicious process image
+  - contextPath: K8sPivot.Triage.Username
+    description: Source user that ran the malicious process
+  - contextPath: K8sPivot.Triage.Severity
+    description: Severity surfaced by ExtractK8sContainerEscapeIOCs
+  - contextPath: K8sPivot.Triage.Details
+    description: Free-form attack details from the issue
+  - contextPath: K8sPivot.Triage.IsSpringShell
+    description: True if Spring4Shell indicators were matched in details
+  - contextPath: K8sPivot.Triage.IsWebshell
+    description: True if webshell indicators were matched in details
+  - contextPath: K8sPivot.Triage.IsPrivilegedUser
+    description: True if the source user is root / privileged
   - contextPath: K8sPivot.RegistryURL
     description: Deep link to the image in Cortex Cloud Registry view
   - contextPath: K8sPivot.CWPFindingsURL
@@ -281,12 +384,18 @@ outputs:
     description: Deep link to the Dockerfile at the build commit on GitHub
   - contextPath: K8sPivot.CodeSecurityURL
     description: Deep link to repo Code Security findings in Cortex Cloud
+  - contextPath: K8sPivot.MarkdownCard
+    description: Full unified "Investigation Code-to-Cloud" markdown card
+  - contextPath: K8sPivot.HasImageChannel
+    description: Boolean - whether Channel A (image) was populated
+  - contextPath: K8sPivot.HasTriage
+    description: Boolean - whether the runtime triage section was populated
 view: |-
   {
     "linkLabelsPosition": {},
     "paper": {
       "dimensions": {
-        "height": 740,
+        "height": 840,
         "width": 630,
         "x": 450,
         "y": 50

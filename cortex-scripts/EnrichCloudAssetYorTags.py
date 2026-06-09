@@ -1,0 +1,381 @@
+"""
+EnrichCloudAssetYorTags
+=========================
+Auto-enrichment script for the K8s Container Escape playbook.
+
+Queries the Cortex Cloud Asset Inventory for an EC2 instance (the K8s worker
+node where the container escape occurred) and extracts the Yor tags that were
+applied at `terraform apply` time. These tags carry the **Code-to-Cloud**
+identity of the resource:
+
+    yor_trace            -> unique UUID linking this EC2 to its .tf block
+    git_commit           -> SHA of the IaC commit that provisioned it
+    git_file             -> path to the .tf file in the IaC repo
+    git_last_modified_by -> email of the engineer who last touched the .tf
+    git_last_modified_at -> timestamp of that last IaC change
+    git_org, git_repo    -> IaC repo coordinates
+
+The script writes them to `K8sAsset.*` context so the downstream
+CodeToCloudPivot task can build the unified card without manual input.
+
+Identifier resolution (first non-empty wins):
+    1. instance_id  -> filter xdm.asset.strong_id == "i-xxx..."
+    2. host_name    -> filter xdm.asset.name == "ip-x-x-x-x.eu-west-3.compute.internal"
+    3. asset_id     -> filter xdm.asset.id == "<cortex sha256>"
+
+Backend:
+    xdr-xql-generic-query against the `cloud_inventory` dataset.
+
+Script arguments:
+    instance_id       AWS EC2 instance ID (e.g. "i-0d5e8c751a2249637")
+    host_name         FQDN reported by Cortex (e.g. "ip-10-0-1-105.eu-west-3.compute.internal")
+    asset_id          Cortex asset ID (sha256 hash)
+    time_frame        XQL lookback window (default "7 days")
+    cortex_tenant_url Cortex tenant base URL (informational, not required for XQL)
+
+Output context (K8sAsset.*):
+    YorTrace, IacGitCommit, IacGitFile, IacGitAuthor, IacGitLastModifiedAt,
+    IacGitOrg, IacGitRepo, IacRepoURL, CloudResourceID, CloudResourceType,
+    AssetID, AssetName, CloudProjectID, TagsFound, EnrichmentStatus
+"""
+
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+
+XQL_COMMAND = "xdr-xql-generic-query"
+DATASET = "cloud_inventory"
+DEFAULT_TIME_FRAME = "7 days"
+GITHUB_BASE = "https://github.com"
+
+
+# ==============================================================================
+# UTILITIES
+# ==============================================================================
+
+def get_arg(args, key, default=""):
+    v = args.get(key)
+    if v is None:
+        return default
+    return str(v).strip()
+
+
+def first_nonempty(*values):
+    for v in values:
+        if v:
+            return v
+    return ""
+
+
+def safe_get(d, *path, default=""):
+    """Walk a dict/path safely, returning default on any miss."""
+    cur = d
+    for k in path:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+        if cur is None:
+            return default
+    return cur if cur is not None else default
+
+
+# ==============================================================================
+# XQL QUERY BUILDER
+# ==============================================================================
+
+def build_xql_query(instance_id, host_name, asset_id):
+    """
+    Build an XQL query against cloud_inventory that returns one EC2 row with
+    all the tag fields we care about.
+
+    Uses the first non-empty identifier as the filter.
+    """
+    if instance_id:
+        filter_clause = 'xdm.asset.strong_id = "' + instance_id + '"'
+        identifier_used = "instance_id=" + instance_id
+    elif host_name:
+        filter_clause = 'xdm.asset.name = "' + host_name + '"'
+        identifier_used = "host_name=" + host_name
+    elif asset_id:
+        filter_clause = 'xdm.asset.id = "' + asset_id + '"'
+        identifier_used = "asset_id=" + asset_id
+    else:
+        return "", ""
+
+    # Project the fields we want. xdm.asset.tags is a map - we project the
+    # whole map and parse it in Python (XQL field projection of map keys is
+    # tenant-dependent; the whole-map approach is portable).
+    query = (
+        "dataset=" + DATASET + " "
+        "| filter " + filter_clause + " "
+        "| fields xdm.asset.id, xdm.asset.strong_id, xdm.asset.name, "
+        "xdm.asset.type.id, xdm.cloud.project_id, xdm.asset.tags "
+        "| limit 1"
+    )
+    return query, identifier_used
+
+
+# ==============================================================================
+# XQL EXECUTION + RESULT PARSING
+# ==============================================================================
+
+def run_xql(query, time_frame):
+    """
+    Execute the XQL query via demisto.executeCommand and return the first
+    result row as a dict (or None).
+    """
+    try:
+        result = demisto.executeCommand(XQL_COMMAND, {
+            "query_name": "K8sAsset - Yor Tag Enrichment",
+            "query": query,
+            "time_frame": time_frame,
+        })
+    except Exception as e:
+        return None, "executeCommand failed: " + str(e)
+
+    if is_error(result):
+        return None, "XQL error: " + str(get_error(result))
+
+    # The xdr-xql-generic-query command returns a list of entries.
+    # We dig for the rows in the EntryContext.
+    rows = []
+    if isinstance(result, list):
+        for entry in result:
+            if not isinstance(entry, dict):
+                continue
+            ctx = entry.get("EntryContext") or {}
+            # The exact key varies by tenant build; match the common shapes.
+            for ctx_key, ctx_val in ctx.items():
+                if "GenericQuery" not in ctx_key and "XQL" not in ctx_key:
+                    continue
+                # ctx_val can be a dict with "results" or a list directly.
+                if isinstance(ctx_val, dict):
+                    res = ctx_val.get("results")
+                    if isinstance(res, list):
+                        rows.extend(res)
+                    elif isinstance(res, dict):
+                        data = res.get("data")
+                        if isinstance(data, list):
+                            rows.extend(data)
+                elif isinstance(ctx_val, list):
+                    rows.extend(ctx_val)
+
+    if not rows:
+        return None, "no rows returned by XQL"
+    return rows[0], ""
+
+
+def extract_tags(row):
+    """
+    From an XQL result row, extract the xdm.asset.tags map.
+
+    XQL flattens nested paths so the row may carry either a nested
+    {"xdm": {"asset": {"tags": {...}}}} or a flat {"xdm.asset.tags": {...}}.
+    Handle both.
+    """
+    if not isinstance(row, dict):
+        return {}
+
+    # Flat form
+    flat = row.get("xdm.asset.tags")
+    if isinstance(flat, dict):
+        return flat
+
+    # Nested form
+    nested = safe_get(row, "xdm", "asset", "tags", default=None)
+    if isinstance(nested, dict):
+        return nested
+
+    return {}
+
+
+def extract_identifiers(row):
+    """Extract the asset identifiers from the row (flat or nested)."""
+    if not isinstance(row, dict):
+        return {}
+    out = {}
+    out["asset_id"] = first_nonempty(
+        row.get("xdm.asset.id"),
+        safe_get(row, "xdm", "asset", "id"),
+    )
+    out["strong_id"] = first_nonempty(
+        row.get("xdm.asset.strong_id"),
+        safe_get(row, "xdm", "asset", "strong_id"),
+    )
+    out["name"] = first_nonempty(
+        row.get("xdm.asset.name"),
+        safe_get(row, "xdm", "asset", "name"),
+    )
+    out["type_id"] = first_nonempty(
+        row.get("xdm.asset.type.id"),
+        safe_get(row, "xdm", "asset", "type", "id"),
+    )
+    out["project_id"] = first_nonempty(
+        row.get("xdm.cloud.project_id"),
+        safe_get(row, "xdm", "cloud", "project_id"),
+    )
+    return out
+
+
+# ==============================================================================
+# REPO URL DERIVATION
+# ==============================================================================
+
+def build_repo_url(git_org, git_repo):
+    """Construct the GitHub repo URL from Yor git_org + git_repo tags."""
+    if not git_org or not git_repo:
+        return ""
+    return GITHUB_BASE + "/" + git_org + "/" + git_repo
+
+
+# ==============================================================================
+# MARKDOWN SUMMARY (for the task output)
+# ==============================================================================
+
+def build_summary_md(identifier_used, ids, tags, status):
+    md = []
+    md.append("## Yor Tag Enrichment")
+    md.append("")
+    md.append("| Field | Value |")
+    md.append("|---|---|")
+    md.append("| Lookup | `" + identifier_used + "` |")
+    md.append("| Asset ID | `" + (ids.get("asset_id") or "_n/a_") + "` |")
+    md.append("| Instance ID | `" + (ids.get("strong_id") or "_n/a_") + "` |")
+    md.append("| Host Name | `" + (ids.get("name") or "_n/a_") + "` |")
+    md.append("| Type | `" + (ids.get("type_id") or "_n/a_") + "` |")
+    md.append("| Cloud Project | `" + (ids.get("project_id") or "_n/a_") + "` |")
+    md.append("| Status | **" + status + "** |")
+    md.append("")
+    if tags:
+        md.append("### Yor tags found (" + str(len(tags)) + ")")
+        md.append("")
+        md.append("| Tag | Value |")
+        md.append("|---|---|")
+        # Show Yor-related tags first for readability.
+        priority = ["yor_trace", "git_commit", "git_file",
+                    "git_last_modified_by", "git_last_modified_at",
+                    "git_org", "git_repo", "git_modifiers", "yor_name"]
+        seen = set()
+        for k in priority:
+            if k in tags:
+                md.append("| `" + k + "` | `" + str(tags[k]) + "` |")
+                seen.add(k)
+        for k, v in sorted(tags.items()):
+            if k not in seen:
+                md.append("| `" + k + "` | `" + str(v) + "` |")
+    else:
+        md.append("_No tags returned. Verify the EC2 has Yor tags via "
+                  "`tag_specifications` in the launch template, and that the "
+                  "Cortex Cloud connector has re-discovered it._")
+    md.append("")
+    return "\n".join(md)
+
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
+
+def main():
+    try:
+        args = demisto.args()
+        demisto.info("=== EnrichCloudAssetYorTags v1.0.0 START ===")
+
+        instance_id = get_arg(args, "instance_id")
+        host_name = get_arg(args, "host_name")
+        asset_id = get_arg(args, "asset_id")
+        time_frame = get_arg(args, "time_frame") or DEFAULT_TIME_FRAME
+
+        if not (instance_id or host_name or asset_id):
+            return_error("EnrichCloudAssetYorTags: provide at least one of "
+                         "instance_id, host_name, or asset_id.")
+            return
+
+        query, identifier_used = build_xql_query(instance_id, host_name, asset_id)
+        demisto.info("XQL identifier: " + identifier_used)
+        demisto.info("XQL query: " + query)
+
+        row, err = run_xql(query, time_frame)
+
+        if row is None:
+            status = "no result (" + err + ")"
+            demisto.info("XQL returned no row: " + err)
+            ids = {}
+            tags = {}
+        else:
+            status = "enriched"
+            ids = extract_identifiers(row)
+            tags = extract_tags(row)
+            demisto.info("Asset ids: " + str(ids))
+            demisto.info("Tag keys: " + ",".join(sorted(tags.keys())))
+
+        # Pull Yor tag values out of the map (empty string if missing).
+        yor_trace = str(tags.get("yor_trace", "") or "")
+        git_commit = str(tags.get("git_commit", "") or "")
+        git_file = str(tags.get("git_file", "") or "")
+        git_author = str(tags.get("git_last_modified_by", "") or "")
+        git_mod_at = str(tags.get("git_last_modified_at", "") or "")
+        git_org = str(tags.get("git_org", "") or "")
+        git_repo = str(tags.get("git_repo", "") or "")
+        iac_repo_url = build_repo_url(git_org, git_repo)
+
+        # Cloud resource header info for the pivot card.
+        cloud_resource_id = ids.get("strong_id") or instance_id
+        cloud_resource_type = "EKS Worker Node" if ids.get("type_id") == "EC2_INSTANCE" else (ids.get("type_id") or "")
+
+        entry_context = {
+            "K8sAsset.YorTrace": yor_trace,
+            "K8sAsset.IacGitCommit": git_commit,
+            "K8sAsset.IacGitFile": git_file,
+            "K8sAsset.IacGitAuthor": git_author,
+            "K8sAsset.IacGitLastModifiedAt": git_mod_at,
+            "K8sAsset.IacGitOrg": git_org,
+            "K8sAsset.IacGitRepo": git_repo,
+            "K8sAsset.IacRepoURL": iac_repo_url,
+            "K8sAsset.CloudResourceID": cloud_resource_id,
+            "K8sAsset.CloudResourceType": cloud_resource_type,
+            "K8sAsset.AssetID": ids.get("asset_id", ""),
+            "K8sAsset.AssetName": ids.get("name", ""),
+            "K8sAsset.CloudProjectID": ids.get("project_id", ""),
+            "K8sAsset.TagsFound": len(tags),
+            "K8sAsset.EnrichmentStatus": status,
+        }
+
+        human_readable = build_summary_md(identifier_used, ids, tags, status)
+
+        return_results({
+            "Type": entryTypes["note"],
+            "ContentsFormat": formats["json"],
+            "Contents": {
+                "Identifier": identifier_used,
+                "Status": status,
+                "AssetIDs": ids,
+                "YorTags": {
+                    "yor_trace": yor_trace,
+                    "git_commit": git_commit,
+                    "git_file": git_file,
+                    "git_last_modified_by": git_author,
+                    "git_last_modified_at": git_mod_at,
+                    "git_org": git_org,
+                    "git_repo": git_repo,
+                },
+                "IacRepoURL": iac_repo_url,
+                "RawTags": tags,
+            },
+            "HumanReadable": human_readable,
+            "EntryContext": entry_context,
+        })
+
+        demisto.info("=== EnrichCloudAssetYorTags v1.0.0 END ===")
+
+    except Exception as e:
+        error_msg = "Error in EnrichCloudAssetYorTags: " + str(e)
+        try:
+            demisto.error(error_msg)
+        except Exception:
+            pass
+        return_error(error_msg)
+
+
+if __name__ in ("__main__", "__builtin__", "builtins"):
+    main()

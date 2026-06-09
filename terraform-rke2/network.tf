@@ -8,7 +8,16 @@ resource "aws_vpc" "this" {
   enable_dns_support   = true
 
   tags = {
-    Name = "${var.project_name}-vpc"
+    Name                 = "${var.project_name}-vpc"
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-rke2/network.tf"
+    git_last_modified_at = "2026-06-09 14:45:00"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "this"
+    yor_trace            = "976eb9e3-9888-46b4-860b-a647a46130ea"
   }
 }
 
@@ -16,7 +25,16 @@ resource "aws_internet_gateway" "this" {
   vpc_id = aws_vpc.this.id
 
   tags = {
-    Name = "${var.project_name}-igw"
+    Name                 = "${var.project_name}-igw"
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-rke2/network.tf"
+    git_last_modified_at = "2026-06-09 14:45:00"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "this"
+    yor_trace            = "3618884b-f336-490c-972e-503dc52bacaa"
   }
 }
 
@@ -27,7 +45,16 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "${var.project_name}-public"
+    Name                 = "${var.project_name}-public"
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-rke2/network.tf"
+    git_last_modified_at = "2026-06-09 14:45:00"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "public"
+    yor_trace            = "101fde21-b3a8-43f1-b6f8-b6de520e7ca0"
   }
 }
 
@@ -40,7 +67,16 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name = "${var.project_name}-public-rt"
+    Name                 = "${var.project_name}-public-rt"
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-rke2/network.tf"
+    git_last_modified_at = "2026-06-09 14:45:00"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "public"
+    yor_trace            = "472a3174-7524-4bf7-91c5-0382d207493a"
   }
 }
 
@@ -95,6 +131,15 @@ resource "aws_security_group" "rke2" {
   }
 
   tags = {
-    Name = "${var.project_name}-sg"
+    Name                 = "${var.project_name}-sg"
+    git_commit           = "4bcffddfd7be2992bb534ba81c88740e95f22bab"
+    git_file             = "terraform-rke2/network.tf"
+    git_last_modified_at = "2026-06-09 14:45:00"
+    git_last_modified_by = "cley@paloaltonetworks.com"
+    git_modifiers        = "cley"
+    git_org              = "cortex-cloud-demo"
+    git_repo             = "K8s-Container-Escape-Demo"
+    yor_name             = "rke2"
+    yor_trace            = "9b510196-e04c-4873-9e7d-6ede61dec909"
   }
 }

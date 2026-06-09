@@ -505,6 +505,17 @@
                     </div>
 
                     <div class="cortex-object-item">
+                        <div class="cortex-object-info" onclick="showCortexDetail('EnrichCloudAssetYorTags')" style="cursor:pointer;">
+                            <span class="cortex-object-name">EnrichCloudAssetYorTags</span>
+                            <span class="cortex-object-desc">Enrich: Yor IaC tags (git commit, file, author) from Cortex Asset Inventory</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-script-enrich"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployScript('EnrichCloudAssetYorTags')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
                         <div class="cortex-object-info" onclick="showCortexDetail('AwsAddInternetExposedTagToS3Bucket')" style="cursor:pointer;">
                             <span class="cortex-object-name">AwsAddInternetExposedTagToS3Bucket</span>
                             <span class="cortex-object-desc">Add internet-exposed tag to a public S3 bucket</span>
