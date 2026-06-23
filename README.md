@@ -37,14 +37,28 @@ https://github.com/user-attachments/assets/be352d10-b865-4da2-a20d-8689d79344bd
 
 ### Prerequisites
 
-| Tool | Purpose |
-|------|---------|
-| **Docker Desktop** | Toolbox container + image build (only requirement) |
-| **Python 3.9+** | Dashboard application |
-| **AWS Account** | Infrastructure provisioning (admin for bootstrap) |
-| **Cortex XSIAM** | Detection, playbooks, CWP/IaC scanning (optional) |
+The goal is **zero local CLI install** — everything except Docker and Python runs inside the toolbox container.
 
-> All CLI tools (terraform, kubectl, aws, helm, cortexcli, node.js) run inside the toolbox container — no local installation needed.
+**On your machine (host):**
+
+| Requirement | Min version | Purpose | Notes |
+|-------------|-------------|---------|-------|
+| **Docker Desktop** | 23+ | Runs the toolbox container, builds & pushes the image | Must be **running**, with the Docker socket exposed at `/var/run/docker.sock`. BuildKit (default in 23+) handles the cross-arch `linux/amd64` build. |
+| **Python** | 3.9+ | Dashboard (Flask) — `run.sh` auto-creates a venv | Pre-installed on macOS/most Linux |
+| `bash` + `curl` | — | Launch script + attack scripts (run locally) | Native on macOS/Linux/WSL2 |
+| `git` | — | Clone the repo (build metadata, optional) | — |
+
+**Accounts (for the cloud demo):**
+
+| Account | Purpose | Required |
+|---------|---------|----------|
+| **AWS** | Infrastructure provisioning — EKS/ECR/IAM/Lambda (admin creds for bootstrap) | EKS & RKE2 modes |
+| **Cortex XSIAM** | Detection, playbooks, CWP/IaC scanning, onboarding | Optional (for the SOC side) |
+
+> [!NOTE]
+> **No local install of `terraform`, `kubectl`, `aws`, `helm`, `cortexcli`, or `node.js` is required** — they all live in the toolbox container and are invoked via `docker exec`. The dashboard automatically routes every cloud command into the toolbox (`aws`, `kubectl`, `terraform`, image build/push, onboarding…). The attack scripts only use `curl` locally; their `kubectl`/`aws` calls execute **remotely** on the compromised pod.
+>
+> If Docker is **not** available, the app falls back to running commands directly on the host — in that case the CLI tools above must be installed locally.
 
 ### 1. Clone & Launch
 

@@ -307,8 +307,10 @@ def ensure_rke2_kubeconfig(force_refresh=False):
     env.update(get_aws_env())
     param_name = f"/{RKE2_PROJECT_NAME}/kubeconfig"
     r = subprocess.run(
-        f"aws ssm get-parameter --region {region} --name {param_name} "
-        f"--with-decryption --query Parameter.Value --output text",
+        toolbox_cmd(
+            f"aws ssm get-parameter --region {region} --name {param_name} "
+            f"--with-decryption --query Parameter.Value --output text"
+        ),
         shell=True, capture_output=True, text=True, env=env, timeout=30,
     )
     if r.returncode != 0:
@@ -349,7 +351,7 @@ def generate_kubeconfig(cluster_name, region):
 
     # Get cluster details
     result = subprocess.run(
-        f"aws eks describe-cluster --name {cluster_name} --region {region} --output json",
+        toolbox_cmd(f"aws eks describe-cluster --name {cluster_name} --region {region} --output json"),
         shell=True,
         capture_output=True,
         text=True,
@@ -557,7 +559,7 @@ def test_credentials():
     env.update(get_aws_env())
     try:
         result = subprocess.run(
-            "aws sts get-caller-identity --output json",
+            toolbox_cmd("aws sts get-caller-identity --output json"),
             shell=True,
             capture_output=True,
             text=True,
@@ -695,7 +697,7 @@ def test_external_cluster():
             env["KUBECONFIG"] = byoc_kubeconfig
 
         result = subprocess.run(
-            "kubectl cluster-info 2>&1 && echo '---' && kubectl get nodes -o wide 2>&1",
+            toolbox_cmd("kubectl cluster-info 2>&1 && echo '---' && kubectl get nodes -o wide 2>&1"),
             shell=True, capture_output=True, text=True, env=env, timeout=15,
         )
         return jsonify({"status": "ok", "output": result.stdout + result.stderr})
@@ -865,7 +867,7 @@ def api_kubeconfig_status():
             cluster_name = result["cluster_name"] or "eks-escape-demo"
             region = result["region"] or env.get("AWS_REGION", "eu-west-3")
             token_r = subprocess.run(
-                f"aws eks get-token --cluster-name {cluster_name} --region {region} --output json",
+                toolbox_cmd(f"aws eks get-token --cluster-name {cluster_name} --region {region} --output json"),
                 shell=True, capture_output=True, text=True, env=env, timeout=15,
             )
             if token_r.returncode == 0:
@@ -886,7 +888,7 @@ def api_kubeconfig_status():
     try:
         debug_log.append("Running: kubectl version --output=json")
         version_r = subprocess.run(
-            "kubectl version --output=json",
+            toolbox_cmd("kubectl version --output=json"),
             shell=True, capture_output=True, text=True, env=env, timeout=15,
         )
         debug_log.append(f"kubectl version exit code: {version_r.returncode}")
@@ -923,7 +925,7 @@ def api_kubeconfig_status():
     if result["connected"]:
         try:
             nodes_r = subprocess.run(
-                "kubectl get nodes --no-headers -o custom-columns='NAME:.metadata.name,STATUS:.status.conditions[-1].type,VERSION:.status.nodeInfo.kubeletVersion'",
+                toolbox_cmd("kubectl get nodes --no-headers -o custom-columns='NAME:.metadata.name,STATUS:.status.conditions[-1].type,VERSION:.status.nodeInfo.kubeletVersion'"),
                 shell=True, capture_output=True, text=True, env=env, timeout=10,
             )
             if nodes_r.returncode == 0:
@@ -1259,7 +1261,7 @@ def infra_outputs():
         env = os.environ.copy()
         env.update(get_aws_env())
         result = subprocess.run(
-            "terraform output -json",
+            toolbox_cmd("terraform output -json", cwd=TERRAFORM_DIR),
             shell=True,
             capture_output=True,
             text=True,
@@ -1343,8 +1345,10 @@ echo "  Store and auto-configure BYOC once the kubeconfig is up."
         deadline = time.time() + 10 * 60
         while time.time() < deadline:
             r = subprocess.run(
-                f"aws ssm get-parameter --region {aws_credentials.get('aws_region') or 'eu-west-3'} "
-                f"--name {param_name} --query Parameter.Name --output text",
+                toolbox_cmd(
+                    f"aws ssm get-parameter --region {aws_credentials.get('aws_region') or 'eu-west-3'} "
+                    f"--name {param_name} --query Parameter.Name --output text"
+                ),
                 shell=True, capture_output=True, text=True, env=env, timeout=10,
             )
             if r.returncode == 0 and param_name in r.stdout:
@@ -1352,8 +1356,10 @@ echo "  Store and auto-configure BYOC once the kubeconfig is up."
             time.sleep(15)
         # Fetch the actual kubeconfig content (decrypted)
         r2 = subprocess.run(
-            f"aws ssm get-parameter --region {aws_credentials.get('aws_region') or 'eu-west-3'} "
-            f"--name {param_name} --with-decryption --query Parameter.Value --output text",
+            toolbox_cmd(
+                f"aws ssm get-parameter --region {aws_credentials.get('aws_region') or 'eu-west-3'} "
+                f"--name {param_name} --with-decryption --query Parameter.Value --output text"
+            ),
             shell=True, capture_output=True, text=True, env=env, timeout=60,
         )
         kc = r2.stdout.strip()
@@ -1427,7 +1433,7 @@ def infra_rke2_outputs():
         env = os.environ.copy()
         env.update(get_aws_env())
         result = subprocess.run(
-            "terraform output -json",
+            toolbox_cmd("terraform output -json", cwd=TERRAFORM_RKE2_DIR),
             shell=True, capture_output=True, text=True,
             cwd=TERRAFORM_RKE2_DIR, env=env, timeout=30,
         )
@@ -1779,16 +1785,16 @@ BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo "    GIT_COMMIT=$GIT_COMMIT"
 echo "    GIT_REPO_URL=$GIT_REPO_URL"
 echo "    BUILD_DATE=$BUILD_DATE"
-docker buildx build --platform linux/amd64 \\
+DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \\
   --build-arg GIT_COMMIT="$GIT_COMMIT" \\
   --build-arg GIT_REPO_URL="$GIT_REPO_URL" \\
   --build-arg BUILD_DATE="$BUILD_DATE" \\
-  -t "${ECR_URL}:latest" --load .
+  -t "${ECR_URL}:latest" .
 RC=$?
 if [ $RC -ne 0 ]; then
   echo ""
-  echo "✗ FAILED: docker buildx build returned $RC."
-  echo "  Common causes: missing buildx, no QEMU for cross-arch on Apple Silicon,"
+  echo "✗ FAILED: docker build returned $RC."
+  echo "  Common causes: no QEMU for cross-arch on Apple Silicon,"
   echo "  or Dockerfile error. Check the build output above."
   exit 1
 fi
@@ -1806,7 +1812,7 @@ fi
 echo ""
 echo "==> Done! Image pushed to ${ECR_URL}:latest"
 """
-    task_id = create_task("Build & Push Image", cmd, use_toolbox=False)
+    task_id = create_task("Build & Push Image", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -1978,7 +1984,7 @@ def k8s_status():
         env = os.environ.copy()
         env.update(get_aws_env())
         result = subprocess.run(
-            "kubectl get pods,svc -n vuln-app -o wide 2>/dev/null",
+            toolbox_cmd("kubectl get pods,svc -n vuln-app -o wide 2>/dev/null"),
             shell=True,
             capture_output=True,
             text=True,
@@ -2016,6 +2022,7 @@ def kubectl_exec():
     task_id = create_task(
         f"kubectl {args[:40]}",
         f"kubectl {args}",
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
@@ -2027,7 +2034,7 @@ def _kubectl_jsonpath(jsonpath, extra=""):
     env = os.environ.copy()
     env.update(get_aws_env())
     r = subprocess.run(
-        f"kubectl {extra} -o jsonpath='{jsonpath}' 2>/dev/null",
+        toolbox_cmd(f"kubectl {extra} -o jsonpath='{jsonpath}' 2>/dev/null"),
         shell=True, capture_output=True, text=True, env=env,
     )
     return r.stdout.strip().strip("'")
@@ -2055,7 +2062,7 @@ def get_host():
             env = os.environ.copy()
             env.update(get_aws_env())
             r = subprocess.run(
-                "kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null",
+                toolbox_cmd("kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null"),
                 shell=True, capture_output=True, text=True, env=env,
             )
             server = r.stdout.strip().strip("'")
@@ -2393,6 +2400,7 @@ def playbook_run_step(step_id):
     task_id = create_task(
         f"Cortex: {step['name']}",
         f"set -e\n{step['kubectl']}",
+        use_toolbox=True,
     )
     return jsonify({"task_id": task_id})
 
@@ -2406,7 +2414,7 @@ def playbook_run_all():
         all_cmds.append(f'echo "{"=" * 50}"\necho ""\n{step["kubectl"]}')
 
     full_script = "\n".join(all_cmds)
-    task_id = create_task("Cortex: Full Containment Playbook", f"set -e\n{full_script}")
+    task_id = create_task("Cortex: Full Containment Playbook", f"set -e\n{full_script}", use_toolbox=True)
     return jsonify({"task_id": task_id})
 
 
@@ -3514,26 +3522,30 @@ def xdr_k8s_agent_status():
     try:
         # Check for Cortex agent pods in cortex-xdr namespace
         result = subprocess.run(
-            ["kubectl", "get", "pods", "-n", "cortex-xdr",
-             "-o", "jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.phase}{'\\n'}{end}"],
-            capture_output=True, text=True, env=env, timeout=15
+            toolbox_cmd(
+                "kubectl get pods -n cortex-xdr -o "
+                "\"jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.phase}{'\\n'}{end}\""
+            ),
+            shell=True, capture_output=True, text=True, env=env, timeout=15
         )
         pods_output = result.stdout.strip()
 
         if not pods_output:
             # Try broader search with label
             result2 = subprocess.run(
-                ["kubectl", "get", "pods", "-A", "-l", "app.kubernetes.io/name=cortex-agent",
-                 "-o", "jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.phase}{'\\n'}{end}"],
-                capture_output=True, text=True, env=env, timeout=15
+                toolbox_cmd(
+                    "kubectl get pods -A -l app.kubernetes.io/name=cortex-agent -o "
+                    "\"jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.phase}{'\\n'}{end}\""
+                ),
+                shell=True, capture_output=True, text=True, env=env, timeout=15
             )
             pods_output = result2.stdout.strip()
 
         if not pods_output:
             # Last resort: search for any cortex/xdr pod
             result3 = subprocess.run(
-                ["kubectl", "get", "pods", "-A", "--no-headers"],
-                capture_output=True, text=True, env=env, timeout=15
+                toolbox_cmd("kubectl get pods -A --no-headers"),
+                shell=True, capture_output=True, text=True, env=env, timeout=15
             )
             xdr_lines = [l for l in result3.stdout.strip().split("\n") if l and ("cortex" in l.lower() or "xdr" in l.lower())]
             pods_output = "\n".join(xdr_lines) if xdr_lines else ""
@@ -3812,7 +3824,7 @@ def security_posture():
 
     # 1. NetworkPolicy: deny-all exists?
     r = subprocess.run(
-        "kubectl get networkpolicy containment-deny-all -n vuln-app -o jsonpath='{.metadata.name}' 2>/dev/null",
+        toolbox_cmd("kubectl get networkpolicy containment-deny-all -n vuln-app -o jsonpath='{.metadata.name}' 2>/dev/null"),
         shell=True, capture_output=True, text=True, env=env, timeout=timeout,
     )
     has_netpol = r.returncode == 0 and "containment-deny-all" in r.stdout
@@ -3826,7 +3838,7 @@ def security_posture():
 
     # 2. ClusterRoleBinding: cluster-admin for vuln-app SA?
     r = subprocess.run(
-        "kubectl get clusterrolebinding vuln-app-cluster-admin -o jsonpath='{.metadata.name}' 2>/dev/null",
+        toolbox_cmd("kubectl get clusterrolebinding vuln-app-cluster-admin -o jsonpath='{.metadata.name}' 2>/dev/null"),
         shell=True, capture_output=True, text=True, env=env, timeout=timeout,
     )
     has_crb = r.returncode == 0 and "vuln-app-cluster-admin" in r.stdout
@@ -3840,7 +3852,7 @@ def security_posture():
 
     # 3. Pods: running in vuln-app?
     r = subprocess.run(
-        "kubectl get pods -n vuln-app -o json 2>/dev/null",
+        toolbox_cmd("kubectl get pods -n vuln-app -o json 2>/dev/null"),
         shell=True, capture_output=True, text=True, env=env, timeout=timeout,
     )
     pods = []
@@ -3874,7 +3886,7 @@ def security_posture():
 
     # 4. Deployment: replicas?
     r = subprocess.run(
-        "kubectl get deployment vuln-app -n vuln-app -o json 2>/dev/null",
+        toolbox_cmd("kubectl get deployment vuln-app -n vuln-app -o json 2>/dev/null"),
         shell=True, capture_output=True, text=True, env=env, timeout=timeout,
     )
     replicas = -1
@@ -3898,7 +3910,7 @@ def security_posture():
 
     # 5. Nodes: cordoned?
     r = subprocess.run(
-        "kubectl get nodes -o json 2>/dev/null",
+        toolbox_cmd("kubectl get nodes -o json 2>/dev/null"),
         shell=True, capture_output=True, text=True, env=env, timeout=timeout,
     )
     nodes = []
@@ -3924,7 +3936,7 @@ def security_posture():
 
     # 6. Evidence: check if events exist
     r = subprocess.run(
-        "kubectl get events -n vuln-app --no-headers 2>/dev/null | wc -l",
+        toolbox_cmd("kubectl get events -n vuln-app --no-headers 2>/dev/null | wc -l"),
         shell=True, capture_output=True, text=True, env=env, timeout=timeout,
     )
     event_count = 0
@@ -3964,7 +3976,7 @@ def onboarding_aws_status():
     env.update(get_aws_env())
     try:
         sts = subprocess.run(
-            "aws sts get-caller-identity --output json",
+            toolbox_cmd("aws sts get-caller-identity --output json"),
             shell=True, capture_output=True, text=True, env=env,
         )
         if sts.returncode != 0:
@@ -4055,7 +4067,7 @@ def onboarding_aws():
 
     try:
         sts = subprocess.run(
-            "aws sts get-caller-identity --output json",
+            toolbox_cmd("aws sts get-caller-identity --output json"),
             shell=True, capture_output=True, text=True, env=env,
         )
         if sts.returncode != 0:
@@ -4171,6 +4183,7 @@ aws cloudformation describe-stacks \\
         name="AWS Onboarding — Cortex Cloud Security",
         command=script,
         env_extra=get_aws_env(),
+        use_toolbox=True,
     )
     return jsonify({"status": "ok", "task_id": task_id})
 
