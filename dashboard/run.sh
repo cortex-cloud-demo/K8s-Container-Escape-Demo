@@ -87,10 +87,26 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
 
         echo "  [toolbox] Building for $BUILD_PLATFORM..."
 
-        # Check if image already exists (skip build if so)
+        # Rebuild when the image is missing OR Dockerfile.toolbox changed.
+        # We stamp the image with a SHA-256 of Dockerfile.toolbox (as a label)
+        # and compare it on each start. Content-based on purpose: git clone/pull
+        # does not preserve file mtimes, so a date comparison would be unreliable.
+        DF_HASH=$(shasum -a 256 Dockerfile.toolbox 2>/dev/null | awk '{print $1}')
+        [ -z "$DF_HASH" ] && DF_HASH=$(sha256sum Dockerfile.toolbox 2>/dev/null | awk '{print $1}')
+
+        NEED_BUILD=true
         if docker image inspect "$TOOLBOX_IMAGE" > /dev/null 2>&1; then
-            echo "  [toolbox] Image already exists, skipping build (delete image to force rebuild)"
-        else
+            IMG_HASH=$(docker image inspect "$TOOLBOX_IMAGE" \
+                --format '{{ index .Config.Labels "toolbox_dockerfile_sha" }}' 2>/dev/null)
+            if [ -n "$DF_HASH" ] && [ "$IMG_HASH" = "$DF_HASH" ]; then
+                NEED_BUILD=false
+                echo "  [toolbox] Image up to date (Dockerfile.toolbox unchanged), skipping build"
+            else
+                echo "  [toolbox] Dockerfile.toolbox changed since last build — rebuilding..."
+            fi
+        fi
+
+        if [ "$NEED_BUILD" = true ]; then
             # Build with retry (Docker Hub can be temporarily unavailable)
             BUILD_OK=false
             for attempt in 1 2 3; do
@@ -98,6 +114,7 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
                 if docker build \
                     --platform "$BUILD_PLATFORM" \
                     -f Dockerfile.toolbox \
+                    --label "toolbox_dockerfile_sha=$DF_HASH" \
                     -t "$TOOLBOX_IMAGE" . 2>&1 | while read line; do
                     echo "  [toolbox] $line"
                 done; then
