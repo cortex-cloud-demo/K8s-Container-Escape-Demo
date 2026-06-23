@@ -160,6 +160,43 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
 
         echo "  [toolbox] Container started: $TOOLBOX_CONTAINER"
 
+        # ── Transparent CA trust (VPN / corporate SSL inspection) ────────────
+        # Some networks (GlobalProtect, Zscaler, corporate proxies) intercept
+        # TLS and present certificates signed by an internal CA. The host OS
+        # already trusts that CA (browsers work), so we export the host's
+        # trusted roots and add them to the toolbox trust store. This makes
+        # downloads that do strict TLS verification (e.g. terraform fetching
+        # providers from github.com) work behind inspection — on any laptop,
+        # on or off VPN. With no extra CA present it is a harmless no-op.
+        HOST_CA="$(mktemp 2>/dev/null || echo /tmp/host-ca.pem)"
+        : > "$HOST_CA"
+        case "$(uname -s)" in
+            Darwin)
+                # macOS — System keychain holds MDM/corporate-pushed CAs
+                security find-certificate -a -p /Library/Keychains/System.keychain >> "$HOST_CA" 2>/dev/null
+                security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain >> "$HOST_CA" 2>/dev/null
+                ;;
+            Linux)
+                # Linux host / VM trust store (Debian/Ubuntu, then RHEL/Fedora)
+                [ -f /etc/ssl/certs/ca-certificates.crt ] && cat /etc/ssl/certs/ca-certificates.crt >> "$HOST_CA" 2>/dev/null
+                [ -f /etc/pki/tls/certs/ca-bundle.crt ]   && cat /etc/pki/tls/certs/ca-bundle.crt   >> "$HOST_CA" 2>/dev/null
+                # WSL2 (Docker Desktop on Windows): the corporate/VPN CA usually
+                # lives in the Windows store, not the WSL distro — import it too.
+                if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null && command -v powershell.exe >/dev/null 2>&1; then
+                    powershell.exe -NoProfile -Command \
+                        "Get-ChildItem Cert:\LocalMachine\Root,Cert:\LocalMachine\CA | ForEach-Object { '-----BEGIN CERTIFICATE-----'; [Convert]::ToBase64String(\$_.RawData,'InsertLineBreaks'); '-----END CERTIFICATE-----' }" \
+                        2>/dev/null | tr -d '\r' >> "$HOST_CA"
+                fi
+                ;;
+        esac
+        if [ -s "$HOST_CA" ]; then
+            if docker cp "$HOST_CA" "$TOOLBOX_CONTAINER:/usr/local/share/ca-certificates/host-trusted.crt" >/dev/null 2>&1 \
+               && docker exec "$TOOLBOX_CONTAINER" update-ca-certificates >/dev/null 2>&1; then
+                echo "  [toolbox] Host CA trust synced (VPN / proxy friendly)"
+            fi
+        fi
+        rm -f "$HOST_CA"
+
         # Verify tools
         echo "  [toolbox] Versions:"
         docker exec "$TOOLBOX_CONTAINER" bash -c '
