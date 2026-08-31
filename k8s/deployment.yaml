@@ -5,6 +5,10 @@
 #   - hostPID: true
 #   - hostNetwork: true
 #   - hostPath mount of /
+# NOTE: on GKE the deploy path strips hostNetwork at apply time (the GKE node
+# already binds :8080, which would make Tomcat fail with BindException). The
+# escape still works there via hostPID+privileged (nsenter --target 1 --net
+# reaches the host network ns). EKS/RKE2 keep hostNetwork as shown here.
 #   - Overprivileged ServiceAccount (cluster-admin)
 #   - No resource limits
 #   - No readOnlyRootFilesystem

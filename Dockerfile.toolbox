@@ -52,6 +52,19 @@ RUN ARCH=$(dpkg --print-architecture) && \
     curl -skL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
 
+# ─── Google Cloud SDK (gcloud) + GKE auth plugin ─────────────────────────────
+# Required for `gcloud container clusters get-credentials` (GKE connection) and
+# for kubectl to authenticate against GKE via the gke-gcloud-auth-plugin exec.
+# The apt repo serves both amd64 and arm64.
+RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends \
+        google-cloud-cli \
+        google-cloud-cli-gke-gcloud-auth-plugin && \
+    rm -rf /var/lib/apt/lists/* && \
+    echo "gcloud $(gcloud --version 2>/dev/null | head -1) installed"
+
 # ─── Node.js v22 (required by cortexcli for code scan) ───────────────────────
 RUN ARCH=$(dpkg --print-architecture) && \
     NODE_VERSION=22.15.0 && \
@@ -112,6 +125,8 @@ RUN echo "=== Toolbox versions ===" && \
     (aws --version 2>/dev/null || echo "aws: not available") && \
     (terraform --version 2>/dev/null | head -1 || echo "terraform: not available") && \
     (kubectl version --client 2>/dev/null | head -1 || echo "kubectl: not available") && \
+    (gcloud --version 2>/dev/null | head -1 || echo "gcloud: not available") && \
+    (gke-gcloud-auth-plugin --version 2>/dev/null | head -1 || echo "gke-gcloud-auth-plugin: not available") && \
     (helm version --short 2>/dev/null || echo "helm: not available") && \
     (node --version 2>/dev/null || echo "node: not available") && \
     (cortexcli --version 2>/dev/null || echo "cortexcli: not available") && \

@@ -1843,13 +1843,14 @@ function cancelGcpDestroy() {
 
 function buildPush() {
     openTab('terminal');
-    termWriteHeader('Build & Push Vulnerable Image to ECR');
+    const registry = (state.infraMode === 'gcp') ? 'Artifact Registry' : 'ECR';
+    termWriteHeader(`Build & Push Vulnerable Image to ${registry}`);
     apiCall('/api/image/build-push');
 }
 
 function deployApp() {
     openTab('terminal');
-    termWriteHeader('Deploy Vulnerable App to EKS');
+    termWriteHeader(`Deploy Vulnerable App to ${modeLabel(state.infraMode)}`);
     apiCall('/api/k8s/deploy');
 }
 
@@ -3258,6 +3259,14 @@ function applyInfraMode(mode) {
     const clusterDescEl = document.getElementById('cluster-conn-desc');
     if (clusterDescEl && clusterDescEl.textContent.startsWith('Generate kubeconfig')) {
         clusterDescEl.textContent = `Generate kubeconfig to connect to ${modeLabel(mode)}`;
+    }
+
+    // BUILD card description follows the registry of the active mode
+    const buildDescEl = document.getElementById('build-push-desc');
+    if (buildDescEl) {
+        buildDescEl.textContent = isGcp
+            ? 'Docker build + push vuln app to Artifact Registry'
+            : 'Docker build + push vuln app to ECR';
     }
 
     // Mode badge in the MODE card status

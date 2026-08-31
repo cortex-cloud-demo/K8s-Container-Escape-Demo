@@ -416,6 +416,87 @@ def generate_kubeconfig(cluster_name, region):
     return KUBECONFIG_PATH
 
 
+def generate_gke_kubeconfig():
+    """Fetch a GKE kubeconfig via `gcloud container clusters get-credentials`.
+
+    Runs inside the toolbox container, which already injects the GCP service
+    account (GOOGLE_APPLICATION_CREDENTIALS) and points KUBECONFIG at
+    .kubeconfig. The generated kubeconfig uses the gke-gcloud-auth-plugin exec
+    entry, which resolves credentials from the same SA at kubectl time.
+
+    Returns (ok, message, info).
+    """
+    if not gcp_credentials.get("service_account_json"):
+        return False, (
+            "GCP credentials not configured. Add a service account JSON in "
+            "the GCP Credentials card first."
+        ), {}
+
+    env = os.environ.copy()
+    env.update(get_gcp_env())
+
+    project = tf_output(TERRAFORM_GCP_DIR, "project_id", env) or gcp_credentials.get("project_id", "")
+    region = tf_output(TERRAFORM_GCP_DIR, "region", env) or gcp_credentials.get("region") or "europe-west1"
+    cluster = tf_output(TERRAFORM_GCP_DIR, "cluster_name", env) or "gke-escape-demo"
+
+    if not project:
+        return False, "GCP project_id not configured. Add GCP credentials first.", {}
+
+    # gcloud CLI needs an explicit activate-service-account (it does not read
+    # GOOGLE_APPLICATION_CREDENTIALS for its own auth like the client libs do).
+    # get-credentials writes to KUBECONFIG, which the toolbox maps to .kubeconfig.
+    script = (
+        "set -e; "
+        "export USE_GKE_GCLOUD_AUTH_PLUGIN=True; "
+        "command -v gcloud >/dev/null 2>&1 || { "
+        "echo 'gcloud CLI not found in toolbox — rebuild the toolbox image "
+        "(Dockerfile.toolbox now installs google-cloud-cli).' >&2; exit 127; }; "
+        "echo '==> gcloud auth activate-service-account'; "
+        'gcloud auth activate-service-account '
+        '--key-file="$GOOGLE_APPLICATION_CREDENTIALS" '
+        f"--project={project}; "
+        "echo '==> gcloud container clusters get-credentials'; "
+        f"gcloud container clusters get-credentials {cluster} "
+        f"--region {region} --project {project}"
+    )
+    # Start from a clean kubeconfig: gcloud MERGES into an existing file, so a
+    # stale EKS entry from a previous mode would linger as clusters[0] and get
+    # shown as the cluster name even though the active context is GKE.
+    try:
+        if os.path.isfile(KUBECONFIG_PATH):
+            os.remove(KUBECONFIG_PATH)
+    except OSError:
+        pass
+    try:
+        r = subprocess.run(
+            toolbox_cmd(script),
+            shell=True, capture_output=True, text=True, env=env, timeout=90,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "gcloud container clusters get-credentials timed out (90s).", {}
+
+    if r.returncode != 0:
+        combined = "\n".join(p for p in (r.stderr.strip(), r.stdout.strip()) if p)
+        msg = combined or f"exit code {r.returncode} (no output)"
+        return False, f"gcloud get-credentials failed: {msg}", {}
+
+    # Behind a TLS-intercepting VPN (GlobalProtect decrypt-untrust) the GKE API
+    # server cert won't validate against the embedded CA. Match the RKE2 path
+    # and skip TLS verification so kubectl works on or off VPN.
+    try:
+        if os.path.isfile(KUBECONFIG_PATH):
+            with open(KUBECONFIG_PATH) as f:
+                patched = patch_kubeconfig_skip_tls(f.read())
+            with open(KUBECONFIG_PATH, "w") as f:
+                f.write(patched)
+    except Exception as e:
+        # Non-fatal: kubeconfig is still usable when no TLS interception occurs.
+        print(f"Warning: could not patch GKE kubeconfig for skip-tls: {e}")
+
+    info = {"cluster": cluster, "region": region, "project": project}
+    return True, "kubeconfig fetched via gcloud", info
+
+
 def run_command(task_id, command, cwd=None, env_extra=None, use_toolbox=False):
     """Run a shell command asynchronously and store streaming output.
     If use_toolbox=True and the toolbox container is running, the command
@@ -772,6 +853,18 @@ def api_generate_kubeconfig():
                 "mode": "byoc",
             })
 
+        if mode == "gcp":
+            ok, msg, info = generate_gke_kubeconfig()
+            if not ok:
+                return jsonify({"status": "error", "message": msg, "mode": "gcp"}), 500
+            return jsonify({
+                "status": "ok",
+                "path": KUBECONFIG_PATH,
+                "cluster": info.get("cluster") or "gke-escape-demo",
+                "region": info.get("region") or gcp_credentials.get("region") or "europe-west1",
+                "mode": "gcp",
+            })
+
         # EKS (default)
         env = os.environ.copy()
         env.update(get_aws_env())
@@ -795,7 +888,10 @@ def api_kubeconfig_status():
     """
     debug_log = []
     mode = (app_settings.get("infra_mode") or "eks").lower()
+    # BYOC/RKE2 use the .kubeconfig-byoc file; EKS and GKE use .kubeconfig.
     is_external = mode in ("rke2", "byoc")
+    # Only EKS needs the AWS exec plugin / aws eks get-token pre-check.
+    is_aws = mode == "eks"
     kubeconfig_file = KUBECONFIG_BYOC_PATH if is_external else KUBECONFIG_PATH
 
     result = {
@@ -830,11 +926,30 @@ def api_kubeconfig_status():
         with open(kubeconfig_file) as f:
             kc = yaml.safe_load(f)
         if kc and kc.get("clusters"):
-            result["cluster_name"] = kc["clusters"][0]["name"]
-            result["endpoint"] = kc["clusters"][0]["cluster"].get("server", "")
+            # Resolve the cluster tied to the active context (not just [0]) so a
+            # merged/stale entry from a previous mode isn't shown by mistake.
+            cur_ctx = kc.get("current-context")
+            ctx_cluster = None
+            for c in kc.get("contexts", []):
+                if c.get("name") == cur_ctx:
+                    ctx_cluster = (c.get("context") or {}).get("cluster")
+                    break
+            entry = None
+            if ctx_cluster:
+                for cl in kc["clusters"]:
+                    if cl.get("name") == ctx_cluster:
+                        entry = cl
+                        break
+            if entry is None:
+                entry = kc["clusters"][0]
+            result["cluster_name"] = entry.get("name")
+            result["endpoint"] = (entry.get("cluster") or {}).get("server", "")
+            debug_log.append(f"Active context: {cur_ctx}")
             debug_log.append(f"Cluster: {result['cluster_name']}")
             debug_log.append(f"Endpoint: {result['endpoint']}")
-        if kc and kc.get("users") and not is_external:
+        if mode == "gcp":
+            result["region"] = gcp_credentials.get("region") or result["region"]
+        if kc and kc.get("users") and is_aws:
             user_exec = kc["users"][0].get("user", {}).get("exec", {})
             args = user_exec.get("args", [])
             for i, a in enumerate(args):
@@ -853,16 +968,21 @@ def api_kubeconfig_status():
     # Build env: for EKS we need AWS creds for the exec plugin; for BYOC/RKE2
     # we only need KUBECONFIG to point at the right file.
     env = os.environ.copy()
-    if is_external:
-        env["KUBECONFIG"] = kubeconfig_file
-    else:
+    if is_aws:
         env.update(get_aws_env())
         debug_log.append(f"AWS_ACCESS_KEY_ID set in env: {bool(env.get('AWS_ACCESS_KEY_ID'))}")
         debug_log.append(f"AWS_SESSION_TOKEN set in env: {bool(env.get('AWS_SESSION_TOKEN'))}")
         debug_log.append(f"AWS_REGION: {env.get('AWS_REGION', 'not set')}")
+    else:
+        env["KUBECONFIG"] = kubeconfig_file
+        # GKE: the toolbox injects the SA creds; also set them for the local
+        # fallback path so the gke-gcloud-auth-plugin can authenticate.
+        if mode == "gcp":
+            env.update(get_gcp_env())
+            debug_log.append(f"GOOGLE_APPLICATION_CREDENTIALS set: {bool(env.get('GOOGLE_APPLICATION_CREDENTIALS'))}")
 
     # Step 1 (EKS only): test aws eks get-token
-    if not is_external:
+    if is_aws:
         try:
             cluster_name = result["cluster_name"] or "eks-escape-demo"
             region = result["region"] or env.get("AWS_REGION", "eu-west-3")
@@ -1718,6 +1838,116 @@ echo "=================================================="
 
 @app.route("/api/image/build-push", methods=["POST"])
 def image_build_push():
+    mode = (app_settings.get("infra_mode") or "eks").lower()
+
+    if mode == "gcp":
+        cmd = """
+set -uo pipefail
+
+echo "==> Resolving configuration (GKE / Artifact Registry)..."
+
+command -v gcloud >/dev/null 2>&1 || {
+  echo ""
+  echo "✗ FAILED: gcloud CLI not found in toolbox — rebuild the toolbox image."
+  exit 1
+}
+
+if [ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] || [ ! -f "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+  echo ""
+  echo "✗ FAILED: GCP service account not available."
+  echo "  Fix: open the GCP Credentials card and paste a service account JSON."
+  exit 1
+fi
+
+PROJECT="${GOOGLE_CLOUD_PROJECT:-}"
+if [ -z "$PROJECT" ]; then
+  PROJECT=$(cd terraform-gcp-infra 2>/dev/null && terraform output -raw project_id 2>/dev/null || true)
+fi
+echo "    PROJECT=$PROJECT"
+
+AR_URL=$(cd terraform-gcp-infra 2>/dev/null && terraform output -raw artifact_registry_url 2>/dev/null || true)
+if [ -z "$AR_URL" ]; then
+  echo ""
+  echo "✗ FAILED: cannot resolve Artifact Registry URL."
+  echo "  Fix: run INFRA > Apply first (creates the Artifact Registry repo)."
+  exit 1
+fi
+IMAGE="${AR_URL}/vuln-app:latest"
+REGISTRY_HOST="${AR_URL%%/*}"
+echo "    AR_URL=$AR_URL"
+echo "    IMAGE=$IMAGE"
+echo "    REGISTRY=$REGISTRY_HOST"
+
+if ! docker info >/dev/null 2>&1; then
+  echo ""
+  echo "✗ FAILED: Docker daemon is not running."
+  echo "  Fix: start Docker Desktop and retry."
+  exit 1
+fi
+
+echo "==> Authenticating to Google Cloud..."
+gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" --project="$PROJECT" || {
+  echo "✗ FAILED: gcloud auth activate-service-account failed."
+  exit 1
+}
+
+echo "==> Logging in to Artifact Registry ($REGISTRY_HOST)..."
+docker login -u _json_key --password-stdin "https://${REGISTRY_HOST}" < "$GOOGLE_APPLICATION_CREDENTIALS"
+RC=$?
+if [ $RC -ne 0 ]; then
+  echo ""
+  echo "✗ FAILED: Artifact Registry login failed."
+  echo "  Fix: check the SA has roles/artifactregistry.writer."
+  exit 1
+fi
+
+echo "==> Building image (linux/amd64)..."
+GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_REPO_URL=$(git config --get remote.origin.url 2>/dev/null | sed -E 's#git@github.com:#https://github.com/#; s#\\.git$##' || echo "unknown")
+BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "    GIT_COMMIT=$GIT_COMMIT"
+echo "    GIT_REPO_URL=$GIT_REPO_URL"
+echo "    BUILD_DATE=$BUILD_DATE"
+DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \\
+  --build-arg GIT_COMMIT="$GIT_COMMIT" \\
+  --build-arg GIT_REPO_URL="$GIT_REPO_URL" \\
+  --build-arg BUILD_DATE="$BUILD_DATE" \\
+  -t "$IMAGE" .
+RC=$?
+if [ $RC -ne 0 ]; then
+  echo ""
+  echo "✗ FAILED: docker build returned $RC."
+  exit 1
+fi
+
+echo "==> Pushing to Artifact Registry..."
+# Artifact Registry occasionally returns transient 5xx (503) on a layer PUT,
+# often aggravated by TLS-inspecting VPNs. docker push is idempotent — already
+# uploaded layers are skipped — so retry a few times with backoff.
+PUSH_OK=false
+for attempt in 1 2 3 4 5; do
+  echo "  [push] attempt $attempt/5..."
+  if docker push "$IMAGE"; then
+    PUSH_OK=true
+    break
+  fi
+  echo "  [push] failed (attempt $attempt/5) — likely a transient 5xx. Retrying in 5s..."
+  sleep 5
+done
+if [ "$PUSH_OK" != true ]; then
+  echo ""
+  echo "✗ FAILED: docker push failed after 5 attempts."
+  echo "  Common causes: transient Artifact Registry 503, or a TLS-inspecting"
+  echo "  VPN (GlobalProtect) resetting the upload. Disable the VPN and retry."
+  exit 1
+fi
+
+echo ""
+echo "==> Done! Image pushed to $IMAGE"
+"""
+        task_id = create_task("Build & Push Image", cmd, use_toolbox=True)
+        return jsonify({"task_id": task_id})
+
     cmd = """
 set -uo pipefail
 
@@ -1821,10 +2051,16 @@ echo "==> Done! Image pushed to ${ECR_URL}:latest"
 
 @app.route("/api/k8s/deploy", methods=["POST"])
 def k8s_deploy():
+    mode = (app_settings.get("infra_mode") or "eks").lower()
     # BYOC mode: skip EKS kubeconfig generation, use the user-provided one
     if external_cluster.get("enabled") and external_cluster.get("kubeconfig"):
         if not os.path.isfile(KUBECONFIG_BYOC_PATH):
             return jsonify({"error": "BYOC kubeconfig not found on disk — re-save it in Settings"}), 400
+    elif mode == "gcp":
+        # GKE mode: fetch/refresh the kubeconfig via gcloud (no AWS creds).
+        ok, msg, _info = generate_gke_kubeconfig()
+        if not ok:
+            return jsonify({"error": f"Failed to generate GKE kubeconfig: {msg}"}), 500
     else:
         # EKS mode: regenerate kubeconfig with embedded AWS credentials
         try:
@@ -1930,6 +2166,54 @@ echo ""
 echo "  >>> The dashboard auto-resolves this HOST"
 echo "      (or paste it in Settings > BYOC if you prefer)"
 echo "=================================================="
+"""
+    elif mode == "gcp":
+        cmd = """
+set -e
+AR_URL=$(cd terraform-gcp-infra && terraform output -raw artifact_registry_url 2>/dev/null)
+if [ -z "$AR_URL" ]; then
+  echo "✗ FAILED: cannot resolve Artifact Registry URL. Run INFRA > Apply first."
+  exit 1
+fi
+IMAGE="${AR_URL}/vuln-app:latest"
+echo "==> GKE Mode: deploying image $IMAGE"
+echo "==> Testing cluster access..."
+kubectl cluster-info
+
+echo "==> Applying manifests..."
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/service-account.yaml
+
+echo "==> Setting Artifact Registry image in deployment..."
+# GKE-only: strip hostNetwork. The GKE node already binds :8080, so a
+# hostNetwork pod cannot start Tomcat (BindException) and the Service/LB never
+# gets a healthy backend. The escape still works via hostPID+privileged
+# (nsenter --target 1 --net reaches the host netns). EKS/RKE2 keep hostNetwork.
+sed -e "s|ECR_IMAGE_PLACEHOLDER|${IMAGE}|g" \\
+    -e "/^[[:space:]]*hostNetwork:/d" k8s/deployment.yaml | kubectl apply -f -
+
+echo "==> Waiting for deployment rollout..."
+kubectl rollout status deployment/vuln-app -n vuln-app --timeout=300s
+
+echo "==> Waiting for LoadBalancer..."
+# GKE LoadBalancer services expose an IP (not a hostname like AWS ELB).
+# Provisioning the external IP typically takes 30s-2min, so poll instead of
+# a single fixed sleep (which often gives up while the IP is still pending).
+HOST="pending"
+for i in $(seq 1 36); do
+  HOST=$(kubectl get svc vuln-app-service -n vuln-app -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+  if [ -n "$HOST" ]; then
+    echo "  [lb] external IP ready after $((i*5))s: $HOST"
+    break
+  fi
+  HOST="pending"
+  echo "  [lb] waiting for external IP... ($((i*5))s)"
+  sleep 5
+done
+echo ""
+echo "==> Application deployed!"
+echo "==> HOST=${HOST}"
+echo "==> URL: http://${HOST}/app"
 """
     else:
         cmd = f"""
@@ -2094,6 +2378,14 @@ def get_host():
             "get svc vuln-app-service -n vuln-app",
         )
         return f"{node_ip}:{app_np}" if app_np else ""
+
+    # GKE mode: LoadBalancer services expose an IP (not a hostname like AWS ELB)
+    mode = (app_settings.get("infra_mode") or "eks").lower()
+    if mode == "gcp":
+        return _kubectl_jsonpath(
+            '{.status.loadBalancer.ingress[0].ip}',
+            "get svc vuln-app-service -n vuln-app",
+        )
 
     # EKS mode: read the LoadBalancer hostname from the service
     return _kubectl_jsonpath(
