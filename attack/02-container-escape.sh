@@ -113,7 +113,9 @@ CLOUD_DETECTED=""
 # IMDSv2: token-based (hop-limit of 1 blocks containers; nsenter bypasses that)
 IMDS_TOKEN=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token 2>/dev/null")
 
-if [ -n "$IMDS_TOKEN" ] && [ ${#IMDS_TOKEN} -gt 10 ]; then
+# On GKE, 169.254.169.254 responds to HTTP but returns an HTML 400 for AWS paths.
+# A valid IMDSv2 token is a short base64 string with no angle brackets.
+if [ -n "$IMDS_TOKEN" ] && [ ${#IMDS_TOKEN} -gt 10 ] && ! echo "$IMDS_TOKEN" | grep -qi "<html"; then
     CLOUD_DETECTED="aws"
     echo "  [AWS] IMDSv2 token acquired"
     INSTANCE_ID=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -H 'X-aws-ec2-metadata-token: ${IMDS_TOKEN}' http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null")
@@ -124,9 +126,9 @@ if [ -n "$IMDS_TOKEN" ] && [ ${#IMDS_TOKEN} -gt 10 ]; then
         echo "  IAM Role:    $IAM_ROLE"
     fi
 else
-    # IMDSv1 fallback
+    # IMDSv1 fallback (also validate — GKE returns HTML here too)
     INSTANCE_ID=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null")
-    if [ -n "$INSTANCE_ID" ]; then
+    if [ -n "$INSTANCE_ID" ] && ! echo "$INSTANCE_ID" | grep -qi "<html"; then
         CLOUD_DETECTED="aws"
         IAM_ROLE=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null")
         echo "  [OK] AWS IMDS (v1) accessible"
