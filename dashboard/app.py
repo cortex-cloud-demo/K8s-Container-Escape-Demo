@@ -1334,13 +1334,28 @@ echo "=================================================="
 BUCKET=$(terraform output -raw vuln_data_bucket_name 2>/dev/null || echo '')
 if [ -n "$BUCKET" ]; then
   echo "Bucket: gs://$BUCKET"
-  if command -v gsutil &>/dev/null; then
-    gsutil cp /project/s3-data/credentials.txt     "gs://$BUCKET/credentials.txt"
-    gsutil cp /project/s3-data/customers.csv       "gs://$BUCKET/customers.csv"
-    gsutil cp /project/s3-data/internal-report.pdf "gs://$BUCKET/internal-report.pdf"
+  # gsutil/gcloud do NOT read GOOGLE_APPLICATION_CREDENTIALS the way the
+  # Terraform provider does — they need an explicit activate-service-account,
+  # otherwise uploads fail with "Anonymous caller does not have ... access".
+  if [ -n "$GOOGLE_APPLICATION_CREDENTIALS" ] && [ -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+    echo "==> gcloud auth activate-service-account"
+    gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" --quiet
+  fi
+  # Prefer `gcloud storage` (respects ADC); fall back to legacy gsutil.
+  if gcloud storage --help &>/dev/null; then
+    UPLOAD="gcloud storage cp"
+  elif command -v gsutil &>/dev/null; then
+    UPLOAD="gsutil cp"
+  else
+    UPLOAD=""
+  fi
+  if [ -n "$UPLOAD" ]; then
+    $UPLOAD /project/s3-data/credentials.txt     "gs://$BUCKET/credentials.txt"
+    $UPLOAD /project/s3-data/customers.csv       "gs://$BUCKET/customers.csv"
+    $UPLOAD /project/s3-data/internal-report.pdf "gs://$BUCKET/internal-report.pdf"
     echo "Files uploaded. Public URL: https://storage.googleapis.com/$BUCKET"
   else
-    echo "Note: gsutil not available in toolbox — bucket created but data upload skipped"
+    echo "Note: no GCS CLI available in toolbox — bucket created but data upload skipped"
     echo "Public bucket URL: https://storage.googleapis.com/$BUCKET"
   fi
 else
