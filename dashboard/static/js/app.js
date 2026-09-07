@@ -1109,6 +1109,7 @@ async function publishPlaybook() {
         { name: 'forensic', label: 'K8s Container Escape Forensic Analysis' },
         { name: 'search', label: 'K8s Container Escape Search Similar Events' },
         { name: 'pivot', label: 'K8s Container Escape Code-to-Cloud Pivot' },
+        { name: 'pivot-ai', label: 'K8s Container Escape Code-to-Cloud Pivot (AI)' },
     ];
     let allOk = true;
 
@@ -1163,6 +1164,7 @@ const PLAYBOOK_STATUS_MAP = {
     'forensic': 'deploy-status-pb-forensic',
     'search': 'deploy-status-pb-search',
     'pivot': 'deploy-status-pb-pivot',
+    'pivot-ai': 'deploy-status-pb-pivot-ai',
 };
 
 function setItemStatus(id, text, color) {

@@ -38,7 +38,7 @@ IMAGE = {
     'image_name': '123456789012.dkr.ecr.eu-west-3.amazonaws.com/vulnerable-flask-app:vulnerable',
     'repo_url': 'https://github.com/cortex-cloud-demo/K8s-Container-Escape-Demo',
     'commit_sha': '4bcffddfd7be2992bb534ba81c88740e95f22bab',
-    'dockerfile_path': 'docker/Dockerfile',
+    'dockerfile_path': 'Dockerfile',
 }
 IAC = {
     'yor_trace': '46097037-2df2-44a2-bf53-5958ad96c134',

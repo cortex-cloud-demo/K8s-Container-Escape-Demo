@@ -52,10 +52,16 @@ Script arguments:
   COMMON:
     cortex_tenant_url        Cortex tenant base URL for deep links
     issue_field_name         Optional incident field name to persist the card
+    fetch_dockerfile         true/false - pull the raw Dockerfile at the build
+                             commit so a downstream AI task can reason on the
+                             actual code (default true)
+    github_token             optional PAT - only needed if the source repo is
+                             private
 
 Output context (K8sPivot.*):
     ImageDigest, ImageName, RepoURL, CommitSHA, DockerfilePath
     RegistryURL, CWPFindingsURL, CommitURL, DockerfileURL, CodeSecurityURL
+    DockerfileContent, DockerfileNumbered, DockerfileFetchStatus
     Triage.{ContainerID, Namespace, ClusterName, NodeFQDN, ProcessName,
             ProcessImageSHA256, Severity, Details, SourceUserName,
             SourceProcessImagePath, SourceProcessCommandLine}
@@ -72,6 +78,10 @@ DEFAULT_ISSUE_FIELD_NAME = ""
 DEFAULT_REPO_URL = "https://github.com/cortex-cloud-demo/K8s-Container-Escape-Demo"
 DEFAULT_DOCKERFILE_PATH = "Dockerfile"
 DEFAULT_COMMIT = "main"
+
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com"
+DOCKERFILE_FETCH_TIMEOUT = 10      # seconds
+DOCKERFILE_MAX_BYTES = 32768       # cap what we hand to the LLM
 
 
 # ==============================================================================
@@ -197,6 +207,85 @@ def build_dockerfile_url(repo_url, commit_sha, dockerfile_path):
         return ""
     ref = commit_sha if commit_sha and commit_sha != "unknown" else "main"
     return base + "/blob/" + ref + "/" + dockerfile_path.lstrip("/")
+
+
+def build_dockerfile_raw_url(repo_url, ref, dockerfile_path):
+    """raw.githubusercontent.com URL for the Dockerfile at a given ref."""
+    base = normalize_repo_url(repo_url)
+    if not base or "github.com/" not in base:
+        return ""
+    owner_repo = base.split("github.com/", 1)[1].strip("/")
+    if owner_repo.count("/") != 1:
+        return ""
+    return (GITHUB_RAW_BASE + "/" + owner_repo + "/" + (ref or DEFAULT_COMMIT) +
+            "/" + dockerfile_path.lstrip("/"))
+
+
+def _http_get_text(url, headers):
+    """GET returning (text, status_code). Uses requests, falls back to urllib."""
+    try:
+        import requests
+        resp = requests.get(url, headers=headers, timeout=DOCKERFILE_FETCH_TIMEOUT)
+        return resp.text, resp.status_code
+    except ImportError:
+        from urllib.request import Request, urlopen
+        from urllib.error import HTTPError
+        try:
+            with urlopen(Request(url, headers=headers), timeout=DOCKERFILE_FETCH_TIMEOUT) as r:
+                return r.read().decode("utf-8", "replace"), r.getcode()
+        except HTTPError as he:
+            return "", he.code
+
+
+def fetch_dockerfile_content(repo_url, commit_sha, dockerfile_path, github_token=""):
+    """
+    Pull the raw Dockerfile that built the compromised image.
+
+    AI prompt tasks have no internet access - if we want the LLM to point at the
+    exact instruction responsible for the escape, the code has to be handed to it
+    in context. Tries the build commit first, then falls back to main.
+
+    A github_token is only needed for private repos.
+    Non-fatal: returns ("", "<reason>") on any failure so the card still renders.
+    """
+    refs = []
+    if commit_sha and commit_sha not in ("unknown", DEFAULT_COMMIT):
+        refs.append(commit_sha)
+    refs.append(DEFAULT_COMMIT)
+
+    headers = {"User-Agent": "CodeToCloudPivot"}
+    if github_token:
+        headers["Authorization"] = "Bearer " + github_token
+
+    last_error = "no candidate ref"
+    for ref in refs:
+        url = build_dockerfile_raw_url(repo_url, ref, dockerfile_path)
+        if not url:
+            return "", "unsupported repo url (expected github.com/<owner>/<repo>)"
+        try:
+            content, status = _http_get_text(url, headers)
+            if status == 200 and content:
+                if len(content) > DOCKERFILE_MAX_BYTES:
+                    content = content[:DOCKERFILE_MAX_BYTES] + "\n# ... truncated ...\n"
+                return content, "fetched@" + ref
+            last_error = "HTTP " + str(status) + " @" + ref
+            if status == 404 and not github_token:
+                last_error += " (private repo? set github_token)"
+        except Exception as e:
+            # Network-level failure (no egress, DNS, TLS): another ref won't help,
+            # and retrying would double the delay on every run of the playbook.
+            return "", str(e) + " @" + ref
+    return "", last_error
+
+
+def number_lines(content):
+    """Prefix each line with its number so the LLM can cite an exact instruction."""
+    if not content:
+        return ""
+    out = []
+    for i, line in enumerate(content.splitlines(), start=1):
+        out.append(str(i).rjust(3) + "| " + line)
+    return "\n".join(out)
 
 
 def build_code_security_url(console_base, repo_url):
@@ -326,6 +415,8 @@ def build_markdown_card(
     triage,
     # Section availability
     has_image_channel, has_triage,
+    # Raw Dockerfile captured for the AI task (may be empty)
+    dockerfile_content="",
 ):
     md = []
     md.append("# " + EMOJI_SEARCH + " Investigation Code-to-Cloud")
@@ -505,6 +596,11 @@ def build_markdown_card(
         if dockerfile_link:
             md.append("- " + EMOJI_DOC + " **[Dockerfile @ commit](" + dockerfile_link + ")** "
                       + EMOJI_ARROW + " the Dockerfile that built this vulnerable image")
+        if dockerfile_content:
+            md.append("- " + EMOJI_CHECK + " Dockerfile source captured (" +
+                      str(len(dockerfile_content.splitlines())) + " lines) "
+                      + EMOJI_ARROW + " handed to the AI root-cause task as "
+                      "`K8sPivot.DockerfileNumbered`")
         md.append("")
 
     # ============== RECOMMENDED ACTIONS ==============
@@ -577,7 +673,7 @@ def write_results_to_issue(field_name, markdown_content):
 def main():
     try:
         args = demisto.args()
-        demisto.info("=== CodeToCloudPivot v1.2.0 START ===")
+        demisto.info("=== CodeToCloudPivot v1.3.0 START ===")
 
         # --- IMAGE CHANNEL (A) ---
         raw_image_digest = get_arg(args, 'image_digest')
@@ -610,6 +706,8 @@ def main():
         # --- COMMON ---
         tenant_url = get_arg(args, 'cortex_tenant_url')
         issue_field_name = get_arg(args, 'issue_field_name', DEFAULT_ISSUE_FIELD_NAME)
+        want_dockerfile = _to_bool(get_arg(args, 'fetch_dockerfile', 'true') or 'true')
+        github_token = get_arg(args, 'github_token')
 
         # Normalize
         image_digest = normalize_digest(raw_image_digest) or normalize_digest(raw_image_name)
@@ -640,6 +738,16 @@ def main():
         dockerfile_link = build_dockerfile_url(repo_url, commit_sha, dockerfile_path)
         codesec_link = build_code_security_url(console_base, repo_url)
 
+        # --- FETCH THE DOCKERFILE (for the downstream AI root-cause task) ---
+        dockerfile_content = ""
+        dockerfile_status = "skipped"
+        if want_dockerfile and has_image_channel:
+            dockerfile_content, dockerfile_status = fetch_dockerfile_content(
+                repo_url, commit_sha, dockerfile_path, github_token)
+            demisto.info("Dockerfile fetch: " + dockerfile_status +
+                         " (" + str(len(dockerfile_content)) + " bytes)")
+        dockerfile_numbered = number_lines(dockerfile_content)
+
         # --- BUILD MARKDOWN ---
         human_readable = build_markdown_card(
             # Image
@@ -649,6 +757,8 @@ def main():
             triage,
             # Sections
             has_image_channel, has_triage,
+            # Dockerfile capture
+            dockerfile_content,
         )
 
         # Optional persistent write
@@ -669,6 +779,10 @@ def main():
             'K8sPivot.CommitURL': commit_link,
             'K8sPivot.DockerfileURL': dockerfile_link,
             'K8sPivot.CodeSecurityURL': codesec_link,
+            # Dockerfile source (input for the AI root-cause task)
+            'K8sPivot.DockerfileContent': dockerfile_content,
+            'K8sPivot.DockerfileNumbered': dockerfile_numbered,
+            'K8sPivot.DockerfileFetchStatus': dockerfile_status,
             # Runtime triage
             'K8sPivot.Triage.ContainerID':           triage["container_id"],
             'K8sPivot.Triage.ContainerImageID':      triage["container_image_id"],
@@ -718,6 +832,7 @@ def main():
                     'Dockerfile': dockerfile_link,
                     'CodeSecurity': codesec_link,
                 },
+                'DockerfileFetchStatus': dockerfile_status,
                 'IssueFieldName': issue_field_name,
                 'IssueFieldWriteStatus': (
                     "skipped" if write_success is None else
@@ -729,7 +844,7 @@ def main():
             'EntryContext': entry_context
         })
 
-        demisto.info("=== CodeToCloudPivot v1.2.0 END ===")
+        demisto.info("=== CodeToCloudPivot v1.3.0 END ===")
 
     except Exception as e:
         error_msg = "Error in CodeToCloudPivot: " + str(e)

@@ -584,6 +584,17 @@
                     </div>
 
                     <div class="cortex-object-item">
+                        <div class="cortex-object-info">
+                            <span class="cortex-object-name">Code-to-Cloud Pivot (AI)</span>
+                            <span class="cortex-object-desc">Pivot card + AI root cause &rarr; verdict, MITRE chain, vulnerable Dockerfile line, fixed Dockerfile. Drop the AI prompt task in the editor (see playbook/AI_TASK_RootCauseDevFix.md)</span>
+                        </div>
+                        <div class="cortex-object-actions">
+                            <span class="cortex-object-status" id="deploy-status-pb-pivot-ai"></span>
+                            <button class="btn btn-ghost btn-xs" onclick="cortexDeployPlaybook('pivot-ai')">Deploy</button>
+                        </div>
+                    </div>
+
+                    <div class="cortex-object-item">
                         <div class="cortex-object-info" onclick="showCortexDetail('pb-s3-remediation')" style="cursor:pointer;">
                             <span class="cortex-object-name">Public S3 Bucket Auto Remediation</span>
                             <span class="cortex-object-desc">Check tag &rarr; Email operator &rarr; Tag as approved or remove public access</span>

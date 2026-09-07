@@ -3186,6 +3186,7 @@ def publish_playbook_to_cortex():
         "forensic": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Forensic_Analysis.yml"),
         "search": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Search_Similar_Events.yml"),
         "pivot": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_CodeToCloud_Pivot.yml"),
+        "pivot-ai": os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_CodeToCloud_Pivot_AI.yml"),
         "s3-remediation": os.path.join(PLAYBOOK_DIR, "Public_S3_Bucket_Auto_Remediation.yml"),
     }
 
@@ -3302,6 +3303,8 @@ def deploy_all_to_cortex():
          os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_Search_Similar_Events.yml")),
         ("K8s Container Escape Code-to-Cloud Pivot",
          os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_CodeToCloud_Pivot.yml")),
+        ("K8s Container Escape Code-to-Cloud Pivot (AI)",
+         os.path.join(PLAYBOOK_DIR, "K8s_Container_Escape_CodeToCloud_Pivot_AI.yml")),
         ("Public S3 Bucket Auto Remediation",
          os.path.join(PLAYBOOK_DIR, "Public_S3_Bucket_Auto_Remediation.yml")),
     ]
