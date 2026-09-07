@@ -116,6 +116,8 @@ tasks:
         simple: ${incident.xdmsourcehosthostname}
       xdmsourcehostipv4addresses:
         simple: ${incident.xdmsourcehostipv4addresses}
+      xdmsourceuserusername:
+        simple: ${incident.xdmsourceuserusername}
       xdmsourceusername:
         simple: ${incident.xdmsourceusername}
       xdmsourceprocessname:

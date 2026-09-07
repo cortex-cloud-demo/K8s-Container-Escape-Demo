@@ -8,8 +8,10 @@ Script arguments (playbook inputs):
 - container_id                          : ${issue.container_id}
 - namespace                             : ${issue.namespace}
 - xdmsourcehostfqdn                     : ${issue.xdmsourcehostfqdn}
+- xdmsourcehosthostname                 : ${issue.xdmsourcehosthostname}
 - xdmsourcehostipv4addresses            : ${issue.xdmsourcehostipv4addresses}
-- xdmsourceusername                     : ${issue.xdmsourceusername}
+- xdmsourceuserusername                 : ${issue.xdmsourceuserusername}
+- xdmsourceusername                     : ${issue.xdmsourceusername}  (fallback)
 - xdmsourceprocessname                  : ${issue.xdmsourceprocessname}
 - causality_actor_process_command_line   : ${issue.causality_actor_process_command_line}
 - causality_actor_process_image_path     : ${issue.causality_actor_process_image_path}
@@ -752,8 +754,14 @@ def main():
         node_ips = get_field_with_fallback(
             args.get('xdmsourcehostipv4addresses'), 'xdmsourcehostipv4addresses', 'xdmsourcehostipv4addresses', is_array=True)
 
+        # The XDM field is xdmsourceuserusername (user.username); xdmsourceusername
+        # is kept as a fallback because older issue layouts expose it under that name.
         username_list = get_field_with_fallback(
-            args.get('xdmsourceusername'), 'xdmsourceusername', 'xdmsourceusername', is_array=True)
+            args.get('xdmsourceuserusername'), 'xdmsourceuserusername',
+            'xdmsourceuserusername', is_array=True)
+        if not username_list:
+            username_list = get_field_with_fallback(
+                args.get('xdmsourceusername'), 'xdmsourceusername', 'xdmsourceusername', is_array=True)
         username = username_list[0] if username_list else ""
 
         process_name_list = get_field_with_fallback(
