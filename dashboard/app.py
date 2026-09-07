@@ -1095,6 +1095,12 @@ def tf_output(tf_dir, output_name, env=None):
     Falls back to local execution otherwise.
 
     Returns the output value as string, or empty string on failure.
+
+    Note: when the state is empty or the output is undefined, `terraform
+    output -raw <name>` prints a "No outputs found" *warning* to stdout and
+    exits 0 (not an error). We must detect and discard that diagnostic text,
+    otherwise callers use the warning banner as if it were the value (e.g. it
+    ends up as a container image reference and breaks the scan script).
     """
     if env is None:
         env = os.environ.copy()
@@ -1109,7 +1115,17 @@ def tf_output(tf_dir, output_name, env=None):
         result = subprocess.run(
             raw_cmd, shell=True, capture_output=True, text=True, cwd=tf_dir, env=env, timeout=30,
         )
-    return result.stdout.strip() if result.returncode == 0 else ""
+    if result.returncode != 0:
+        return ""
+    value = result.stdout.strip()
+    # A `-raw` scalar output is always a single, clean line. Terraform
+    # diagnostics (warnings/errors) are multi-line and drawn with box
+    # characters (╷ │ ╵) — reject anything that looks like one.
+    if not value:
+        return ""
+    if "\n" in value or any(ch in value for ch in ("╷", "│", "╵")) or "Warning:" in value or "No outputs found" in value:
+        return ""
+    return value
 
 
 # ─── Infrastructure ──────────────────────────────────────────────────────────
@@ -1594,16 +1610,31 @@ def cortex_image_scan():
     api_key_id = cortex_settings["api_key_id"]
 
     # Get the image name to scan
-    image_name = request.json.get("image", "")
+    image_name = (request.json.get("image") or "").strip()
     if not image_name:
-        # Try to get from terraform output (ECR URL)
-        env = os.environ.copy()
-        env.update(get_aws_env())
-        ecr_url = tf_output(TERRAFORM_DIR, "ecr_repository_url", env)
-        if ecr_url:
-            image_name = f"{ecr_url}:latest"
+        # Resolve the image from the active infra mode's terraform outputs.
+        mode = (app_settings.get("infra_mode") or "eks").lower()
+        if mode == "gcp":
+            env = os.environ.copy()
+            env.update(get_gcp_env())
+            ar_url = tf_output(TERRAFORM_GCP_DIR, "artifact_registry_url", env)
+            if ar_url:
+                image_name = f"{ar_url}/vuln-app:latest"
+            else:
+                return jsonify({"error": "No image specified and Artifact Registry URL not found — run GCP Apply first or pass an image via Custom."}), 400
+        elif mode in ("rke2", "byoc"):
+            image_name = (external_cluster.get("image_url") or "").strip()
+            if not image_name:
+                return jsonify({"error": "No image specified and no cluster image URL configured — set the image in the BYOC/RKE2 card or pass one via Custom."}), 400
         else:
-            return jsonify({"error": "No image specified and ECR URL not found — run Terraform Apply first or pass an image via Custom."}), 400
+            # EKS (default): read the ECR repository URL.
+            env = os.environ.copy()
+            env.update(get_aws_env())
+            ecr_url = tf_output(TERRAFORM_DIR, "ecr_repository_url", env)
+            if ecr_url:
+                image_name = f"{ecr_url}:latest"
+            else:
+                return jsonify({"error": "No image specified and ECR URL not found — run Terraform Apply first or pass an image via Custom."}), 400
 
     # Extract region from image name for ECR login
     region = aws_credentials.get("aws_region") or "eu-west-3"
@@ -1657,6 +1688,14 @@ else
         ECR_REGION=$(echo "{image_name}" | grep -oP 'ecr\\.\\K[^.]+')
         echo "  [*] Logging in to ECR (account: $ACCOUNT_ID, region: ${{ECR_REGION:-{region}}})..."
         aws ecr get-login-password --region ${{ECR_REGION:-{region}}} | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.${{ECR_REGION:-{region}}}.amazonaws.com 2>&1
+    # Login to Google Artifact Registry / GCR if image is from GCP
+    elif echo "{image_name}" | grep -qE '(pkg\\.dev|gcr\\.io)'; then
+        AR_HOST=$(echo "{image_name}" | cut -d/ -f1)
+        echo "  [*] Logging in to Google Artifact Registry ($AR_HOST)..."
+        if [ -n "${{GOOGLE_APPLICATION_CREDENTIALS:-}}" ] && [ -f "${{GOOGLE_APPLICATION_CREDENTIALS:-}}" ]; then
+            gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" 2>&1 || true
+        fi
+        gcloud auth configure-docker "$AR_HOST" --quiet 2>&1 || true
     fi
     echo "  [*] Pulling image: {image_name}..."
     docker pull "{image_name}" 2>&1
