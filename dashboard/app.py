@@ -862,6 +862,7 @@ def api_generate_kubeconfig():
                 "path": KUBECONFIG_PATH,
                 "cluster": info.get("cluster") or "gke-escape-demo",
                 "region": info.get("region") or gcp_credentials.get("region") or "europe-west1",
+                "project": info.get("project") or gcp_credentials.get("project_id") or "",
                 "mode": "gcp",
             })
 

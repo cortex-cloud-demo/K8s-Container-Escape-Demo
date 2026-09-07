@@ -7,8 +7,9 @@ comment: |-
   container escape SOC issue. Consolidates two outputs into ONE pivot card:
     - Runtime Triage (from ExtractK8sContainerEscapeIOCs / K8sEscape.*):
       severity badge, attack details (Spring4Shell/webshell flags),
-      compromised container (ID, namespace, image), EKS/K8s node
-      (cluster, FQDN, AWS region detection, IP classification),
+      compromised container (ID, namespace, image), EKS/GKE/K8s node
+      (cluster, FQDN, AWS region or GCP project+zone detection,
+      IP classification),
       process (causality actor) and user (privileged user flag).
     - Channel A - Image -> source code via OCI labels (registry, CVEs,
       repo, commit, Dockerfile, Code Security findings).
@@ -424,15 +425,45 @@ script: |-
       return "Public"
 
 
-  def _detect_cloud_region(fqdn):
-      """AWS region detection from EKS-style FQDN like ip-10-0-0-1.eu-west-3.compute.internal."""
-      if not fqdn or "compute.internal" not in fqdn:
-          return ""
-      parts = fqdn.split(".")
-      for p in parts:
-          if p and "-" in p and any(p.startswith(x) for x in ("us-", "eu-", "ap-", "ca-", "sa-", "af-", "me-")):
-              return p
-      return ""
+  def _detect_node_platform(fqdn):
+      """
+      Identify the managed-Kubernetes platform behind a worker node FQDN.
+
+        EKS  ip-10-0-0-1.eu-west-3.compute.internal
+        GKE  europe-west1-d.c.prod-bdfs3s.internal   (<zone>.c.<project>.internal)
+
+      Returns {"platform", "region", "zone", "project", "evidence"}; platform is
+      empty when the FQDN matches no known pattern (self-managed / on-prem node).
+      """
+      info = {"platform": "", "region": "", "zone": "", "project": "", "evidence": ""}
+      if not fqdn:
+          return info
+      parts = str(fqdn).strip().lower().rstrip(".").split(".")
+
+      if "compute" in parts and "internal" in parts:
+          info["platform"] = "EKS"
+          info["evidence"] = "compute.internal"
+          for p in parts:
+              if p and "-" in p and any(p.startswith(x) for x in
+                                        ("us-", "eu-", "ap-", "ca-", "sa-", "af-", "me-", "il-")):
+                  info["region"] = p
+                  break
+          return info
+
+      # GKE node names resolve through the project's internal DNS zone.
+      if len(parts) == 4 and parts[1] == "c" and parts[3] == "internal":
+          import re
+          info["platform"] = "GKE"
+          info["project"] = parts[2]
+          info["evidence"] = "c." + parts[2] + ".internal"
+          # Only the zone-prefixed form carries location; the legacy gke-<cluster>-<pool>-xxxx
+          # form does not, so leave region/zone empty rather than guessing.
+          if re.match(r'^[a-z]+-[a-z]+\d+-[a-z]$', parts[0]):
+              info["zone"] = parts[0]
+              info["region"] = parts[0].rsplit("-", 1)[0]
+          return info
+
+      return info
 
 
   def _severity_label(severity):
@@ -489,8 +520,7 @@ script: |-
           is_container_runtime = _to_bool(triage.get("is_container_runtime"))
           node_fqdn = triage.get("node_fqdn") or ""
           node_ips = _parse_list(triage.get("node_ips"))
-          aws_region = _detect_cloud_region(node_fqdn)
-          is_eks_node = bool(node_fqdn and "compute.internal" in node_fqdn)
+          node_platform = _detect_node_platform(node_fqdn)
 
           md.append("---")
           md.append("")
@@ -537,18 +567,24 @@ script: |-
               md.append("- **Image ID**: `" + triage["container_image_id"] + "`")
           md.append("")
 
-          # ---- K8s / EKS node ----
-          node_heading = "EKS Node" if is_eks_node else "K8s Node"
+          # ---- K8s node (EKS / GKE / self-managed) ----
+          node_heading = (node_platform["platform"] + " Node") if node_platform["platform"] else "K8s Node"
           md.append("### " + EMOJI_NODE + " " + node_heading)
           md.append("")
           if triage.get("cluster_name"):
               md.append("- **Cluster**: `" + triage["cluster_name"] + "`")
           if node_fqdn:
               md.append("- **FQDN**: `" + node_fqdn + "`")
-          if is_eks_node:
-              md.append("- " + EMOJI_CHECK + " EKS node confirmed (compute.internal)")
-          if aws_region:
-              md.append("- **AWS Region**: `" + aws_region + "`")
+          if node_platform["platform"]:
+              md.append("- " + EMOJI_CHECK + " " + node_platform["platform"] +
+                        " node confirmed (" + node_platform["evidence"] + ")")
+          if node_platform["project"]:
+              md.append("- **GCP Project**: `" + node_platform["project"] + "`")
+          if node_platform["zone"]:
+              md.append("- **Zone**: `" + node_platform["zone"] + "`")
+          if node_platform["region"]:
+              region_label = "AWS Region" if node_platform["platform"] == "EKS" else "Region"
+              md.append("- **" + region_label + "**: `" + node_platform["region"] + "`")
           if node_ips:
               md.append("- **IP Addresses**:")
               for ip in node_ips:
@@ -708,7 +744,7 @@ script: |-
   def main():
       try:
           args = demisto.args()
-          demisto.info("=== CodeToCloudPivot v1.3.0 START ===")
+          demisto.info("=== CodeToCloudPivot v1.3.1 START ===")
 
           # --- IMAGE CHANNEL (A) ---
           raw_image_digest = get_arg(args, 'image_digest')
@@ -879,7 +915,7 @@ script: |-
               'EntryContext': entry_context
           })
 
-          demisto.info("=== CodeToCloudPivot v1.3.0 END ===")
+          demisto.info("=== CodeToCloudPivot v1.3.1 END ===")
 
       except Exception as e:
           error_msg = "Error in CodeToCloudPivot: " + str(e)

@@ -112,6 +112,8 @@ tasks:
         simple: ${incident.namespace}
       xdmsourcehostfqdn:
         simple: ${incident.xdmsourcehostfqdn}
+      xdmsourcehosthostname:
+        simple: ${incident.xdmsourcehosthostname}
       xdmsourcehostipv4addresses:
         simple: ${incident.xdmsourcehostipv4addresses}
       xdmsourceusername:
@@ -124,6 +126,10 @@ tasks:
         simple: ${incident.causality_actor_process_image_path}
       causality_actor_process_image_sha256:
         simple: ${incident.causality_actor_process_image_sha256}
+      targetprocessname:
+        simple: ${incident.targetprocessname}
+      targetprocesscmd:
+        simple: ${incident.targetprocesscmd}
       image_id:
         simple: ${incident.image_id}
       agent_os_type:

@@ -358,16 +358,19 @@ async function kubectlRun(args) {
 
 async function generateKubeconfig() {
     kubectlWriteHeader('Generating kubeconfig...');
-    kubectlWrite('Fetching cluster info and embedding AWS credentials...\n\n');
+    kubectlWrite('Fetching cluster info...\n\n');
 
     try {
         const res = await fetch('/api/kubeconfig/generate', { method: 'POST' });
         const data = await res.json();
         if (data.status === 'ok') {
             kubectlWrite(`Cluster:    ${data.cluster}\n`);
-            kubectlWrite(`Region:     ${data.region}\n`);
+            if (data.project) kubectlWrite(`Project:    ${data.project}\n`);
+            if (data.region)  kubectlWrite(`Region:     ${data.region}\n`);
             kubectlWrite(`Kubeconfig: ${data.path}\n\n`);
-            kubectlWrite('Kubeconfig generated with embedded AWS credentials.\n');
+            kubectlWrite((data.mode || '').toLowerCase() === 'gcp'
+                ? 'Kubeconfig generated via gcloud get-credentials.\n'
+                : 'Kubeconfig generated with embedded AWS credentials.\n');
             kubectlWrite('You can now use kubectl commands.\n');
         } else {
             kubectlWrite(`ERROR: ${data.message}\n`);
@@ -403,14 +406,19 @@ async function connectCluster() {
         const label = modeLabel(data.mode);
         if (data.status === 'ok') {
             openTab('terminal');
+            const mode = (data.mode || '').toLowerCase();
             termWriteHeader(`Cluster Connection (${label})`);
             termWrite(`Cluster:    ${data.cluster}\n`);
-            termWrite(`Region:     ${data.region}\n`);
+            if (data.project) termWrite(`Project:    ${data.project}\n`);
+            if (data.region)  termWrite(`Region:     ${data.region}\n`);
             termWrite(`Kubeconfig: ${data.path}\n\n`);
-            if ((data.mode || '').toLowerCase() === 'rke2') {
+            if (mode === 'rke2') {
                 termWrite('Kubeconfig fetched from SSM (RKE2 BYOC).\n');
-            } else if ((data.mode || '').toLowerCase() === 'byoc') {
+            } else if (mode === 'byoc') {
                 termWrite('Using BYOC kubeconfig.\n');
+            } else if (mode === 'gcp') {
+                termWrite('Kubeconfig generated via gcloud get-credentials '
+                          + '(gke-gcloud-auth-plugin exec credentials).\n');
             } else {
                 termWrite('Kubeconfig generated with embedded AWS credentials.\n');
             }

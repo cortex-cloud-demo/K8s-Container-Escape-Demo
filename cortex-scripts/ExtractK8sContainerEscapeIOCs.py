@@ -2,7 +2,7 @@
 ExtractK8sContainerEscapeIOCs
 ==============================
 Extracts and analyzes important fields from a Cortex XDR issue related to
-a container escape attack (Spring4Shell / CVE-2022-22965) on EKS.
+a container escape attack (Spring4Shell / CVE-2022-22965) on EKS or GKE.
 
 Script arguments (playbook inputs):
 - container_id                          : ${issue.container_id}
@@ -14,6 +14,8 @@ Script arguments (playbook inputs):
 - causality_actor_process_command_line   : ${issue.causality_actor_process_command_line}
 - causality_actor_process_image_path     : ${issue.causality_actor_process_image_path}
 - causality_actor_process_image_sha256   : ${issue.causality_actor_process_image_sha256}
+- targetprocessname                     : ${issue.targetprocessname}
+- targetprocesscmd                      : ${issue.targetprocesscmd}
 - image_id                              : ${issue.image_id}
 - agent_os_type                         : ${issue.agent_os_type}
 - agent_os_sub_type                     : ${issue.agent_os_sub_type}
@@ -33,18 +35,23 @@ Output context:
 - K8sEscape.ProcessCommandLine
 - K8sEscape.ProcessImagePath
 - K8sEscape.ProcessImageSHA256
+- K8sEscape.TargetProcessName
+- K8sEscape.TargetProcessCommandLine
 - K8sEscape.ContainerImageID
 - K8sEscape.Details
 - K8sEscape.IsSpringShell
 - K8sEscape.IsWebshell
 - K8sEscape.IsPrivilegedUser
 - K8sEscape.IsContainerRuntime
+- K8sEscape.IsContainerEscape
+- K8sEscape.EscapeTool
+- K8sEscape.SuspiciousFlags
 - K8sEscape.Severity
 - K8sEscape.ClusterName
 - K8sEscape.IOCs
 - K8sEscape.ContainmentTarget
 
-Version: 1.0.0
+Version: 1.1.0
 """
 
 
@@ -58,9 +65,18 @@ ISSUE_FIELD_NAME = "k8scontainerescapeiocs"
 SPRINGSHELL_KEYWORDS = ["springshell", "spring4shell", "cve-2022-22965", "class.module.classloader"]
 WEBSHELL_KEYWORDS = ["webshell", "shell.jsp", "cmd.jsp", "dropped webshell"]
 CONTAINER_RUNTIME_PROCESSES = ["runc", "containerd", "containerd-shim", "cri-o", "dockerd", "docker"]
+# Namespace-breakout tools: the escape primitive itself, not the runtime around it.
+CONTAINER_ESCAPE_PROCESSES = ["nsenter", "unshare", "setns"]
 PRIVILEGED_USERS = ["root"]
 EXPLOIT_PROCESS_PATHS = ["/usr/sbin/runc", "/usr/bin/runc", "/usr/bin/containerd",
-                         "/usr/bin/containerd-shim", "/usr/bin/cri-o"]
+                         "/usr/bin/containerd-shim", "/usr/bin/cri-o",
+                         "/usr/bin/nsenter", "/bin/nsenter",
+                         "/usr/bin/unshare", "/bin/unshare"]
+# nsenter namespace selectors - entering all of them is a full host breakout.
+HOST_NAMESPACE_FLAGS = ["--mount", "--uts", "--ipc", "--net", "--pid", "--user", "--cgroup"]
+# Link-local metadata endpoints reached from the host after an escape.
+METADATA_ENDPOINTS = ["169.254.169.254", "metadata.google.internal",
+                      "metadata.goog", "100.100.100.200"]
 
 
 # ==============================================================================
@@ -234,36 +250,68 @@ def analyze_details(details):
     return results
 
 
-def analyze_process(process_name, process_path, process_cmdline):
-    """Analyze the causality actor process for container escape indicators."""
+def analyze_process(process_name, process_path, process_cmdline,
+                    target_process_name="", target_process_cmdline="", details_text=""):
+    """
+    Analyze the process chain for container escape indicators.
+
+    On an nsenter breakout the causality actor is the shell that ran it (sh),
+    and the escape lives in the *target* process. Scanning only the actor makes
+    the one alert that matters look benign, so both ends are inspected here -
+    plus the free-form details, which XDR fills with the raw command line when
+    the structured target fields are not mapped.
+    """
     results = {
         "is_container_runtime": False,
         "runtime_name": None,
+        "is_container_escape": False,
+        "escape_tool": None,
         "extracted_container_id": None,
         "suspicious_flags": []
     }
 
-    # Verifier si le processus est un runtime container
-    if process_name:
-        for runtime in CONTAINER_RUNTIME_PROCESSES:
-            if runtime in normalize_value(process_name):
-                results["is_container_runtime"] = True
-                results["runtime_name"] = runtime
-                break
+    for name in [n for n in (process_name, target_process_name) if n]:
+        n = normalize_value(name)
+        if not results["is_container_runtime"]:
+            for runtime in CONTAINER_RUNTIME_PROCESSES:
+                if runtime in n:
+                    results["is_container_runtime"] = True
+                    results["runtime_name"] = runtime
+                    break
+        if not results["is_container_escape"]:
+            for tool in CONTAINER_ESCAPE_PROCESSES:
+                if tool in n:
+                    results["is_container_escape"] = True
+                    results["escape_tool"] = tool
+                    break
 
     if process_path:
         for path in EXPLOIT_PROCESS_PATHS:
             if normalize_value(process_path) == path:
-                results["is_container_runtime"] = True
-                if not results["runtime_name"]:
-                    results["runtime_name"] = path.split('/')[-1]
+                base = path.split('/')[-1]
+                if base in CONTAINER_ESCAPE_PROCESSES:
+                    results["is_container_escape"] = True
+                    if not results["escape_tool"]:
+                        results["escape_tool"] = base
+                else:
+                    results["is_container_runtime"] = True
+                    if not results["runtime_name"]:
+                        results["runtime_name"] = base
                 break
 
-    # Extraire le container ID de la ligne de commande
-    if process_cmdline:
-        results["extracted_container_id"] = extract_container_id_from_cmdline(process_cmdline)
+    for cmdline in [c for c in (process_cmdline, target_process_cmdline, details_text) if c]:
+        if not results["extracted_container_id"]:
+            results["extracted_container_id"] = extract_container_id_from_cmdline(cmdline)
 
-        cmdline_lower = process_cmdline.lower()
+        cmdline_lower = cmdline.lower()
+
+        if not results["is_container_escape"]:
+            for tool in CONTAINER_ESCAPE_PROCESSES:
+                if tool in cmdline_lower:
+                    results["is_container_escape"] = True
+                    results["escape_tool"] = tool
+                    break
+
         # Detecter les flags suspects
         if "containerd/runc/k8s.io" in cmdline_lower:
             results["suspicious_flags"].append("K8s container runtime path (containerd/runc/k8s.io)")
@@ -272,6 +320,22 @@ def analyze_process(process_name, process_path, process_cmdline):
         if "create --bundle" in cmdline_lower:
             results["suspicious_flags"].append("Container create operation detected")
 
+        if "nsenter" in cmdline_lower:
+            if "--target 1" in cmdline_lower or "--target=1" in cmdline_lower:
+                results["suspicious_flags"].append(
+                    "nsenter --target 1: joining the namespaces of host PID 1 (init) - container escape")
+            entered = [f.lstrip("-") for f in HOST_NAMESPACE_FLAGS if f in cmdline_lower]
+            if entered:
+                results["suspicious_flags"].append(
+                    "Host namespaces entered: " + ", ".join(entered))
+
+        for endpoint in METADATA_ENDPOINTS:
+            if endpoint in cmdline_lower:
+                results["suspicious_flags"].append(
+                    "Cloud metadata service contacted (" + endpoint + ") - credential theft attempt")
+                break
+
+    results["suspicious_flags"] = deduplicate_list(results["suspicious_flags"])
     return results
 
 
@@ -281,7 +345,10 @@ def analyze_user(username):
         "is_privileged": False,
         "risk_level": "Low"
     }
-    if username and normalize_value(username) in PRIVILEGED_USERS:
+    # XDR reports the source user as HOST\user (e.g. gke-node-0a6bf236-cdfp\root),
+    # so compare on the account part only or every node-scoped root is missed.
+    account = normalize_value(username).replace("/", "\\").split("\\")[-1]
+    if account and account in PRIVILEGED_USERS:
         results["is_privileged"] = True
         results["risk_level"] = "Critical"
     return results
@@ -334,6 +401,12 @@ def determine_severity(details_analysis, process_analysis, user_analysis, namesp
     if user_analysis["is_privileged"]:
         severity = "Critical"
         reasons.append("Running as root (privilege escalation)")
+
+    # Namespace breakout tool = the escape itself, always Critical
+    if process_analysis.get("is_container_escape"):
+        severity = "Critical"
+        reasons.append("Container escape tool in process chain (" +
+                       str(process_analysis["escape_tool"]) + ")")
 
     # Container runtime in causality = High minimum
     if process_analysis["is_container_runtime"]:
@@ -433,7 +506,8 @@ def build_markdown_report(details, details_analysis, container_ids, namespace,
                           cluster_name, node_analysis, user_analysis, username,
                           process_analysis, process_name, process_path, process_cmdline,
                           process_sha256, image_id, agent_os_type, agent_os_sub_type,
-                          severity, severity_reasons, iocs, containment_target):
+                          severity, severity_reasons, iocs, containment_target,
+                          target_process_name="", target_process_cmdline=""):
     """Build the full Markdown report."""
     md = []
     sev_emoji = SEVERITY_EMOJI.get(severity, EMOJI_LOW)
@@ -515,6 +589,9 @@ def build_markdown_report(details, details_analysis, container_ids, namespace,
         md.append("- **Path**: `" + process_path + "`")
     if process_analysis["is_container_runtime"]:
         md.append("- " + EMOJI_WARN + " **Container runtime detected**: `" + str(process_analysis["runtime_name"]) + "`")
+    if process_analysis.get("is_container_escape"):
+        md.append("- " + EMOJI_CRITICAL + " **Container escape tool detected**: `"
+                  + str(process_analysis["escape_tool"]) + "` — namespace breakout")
     if process_sha256:
         for sha in to_list(process_sha256):
             md.append("- **SHA256**: `" + sha + "`")
@@ -525,6 +602,14 @@ def build_markdown_report(details, details_analysis, container_ids, namespace,
         md.append("  ```")
         md.append("  " + display_cmd)
         md.append("  ```")
+    if target_process_name or target_process_cmdline:
+        md.append("- **Target Process**: `" + (target_process_name or "N/A") + "`")
+        if target_process_cmdline:
+            display_target = (target_process_cmdline if len(target_process_cmdline) <= 300
+                              else target_process_cmdline[:300] + "...")
+            md.append("  ```")
+            md.append("  " + display_target)
+            md.append("  ```")
     if process_analysis["suspicious_flags"]:
         md.append("- **Suspicious Indicators**:")
         for flag in process_analysis["suspicious_flags"]:
@@ -583,6 +668,9 @@ def build_markdown_report(details, details_analysis, container_ids, namespace,
         summary_items.append(EMOJI_CRITICAL + " **Spring4Shell exploit detected**")
     if details_analysis["is_webshell"]:
         summary_items.append(EMOJI_CRITICAL + " **Webshell deployed**")
+    if process_analysis.get("is_container_escape"):
+        summary_items.append(EMOJI_CRITICAL + " **Container escape** via `"
+                             + str(process_analysis["escape_tool"]) + "` (namespace breakout)")
     if user_analysis["is_privileged"]:
         summary_items.append(EMOJI_CRITICAL + " **Running as root** (privilege escalation)")
     if process_analysis["is_container_runtime"]:
@@ -624,7 +712,7 @@ def main():
     try:
         args = demisto.args()
 
-        demisto.info("=== ExtractK8sContainerEscapeIOCs v1.0.0 START ===")
+        demisto.info("=== ExtractK8sContainerEscapeIOCs v1.1.0 START ===")
 
         # ==================================================================
         # RETRIEVE FIELDS WITH FALLBACK TO ISSUE
@@ -649,6 +737,13 @@ def main():
                 None, 'hostfqdn', 'hostfqdn', is_array=False)
             if hostfqdn_list:
                 node_fqdn = str(hostfqdn_list).strip()
+        # Fallback: GKE alerts carry the bare node name, not an FQDN
+        if not node_fqdn:
+            hostname_list = get_field_with_fallback(
+                args.get('xdmsourcehosthostname'), 'xdmsourcehosthostname',
+                'xdmsourcehosthostname', is_array=True)
+            if hostname_list:
+                node_fqdn = str(hostname_list[0]).strip()
         # Fix duplicated FQDN (e.g. "ip-10-0-0-174.eu-west-3.compute.internal.eu-west-3.compute.internal")
         if ".compute.internal." in node_fqdn:
             parts = node_fqdn.split(".compute.internal")
@@ -679,6 +774,15 @@ def main():
             args.get('causality_actor_process_image_sha256'), 'causality_actor_process_image_sha256',
             'causality_actor_process_image_sha256', is_array=True)
         process_sha256 = process_sha256_list[0] if process_sha256_list else ""
+
+        # The escape primitive lives in the target process, not the causality actor.
+        target_process_name_list = get_field_with_fallback(
+            args.get('targetprocessname'), 'targetprocessname', 'targetprocessname', is_array=True)
+        target_process_name = target_process_name_list[0] if target_process_name_list else ""
+
+        target_process_cmdline_list = get_field_with_fallback(
+            args.get('targetprocesscmd'), 'targetprocesscmd', 'targetprocesscmd', is_array=True)
+        target_process_cmdline = target_process_cmdline_list[0] if target_process_cmdline_list else ""
 
         image_id = get_field_with_fallback(
             args.get('image_id'), 'image_id', 'image_id', is_array=False)
@@ -718,7 +822,8 @@ def main():
         # ==================================================================
 
         details_analysis = analyze_details(details)
-        process_analysis = analyze_process(process_name, process_path, process_cmdline)
+        process_analysis = analyze_process(process_name, process_path, process_cmdline,
+                                           target_process_name, target_process_cmdline, details)
         user_analysis = analyze_user(username)
         node_analysis = analyze_node(node_fqdn, node_ips)
 
@@ -740,7 +845,9 @@ def main():
         demisto.info("Severity: " + severity + " | SpringShell: " + str(details_analysis["is_springshell"])
                      + " | Webshell: " + str(details_analysis["is_webshell"])
                      + " | Root: " + str(user_analysis["is_privileged"])
-                     + " | ContainerRuntime: " + str(process_analysis["is_container_runtime"]))
+                     + " | ContainerRuntime: " + str(process_analysis["is_container_runtime"])
+                     + " | ContainerEscape: " + str(process_analysis["is_container_escape"])
+                     + " (" + str(process_analysis["escape_tool"]) + ")")
 
         # ==================================================================
         # MARKDOWN REPORT
@@ -757,7 +864,8 @@ def main():
             cluster_name, node_analysis, user_analysis, username,
             process_analysis, process_name, process_path, process_cmdline,
             process_sha256, image_id, agent_os_type, agent_os_sub_type,
-            severity, severity_reasons, iocs, containment_target
+            severity, severity_reasons, iocs, containment_target,
+            target_process_name, target_process_cmdline
         )
 
         if quiet:
@@ -795,12 +903,17 @@ def main():
             'K8sEscape.ProcessCommandLine': process_cmdline[:500] if process_cmdline else "",
             'K8sEscape.ProcessImagePath': process_path,
             'K8sEscape.ProcessImageSHA256': process_sha256,
+            'K8sEscape.TargetProcessName': target_process_name,
+            'K8sEscape.TargetProcessCommandLine': target_process_cmdline[:500] if target_process_cmdline else "",
             'K8sEscape.ContainerImageID': image_id,
             'K8sEscape.Details': details,
             'K8sEscape.IsSpringShell': details_analysis["is_springshell"],
             'K8sEscape.IsWebshell': details_analysis["is_webshell"],
             'K8sEscape.IsPrivilegedUser': user_analysis["is_privileged"],
             'K8sEscape.IsContainerRuntime': process_analysis["is_container_runtime"],
+            'K8sEscape.IsContainerEscape': process_analysis["is_container_escape"],
+            'K8sEscape.EscapeTool': process_analysis["escape_tool"] or "",
+            'K8sEscape.SuspiciousFlags': process_analysis["suspicious_flags"],
             'K8sEscape.Severity': severity,
             'K8sEscape.IOCs(val.value && val.value == obj.value)': iocs,
             'K8sEscape.ContainmentTarget': containment_target,
@@ -830,6 +943,9 @@ def main():
                 "IsWebshell": details_analysis["is_webshell"],
                 "IsPrivilegedUser": user_analysis["is_privileged"],
                 "IsContainerRuntime": process_analysis["is_container_runtime"],
+                "IsContainerEscape": process_analysis["is_container_escape"],
+                "EscapeTool": process_analysis["escape_tool"] or "",
+                "SuspiciousFlags": process_analysis["suspicious_flags"],
                 "Severity": severity,
                 "SeverityReasons": severity_reasons,
                 "IOCs": iocs,
@@ -840,7 +956,7 @@ def main():
             'EntryContext': entry_context
         })
 
-        demisto.info("=== ExtractK8sContainerEscapeIOCs v1.0.0 END ===")
+        demisto.info("=== ExtractK8sContainerEscapeIOCs v1.1.0 END ===")
 
     except Exception as e:
         error_msg = "Error in ExtractK8sContainerEscapeIOCs: " + str(e)

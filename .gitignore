@@ -9,9 +9,11 @@
 .DS_Store
 .idea/
 .vscode/
-dashboard/.kubeconfig
-dashboard/.kubeconfig-byoc
+dashboard/.kubeconfig*
 dashboard/.venv/
 dashboard/.credentials.json
+# gke-gcloud-auth-plugin exec-credential cache: holds a live ya29. OAuth token
+dashboard/gke_gcloud_auth_plugin_cache
+**/gke_gcloud_auth_plugin_cache
 **/__pycache__/
 **/*.pyc
