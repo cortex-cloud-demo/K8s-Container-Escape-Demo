@@ -40,7 +40,7 @@ output "dashboard_sa_key" {
 }
 
 output "kubeconfig_command" {
-  value = "gcloud container clusters get-credentials ${google_container_cluster.main.name} --region ${var.region} --project ${var.project_id}"
+  value = "gcloud container clusters get-credentials ${google_container_cluster.main.name} --zone ${var.zone} --project ${var.project_id}"
 }
 
 output "project_number" {

@@ -29,4 +29,28 @@ jobs:
           CORTEX_API_KEY_ID: ${{ secrets.CORTEX_API_KEY_ID }}
           CORTEX_API_KEY: ${{ secrets.CORTEX_API_KEY }}
         run: |
-          cortexcli image scan vuln-app:${{ github.sha }} --soft-fail
+          # --soft-fail is a global flag: it must come BEFORE the module name,
+          # otherwise cortexcli aborts with "flag provided but not defined".
+          cortexcli --soft-fail image scan vuln-app:${{ github.sha }} \
+            --timeout 300 --output-format json | tee scan.json
+
+      # No Block CI/CD policy on the tenant? Gate the build here instead.
+      - name: Fail on blocked CVEs
+        env:
+          BLOCKED_CVES: CVE-2022-22965
+        run: |
+          hits=$(jq -r --arg list "$BLOCKED_CVES" '
+            ($list | split(",")) as $blocked
+            | [.. | strings | select(IN($blocked[]))] | unique | join(", ")' scan.json)
+          if [ -n "$hits" ]; then
+            echo "::error::Blocked CVEs found in image: $hits"
+            exit 1
+          fi
+          echo "No blocked CVE found."
+
+      - name: Upload scan report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortex-image-scan
+          path: scan.json

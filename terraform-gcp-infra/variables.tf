@@ -8,6 +8,11 @@ variable "region" {
   default     = "europe-west1"
 }
 
+variable "zone" {
+  description = "GCP zone for the GKE cluster (single-zone deployment)"
+  default     = "europe-west1-b"
+}
+
 variable "project_name" {
   description = "Project name used as prefix for all resources"
   default     = "k8s-escape-demo"

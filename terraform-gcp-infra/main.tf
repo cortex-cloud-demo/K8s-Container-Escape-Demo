@@ -142,7 +142,7 @@ resource "google_project_iam_member" "gke_nodes_storage" {
 
 resource "google_container_cluster" "main" {
   name     = var.cluster_name
-  location = var.region
+  location = var.zone
 
   network    = google_compute_network.main.name
   subnetwork = google_compute_subnetwork.main.name
@@ -190,7 +190,7 @@ resource "google_container_cluster" "main" {
 
 resource "google_container_node_pool" "main" {
   name     = "${var.project_name}-nodes"
-  location = var.region
+  location = var.zone
   cluster  = google_container_cluster.main.name
 
   node_count = var.node_count
