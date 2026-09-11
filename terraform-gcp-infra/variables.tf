@@ -24,8 +24,8 @@ variable "node_count" {
 }
 
 variable "node_machine_type" {
-  description = "Machine type for GKE nodes (e2-medium ~ t3.medium)"
-  default     = "e2-medium"
+  description = "Machine type for GKE nodes (e2-standard-2 ~ t3.large)"
+  default     = "e2-standard-2"
 }
 
 variable "node_disk_size" {
