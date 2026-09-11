@@ -1,0 +1,58 @@
+name: "02 (GCP) - Build & Push Vulnerable Image to Artifact Registry"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "Dockerfile"
+
+env:
+  GCP_PROJECT_ID: prod-ai53sg
+  GAR_LOCATION: europe-west1
+  GAR_REPOSITORY: k8s-escape-demo-vuln-app
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build & Push to Artifact Registry
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GAR_LOCATION }}-docker.pkg.dev --quiet
+
+      - name: Build, tag, and push image to Artifact Registry
+        env:
+          GAR_REGISTRY: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+          GIT_COMMIT: ${{ github.sha }}
+          GIT_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          docker build \
+            --build-arg GIT_COMMIT="$GIT_COMMIT" \
+            --build-arg GIT_REPO_URL="$GIT_REPO_URL" \
+            --build-arg BUILD_DATE="$BUILD_DATE" \
+            -t $GAR_REGISTRY/vuln-app:$IMAGE_TAG .
+          docker tag $GAR_REGISTRY/vuln-app:$IMAGE_TAG $GAR_REGISTRY/vuln-app:latest
+          docker push $GAR_REGISTRY/vuln-app:$IMAGE_TAG
+          docker push $GAR_REGISTRY/vuln-app:latest
+          echo "## Image Pushed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`$GAR_REGISTRY/vuln-app:$IMAGE_TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Latest:** \`$GAR_REGISTRY/vuln-app:latest\`" >> $GITHUB_STEP_SUMMARY

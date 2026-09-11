@@ -19,8 +19,8 @@ variable "cluster_name" {
 }
 
 variable "node_count" {
-  description = "Number of nodes per zone in the node pool"
-  default     = 2
+  description = "Number of nodes per zone in the node pool (regional cluster = 3 zones, so total nodes = 3 x this)"
+  default     = 1
 }
 
 variable "node_machine_type" {
