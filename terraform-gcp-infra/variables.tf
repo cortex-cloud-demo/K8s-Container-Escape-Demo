@@ -24,13 +24,13 @@ variable "cluster_name" {
 }
 
 variable "node_count" {
-  description = "Number of nodes per zone in the node pool"
-  default     = 2
+  description = "Number of nodes per zone in the node pool (regional cluster = 3 zones, so total nodes = 3 x this)"
+  default     = 1
 }
 
 variable "node_machine_type" {
-  description = "Machine type for GKE nodes (e2-medium ~ t3.medium)"
-  default     = "e2-medium"
+  description = "Machine type for GKE nodes (e2-standard-2 ~ t3.large)"
+  default     = "e2-standard-2"
 }
 
 variable "node_disk_size" {
