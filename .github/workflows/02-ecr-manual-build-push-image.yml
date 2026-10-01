@@ -1,0 +1,94 @@
+name: "02 (Manual ECR) - Build & Push Vulnerable Image (manual inputs)"
+
+# Build & push the vulnerable app image to an AWS ECR repository whose URI and
+# AWS credentials are provided MANUALLY at dispatch time (e.g. an ECR created by
+# the demo dashboard). Nothing is read from repo secrets here.
+#
+# SECURITY NOTE: workflow_dispatch inputs are shown in the Actions run
+# parameters and are NOT stored as secrets. Use short-lived / scoped AWS keys
+# (ideally an ECR-push-only IAM policy) and rotate them after the run. The keys
+# are masked in the job logs via ::add-mask:: below, but remain visible in the
+# run's input panel.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ecr_repository_uri:
+        description: "Full ECR repository URI from the dashboard (e.g. <account>.dkr.ecr.<region>.amazonaws.com/<repo>)"
+        required: true
+        type: string
+      aws_region:
+        description: "AWS region of the ECR registry"
+        required: true
+        default: "eu-west-3"
+        type: string
+      aws_access_key_id:
+        description: "AWS Access Key ID (passed manually)"
+        required: true
+        type: string
+      aws_secret_access_key:
+        description: "AWS Secret Access Key (passed manually - use a short-lived key)"
+        required: true
+        type: string
+      image_tag:
+        description: "Image tag (leave blank to use the commit SHA)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build & Push to ECR (manual)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Mask credentials in logs
+        run: |
+          echo "::add-mask::${{ inputs.aws_access_key_id }}"
+          echo "::add-mask::${{ inputs.aws_secret_access_key }}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ inputs.aws_access_key_id }}
+          aws-secret-access-key: ${{ inputs.aws_secret_access_key }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        env:
+          ECR_REPOSITORY_URI: ${{ inputs.ecr_repository_uri }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          GIT_COMMIT: ${{ github.sha }}
+          GIT_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Default the image tag to the commit SHA when not provided.
+          IMAGE_TAG="${INPUT_IMAGE_TAG:-}"
+          if [ -z "$IMAGE_TAG" ]; then
+            IMAGE_TAG="$GIT_COMMIT"
+          fi
+
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          docker build \
+            --build-arg GIT_COMMIT="$GIT_COMMIT" \
+            --build-arg GIT_REPO_URL="$GIT_REPO_URL" \
+            --build-arg BUILD_DATE="$BUILD_DATE" \
+            -t "$ECR_REPOSITORY_URI:$IMAGE_TAG" .
+          docker tag "$ECR_REPOSITORY_URI:$IMAGE_TAG" "$ECR_REPOSITORY_URI:latest"
+          docker push "$ECR_REPOSITORY_URI:$IMAGE_TAG"
+          docker push "$ECR_REPOSITORY_URI:latest"
+
+          echo "## Image Pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image:** \`$ECR_REPOSITORY_URI:$IMAGE_TAG\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Latest:** \`$ECR_REPOSITORY_URI:latest\`" >> "$GITHUB_STEP_SUMMARY"
