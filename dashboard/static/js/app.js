@@ -1858,10 +1858,53 @@ function buildPush() {
     apiCall('/api/image/build-push');
 }
 
+async function copyEcrUri() {
+    openTab('terminal');
+    termWriteHeader('Resolve ECR repository URI');
+    try {
+        const res = await fetch('/api/image/ecr-uri');
+        const data = await res.json();
+        if (!res.ok || data.error) {
+            termWrite((data.error || 'Failed to resolve ECR URI') + '\n');
+            return;
+        }
+        const uri = data.ecr_repository_uri;
+        termWrite(`ECR repository URI : ${uri}\n`);
+        termWrite(`Region             : ${data.region}\n`);
+        termWrite('\nPaste this as the "ecr_repository_uri" input of the\n');
+        termWrite('"02 (Manual ECR) - Build & Push" pipeline.\n');
+        // Best-effort copy to clipboard (requires a secure context).
+        try {
+            await navigator.clipboard.writeText(uri);
+            termWrite('\n✓ Copied to clipboard.\n');
+        } catch (e) {
+            termWrite('\n(Clipboard copy unavailable — copy the URI above manually.)\n');
+        }
+    } catch (e) {
+        termWrite(`Error: ${e.message}\n`);
+    }
+}
+
 function deployApp() {
     openTab('terminal');
     termWriteHeader(`Deploy Vulnerable App to ${modeLabel(state.infraMode)}`);
     apiCall('/api/k8s/deploy');
+}
+
+function deployAppCustom() {
+    const image = (prompt(
+        'Custom container image to deploy\n' +
+        '(e.g. 123456789012.dkr.ecr.eu-west-3.amazonaws.com/my-repo:tag):'
+    ) || '').trim();
+    if (!image) return;
+    // Basic client-side sanity check (server validates too).
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image)) {
+        alert('Invalid image reference. Use a registry/repo:tag form.');
+        return;
+    }
+    openTab('terminal');
+    termWriteHeader(`Deploy Vulnerable App to ${modeLabel(state.infraMode)} — custom image: ${image}`);
+    apiCall('/api/k8s/deploy', 'POST', { image });
 }
 
 function undeployApp() {

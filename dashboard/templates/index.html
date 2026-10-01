@@ -277,6 +277,7 @@
                 <div class="step-desc" id="build-push-desc">Docker build + push vuln app to ECR</div>
                 <div class="step-actions">
                     <button class="btn btn-primary" onclick="buildPush()">Build & Push</button>
+                    <button class="btn btn-ghost" onclick="copyEcrUri()" title="Resolve the full ECR repository URI (for the manual ECR pipeline inputs) and copy it to the clipboard">Get ECR URI</button>
                 </div>
             </div>
 
@@ -289,6 +290,7 @@
                 <div class="step-desc">Privileged pod, hostPID, hostPath, cluster-admin SA</div>
                 <div class="step-actions">
                     <button class="btn btn-primary" onclick="deployApp()">Deploy</button>
+                    <button class="btn btn-ghost" onclick="deployAppCustom()" title="Deploy using a custom container image instead of the default ECR/AR image">Custom image</button>
                     <button class="btn btn-danger" onclick="undeployApp()">Undeploy</button>
                     <button class="btn btn-ghost" onclick="k8sStatus()">Status</button>
                 </div>

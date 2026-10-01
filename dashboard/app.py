@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -1891,6 +1893,28 @@ echo "=================================================="
 # ─── Docker Build & Push ────────────────────────────────────────────────────
 
 
+@app.route("/api/image/ecr-uri", methods=["GET"])
+def get_ecr_uri():
+    """Resolve the full ECR repository URI (and region) from terraform output.
+
+    Exposed so the UI can copy it into the manual ECR build/push pipeline
+    inputs (02-ecr-manual-build-push-image.yml).
+    """
+    env = os.environ.copy()
+    env.update(get_aws_env())
+    uri = tf_output(TERRAFORM_DIR, "ecr_repository_url", env)
+    if not uri:
+        return jsonify({
+            "error": "ECR repository URI not found. Run INFRA > Apply first (EKS mode)."
+        }), 404
+    region = (
+        tf_output(TERRAFORM_DIR, "region", env)
+        or aws_credentials.get("aws_region")
+        or "eu-west-3"
+    )
+    return jsonify({"ecr_repository_uri": uri, "region": region})
+
+
 @app.route("/api/image/build-push", methods=["POST"])
 def image_build_push():
     mode = (app_settings.get("infra_mode") or "eks").lower()
@@ -2107,6 +2131,15 @@ echo "==> Done! Image pushed to ${ECR_URL}:latest"
 @app.route("/api/k8s/deploy", methods=["POST"])
 def k8s_deploy():
     mode = (app_settings.get("infra_mode") or "eks").lower()
+
+    # Optional custom image passed from the UI ("Deploy (custom image)").
+    # When set, it overrides the image normally resolved from terraform/ECR/AR.
+    custom_image = ""
+    if request.is_json:
+        custom_image = ((request.get_json(silent=True) or {}).get("image") or "").strip()
+    if custom_image and not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]*$", custom_image):
+        return jsonify({"error": "Invalid image reference. Use a registry/repo:tag form."}), 400
+
     # BYOC mode: skip EKS kubeconfig generation, use the user-provided one
     if external_cluster.get("enabled") and external_cluster.get("kubeconfig"):
         if not os.path.isfile(KUBECONFIG_BYOC_PATH):
@@ -2128,10 +2161,11 @@ def k8s_deploy():
             return jsonify({"error": f"Failed to generate kubeconfig: {e}"}), 500
 
     # Determine image URL
-    if external_cluster.get("enabled") and external_cluster.get("image_url"):
-        image_url = external_cluster["image_url"]
+    if external_cluster.get("enabled") and (custom_image or external_cluster.get("image_url")):
+        # BYOC: a custom image from the UI takes precedence over the saved one.
+        image_url = custom_image or external_cluster["image_url"]
     else:
-        image_url = None  # Will be resolved from terraform output
+        image_url = None  # Will be resolved from terraform output (or custom image below)
 
     if image_url:
         # BYOC mode: use provided image URL.
@@ -2226,11 +2260,11 @@ echo "=================================================="
         cmd = """
 set -e
 AR_URL=$(cd terraform-gcp-infra && terraform output -raw artifact_registry_url 2>/dev/null)
-if [ -z "$AR_URL" ]; then
+if [ -z "$CUSTOM_IMAGE" ] && [ -z "$AR_URL" ]; then
   echo "✗ FAILED: cannot resolve Artifact Registry URL. Run INFRA > Apply first."
   exit 1
 fi
-IMAGE="${AR_URL}/vuln-app:latest"
+IMAGE="${CUSTOM_IMAGE:-${AR_URL}/vuln-app:latest}"
 echo "==> GKE Mode: deploying image $IMAGE"
 echo "==> Testing cluster access..."
 kubectl cluster-info
@@ -2284,8 +2318,9 @@ echo "==> Applying manifests..."
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/service-account.yaml
 
-echo "==> Setting ECR image in deployment..."
-sed "s|ECR_IMAGE_PLACEHOLDER|${{ECR_URL}}:latest|g" k8s/deployment.yaml | kubectl apply -f -
+IMAGE="${{CUSTOM_IMAGE:-${{ECR_URL}}:latest}}"
+echo "==> Setting image in deployment: $IMAGE"
+sed "s|ECR_IMAGE_PLACEHOLDER|${{IMAGE}}|g" k8s/deployment.yaml | kubectl apply -f -
 
 echo "==> Waiting for deployment rollout..."
 kubectl rollout status deployment/vuln-app -n vuln-app --timeout=300s
@@ -2298,6 +2333,10 @@ echo "==> Application deployed!"
 echo "==> HOST=${{HOST}}"
 echo "==> URL: http://${{HOST}}/app"
 """
+    # Make the custom image available to the deploy script. The EKS/GCP branches
+    # read $CUSTOM_IMAGE (falling back to the terraform-resolved image); BYOC has
+    # it already interpolated into image_url above. Empty = normal behaviour.
+    cmd = f"CUSTOM_IMAGE={shlex.quote(custom_image)}\n{cmd}"
     task_id = create_task("Deploy to EKS", cmd, use_toolbox=True)
     return jsonify({"task_id": task_id})
 

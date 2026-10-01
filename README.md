@@ -94,7 +94,13 @@ Click **INFRA > Apply** — deploys in 2 phases via the Runner Toolbox:
 |------|--------|--------|
 | Connect | **Connect** | Generate kubeconfig for EKS |
 | Build | **Build & Push** | Docker build (linux/amd64) + push to ECR |
-| Deploy | **Deploy** | K8s manifests: privileged pod + LoadBalancer |
+| Build | **Get ECR URI** | Resolve the full ECR repository URI (from terraform output) and copy it to the clipboard — ready to paste into the manual ECR pipeline inputs |
+| Deploy | **Deploy** | K8s manifests: privileged pod + LoadBalancer (default ECR/AR image) |
+| Deploy | **Custom image** | Same deploy, but prompts for a custom container image to run instead of the default |
+
+> **Custom image flow:** click **Get ECR URI** to grab the repository URI, run the
+> *"02 (Manual ECR) - Build & Push"* GitHub Actions workflow (paste the URI + AWS
+> creds as inputs), then **Deploy → Custom image** with that image reference.
 
 ### 5. AppSec — Shift-Left Scanning
 
@@ -265,6 +271,8 @@ In RKE2 mode the EKS-only cards (Build & Push ECR, Lambda containment, AWS Onboa
 │   └── static/
 │       ├── css/style.css         # Dark/light theme
 │       └── js/app.js             # Kill chain, SOC live, architecture, AppSec
+├── .github/workflows/            # CI: build/push image (ECR/GCP), deploy app
+│   └── 02-ecr-manual-build-push-image.yml  # Manual ECR build/push (URI + AWS creds as inputs)
 ├── Dockerfile                    # Vulnerable app (Maven + Tomcat 9)
 ├── Dockerfile.toolbox            # Runner toolbox (Ubuntu 24.04, all CLI tools)
 ├── terraform-infra/              # VPC, EKS, ECR, IAM (local tfstate, Yor tags)
@@ -305,6 +313,9 @@ In RKE2 mode the EKS-only cards (Build & Push ECR, Lambda containment, AWS Onboa
 | **Theme Toggle** | Dark / Light / Auto mode (persisted) |
 | **AWS Paste Import** | Paste `export AWS_*` commands to auto-fill credentials |
 | **BYOC Mode** | Bring Your Own Cluster — skip infra, use existing K8s |
+| **Custom Image Deploy** | Deploy the vuln app from an arbitrary container image (prompt), overriding the default ECR/AR image |
+| **Get ECR URI** | One-click resolve + copy of the ECR repository URI for the manual ECR build/push pipeline |
+| **Manual ECR Pipeline** | `workflow_dispatch` GitHub Action that builds & pushes to ECR using an ECR URI + AWS creds passed as inputs |
 | **Runner Status** | Live toolbox container status indicator in header |
 | **Credential Persistence** | Credentials saved locally and auto-loaded on restart |
 
