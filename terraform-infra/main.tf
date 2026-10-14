@@ -381,6 +381,9 @@ resource "aws_launch_template" "eks_nodes" {
     yor_name             = "eks_nodes"
     yor_trace            = "56cd7896-d1d6-4b80-bf82-71071299c9df"
   }
+  metadata_options {
+    http_tokens = "required"
+  }
 }
 
 #######################
