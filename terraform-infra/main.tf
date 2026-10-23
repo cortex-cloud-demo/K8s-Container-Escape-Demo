@@ -219,8 +219,9 @@ resource "aws_s3_bucket" "vuln_data" {
   force_destroy = true
 
   tags = {
-    Name    = "${var.project_name}-vuln-data"
-    Purpose = "Intentionally vulnerable bucket for demo"
+    Name      = "${var.project_name}-vuln-data"
+    Purpose   = "Intentionally vulnerable bucket for demo"
+    yor_trace = "0dd7b7e1-f791-42f6-86ac-b8e41b4c41a0"
   }
 }
 
